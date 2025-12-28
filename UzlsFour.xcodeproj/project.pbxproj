@@ -1,0 +1,428 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 54;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */; };
+		16BB647DCC46849DA718F8DA /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B0BFBA0DA3848A126EB434 /* GameView.swift */; };
+		1F2A105232B213DC816A79F8 /* GameMTKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CB472A4725395DD246579F /* GameMTKView.swift */; };
+		250A297F236F415557B72231 /* TopologySampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA61C6BAB24A7F83FE508DF6 /* TopologySampler.swift */; };
+		353F2A7C4FBCF82468CA8A4E /* Base.metal in Sources */ = {isa = PBXBuildFile; fileRef = 8D0446086F75BECFEAFA5AEA /* Base.metal */; };
+		434AD9CF0B995B6BF311CC00 /* TopologyEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B12E7FCD84630A87A47BAAB /* TopologyEngine.swift */; };
+		47298DEF4D70639C3D1DBCDF /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2D7BD441C280F325936786F3 /* ContentView.swift */; };
+		6E5DCA961020A495E00C5766 /* LevelDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7018E1B69CE11AB4624A9C0E /* LevelDefinition.swift */; };
+		71D9F96C6F4FDDC7AED37618 /* Renderer+WinCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6F2ECD6D6F29B3AD1472C9 /* Renderer+WinCheck.swift */; };
+		71F88EED711DDE8DFC0AEED0 /* FrameTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */; };
+		799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */; };
+		805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */ = {isa = PBXBuildFile; fileRef = EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */; };
+		8EDE8DD2CC65E6EE108B7FA0 /* Renderer+Bloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */; };
+		A3945957757B30539F65F76A /* TopologyTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CD006271F5BB97CC853822 /* TopologyTypes.swift */; };
+		BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6663864E2CD1FBEE57B6F14 /* Renderer.swift */; };
+		C63393857DAAC804BCD9203D /* Renderer+Interaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = 95442C4BCC472AED86316E91 /* Renderer+Interaction.swift */; };
+		C8606235B81639CBC17AE961 /* Renderer+RopeMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = D7D7E804648F39B3DEF407AE /* Renderer+RopeMesh.swift */; };
+		CD25168BE6CC604A1337073C /* UzlsFourApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BFEFEBF4D97EDF74AA9A7A2 /* UzlsFourApp.swift */; };
+		DEEC5B22CB2859CFB7527C03 /* Camera.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3305169FC67A8756CF19791 /* Camera.swift */; };
+		E2551A812DFC34C120C54A1B /* LevelLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = AAAECFCFE63E8D4B0A41DC74 /* LevelLoader.swift */; };
+		F027DB0E87B0147C8BF30B68 /* RopeMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */; };
+		F12694A569C5BF5F129BC771 /* Renderer+Holes.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFEA9CC03036E7509C64C8B5 /* Renderer+Holes.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		18CD006271F5BB97CC853822 /* TopologyTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyTypes.swift; sourceTree = "<group>"; };
+		19B0BFBA0DA3848A126EB434 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
+		2D7BD441C280F325936786F3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentIntersection.swift; sourceTree = "<group>"; };
+		4B12E7FCD84630A87A47BAAB /* TopologyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEngine.swift; sourceTree = "<group>"; };
+		55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeSimulation.swift; sourceTree = "<group>"; };
+		7018E1B69CE11AB4624A9C0E /* LevelDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDefinition.swift; sourceTree = "<group>"; };
+		7BFEFEBF4D97EDF74AA9A7A2 /* UzlsFourApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UzlsFourApp.swift; sourceTree = "<group>"; };
+		7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeMeshBuilder.swift; sourceTree = "<group>"; };
+		8D0446086F75BECFEAFA5AEA /* Base.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Base.metal; sourceTree = "<group>"; };
+		95442C4BCC472AED86316E91 /* Renderer+Interaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Interaction.swift"; sourceTree = "<group>"; };
+		9D327857F82321017636A0E7 /* UzlsFour.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UzlsFour.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameTypes.swift; sourceTree = "<group>"; };
+		AA61C6BAB24A7F83FE508DF6 /* TopologySampler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologySampler.swift; sourceTree = "<group>"; };
+		AAAECFCFE63E8D4B0A41DC74 /* LevelLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelLoader.swift; sourceTree = "<group>"; };
+		AF6F2ECD6D6F29B3AD1472C9 /* Renderer+WinCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+WinCheck.swift"; sourceTree = "<group>"; };
+		CFEA9CC03036E7509C64C8B5 /* Renderer+Holes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Holes.swift"; sourceTree = "<group>"; };
+		D3305169FC67A8756CF19791 /* Camera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Camera.swift; sourceTree = "<group>"; };
+		D7D7E804648F39B3DEF407AE /* Renderer+RopeMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+RopeMesh.swift"; sourceTree = "<group>"; };
+		E6663864E2CD1FBEE57B6F14 /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
+		EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Sim.metal; sourceTree = "<group>"; };
+		F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Bloom.swift"; sourceTree = "<group>"; };
+		F1CB472A4725395DD246579F /* GameMTKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameMTKView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		1CC6DEAD872CA4427F3C8C2B /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				9D327857F82321017636A0E7 /* UzlsFour.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		4FCA58604A508CDF89218BFF = {
+			isa = PBXGroup;
+			children = (
+				6FDBB1947B577E0BAB98F132 /* App */,
+				B14FDC30F82F2062DB629120 /* Game */,
+				9625743960083E8A93C45975 /* Shaders */,
+				1CC6DEAD872CA4427F3C8C2B /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		6FDBB1947B577E0BAB98F132 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				2D7BD441C280F325936786F3 /* ContentView.swift */,
+				7BFEFEBF4D97EDF74AA9A7A2 /* UzlsFourApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		9625743960083E8A93C45975 /* Shaders */ = {
+			isa = PBXGroup;
+			children = (
+				8D0446086F75BECFEAFA5AEA /* Base.metal */,
+				EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */,
+			);
+			path = Shaders;
+			sourceTree = "<group>";
+		};
+		A1C7509C589A17ED4687745A /* Simulation */ = {
+			isa = PBXGroup;
+			children = (
+				55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */,
+			);
+			path = Simulation;
+			sourceTree = "<group>";
+		};
+		B14FDC30F82F2062DB629120 /* Game */ = {
+			isa = PBXGroup;
+			children = (
+				F1CB472A4725395DD246579F /* GameMTKView.swift */,
+				19B0BFBA0DA3848A126EB434 /* GameView.swift */,
+				B4A89505FCE9FB87865C4400 /* Level */,
+				E7875CF336B44C4405E53573 /* Renderer */,
+				A1C7509C589A17ED4687745A /* Simulation */,
+				CED1FDB8E40D1005BB7370D1 /* Topology */,
+			);
+			path = Game;
+			sourceTree = "<group>";
+		};
+		B4A89505FCE9FB87865C4400 /* Level */ = {
+			isa = PBXGroup;
+			children = (
+				7018E1B69CE11AB4624A9C0E /* LevelDefinition.swift */,
+				AAAECFCFE63E8D4B0A41DC74 /* LevelLoader.swift */,
+			);
+			path = Level;
+			sourceTree = "<group>";
+		};
+		CED1FDB8E40D1005BB7370D1 /* Topology */ = {
+			isa = PBXGroup;
+			children = (
+				404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */,
+				4B12E7FCD84630A87A47BAAB /* TopologyEngine.swift */,
+				AA61C6BAB24A7F83FE508DF6 /* TopologySampler.swift */,
+				18CD006271F5BB97CC853822 /* TopologyTypes.swift */,
+			);
+			path = Topology;
+			sourceTree = "<group>";
+		};
+		E7875CF336B44C4405E53573 /* Renderer */ = {
+			isa = PBXGroup;
+			children = (
+				D3305169FC67A8756CF19791 /* Camera.swift */,
+				A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */,
+				E6663864E2CD1FBEE57B6F14 /* Renderer.swift */,
+				F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */,
+				CFEA9CC03036E7509C64C8B5 /* Renderer+Holes.swift */,
+				95442C4BCC472AED86316E91 /* Renderer+Interaction.swift */,
+				D7D7E804648F39B3DEF407AE /* Renderer+RopeMesh.swift */,
+				AF6F2ECD6D6F29B3AD1472C9 /* Renderer+WinCheck.swift */,
+				7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */,
+			);
+			path = Renderer;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C1F302E2EA8494B42FC08292 /* UzlsFour */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 5B6DF971C20E3D1F53136ECD /* Build configuration list for PBXNativeTarget "UzlsFour" */;
+			buildPhases = (
+				C9BB5D461E695168575167B5 /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = UzlsFour;
+			packageProductDependencies = (
+			);
+			productName = UzlsFour;
+			productReference = 9D327857F82321017636A0E7 /* UzlsFour.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		24D6CA9C104582A931AEC071 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+				};
+			};
+			buildConfigurationList = 61823BFDC48DAFC22E7D6FCB /* Build configuration list for PBXProject "UzlsFour" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 4FCA58604A508CDF89218BFF;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 54;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C1F302E2EA8494B42FC08292 /* UzlsFour */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		C9BB5D461E695168575167B5 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				353F2A7C4FBCF82468CA8A4E /* Base.metal in Sources */,
+				DEEC5B22CB2859CFB7527C03 /* Camera.swift in Sources */,
+				47298DEF4D70639C3D1DBCDF /* ContentView.swift in Sources */,
+				71F88EED711DDE8DFC0AEED0 /* FrameTypes.swift in Sources */,
+				1F2A105232B213DC816A79F8 /* GameMTKView.swift in Sources */,
+				16BB647DCC46849DA718F8DA /* GameView.swift in Sources */,
+				6E5DCA961020A495E00C5766 /* LevelDefinition.swift in Sources */,
+				E2551A812DFC34C120C54A1B /* LevelLoader.swift in Sources */,
+				8EDE8DD2CC65E6EE108B7FA0 /* Renderer+Bloom.swift in Sources */,
+				F12694A569C5BF5F129BC771 /* Renderer+Holes.swift in Sources */,
+				C63393857DAAC804BCD9203D /* Renderer+Interaction.swift in Sources */,
+				C8606235B81639CBC17AE961 /* Renderer+RopeMesh.swift in Sources */,
+				71D9F96C6F4FDDC7AED37618 /* Renderer+WinCheck.swift in Sources */,
+				BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */,
+				F027DB0E87B0147C8BF30B68 /* RopeMeshBuilder.swift in Sources */,
+				00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */,
+				799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */,
+				805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */,
+				434AD9CF0B995B6BF311CC00 /* TopologyEngine.swift in Sources */,
+				250A297F236F415557B72231 /* TopologySampler.swift in Sources */,
+				A3945957757B30539F65F76A /* TopologyTypes.swift in Sources */,
+				CD25168BE6CC604A1337073C /* UzlsFourApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		B2AB40984978E6B4C49CB822 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		BEEF6C9E110161E7178E95BD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		C1E4796714A2B06C1400034D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIInterfaceOrientation = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uzls.four;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		FBCAB6B5ACC9275567752597 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CURRENT_PROJECT_VERSION = 1;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UIInterfaceOrientation = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = YES;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uzls.four;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		5B6DF971C20E3D1F53136ECD /* Build configuration list for PBXNativeTarget "UzlsFour" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				C1E4796714A2B06C1400034D /* Debug */,
+				FBCAB6B5ACC9275567752597 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		61823BFDC48DAFC22E7D6FCB /* Build configuration list for PBXProject "UzlsFour" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BEEF6C9E110161E7178E95BD /* Debug */,
+				B2AB40984978E6B4C49CB822 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 24D6CA9C104582A931AEC071 /* Project object */;
+}
