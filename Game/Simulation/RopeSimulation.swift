@@ -48,6 +48,9 @@ final class RopeSimulation {
 
     let ropeCount: Int
     let particlesPerRope: Int
+    var projectAlpha: Float = 1.0
+    var collisionsEnabled: Bool = false
+    var simulationEnabled: Bool = true
 
     init(device: MTLDevice, ropeCount: Int = 1, particlesPerRope: Int = 64) {
         self.device = device
@@ -116,7 +119,7 @@ final class RopeSimulation {
         if metaValue.count == 0 { return }
         metaValue.pinA = SIMD4<Float>(pinStart.x, pinStart.y, pinStart.z, 1)
         metaValue.pinB = SIMD4<Float>(pinEnd.x, pinEnd.y, pinEnd.z, 1)
-        let segmentRestLength = simd_length(pinEnd - pinStart) / Float(max(1, particlesPerRope - 1)) * 0.84
+        let segmentRestLength = simd_length(pinEnd - pinStart) / Float(max(1, particlesPerRope - 1))
         metaValue.restLengthBits = segmentRestLength.bitPattern
         metaPtr[ropeIndex] = metaValue
     }
@@ -132,29 +135,31 @@ final class RopeSimulation {
     func step(deltaTime: Float) {
         let params = RopeSimParams(
             deltaTime: deltaTime,
-            gravity: SIMD3<Float>(0, 0, -14.0),
+            gravity: SIMD3<Float>(0, 0, 0),
             stretchStiffness: 1.0,
-            iterations: 18,
+            iterations: 6,
             particleRadius: 0.045,
-            damping: 0.08
+            damping: 0.22
         )
         paramsBuf.contents().copyMemory(from: [params], byteCount: MemoryLayout<RopeSimParams>.stride)
 
         guard let commandBuffer = queue.makeCommandBuffer() else { return }
 
-        if let encoder = commandBuffer.makeComputeCommandEncoder() {
-            encoder.setComputePipelineState(ropePipeline)
-            encoder.setBuffer(particlePos, offset: 0, index: 0)
-            encoder.setBuffer(particlePrev, offset: 0, index: 1)
-            encoder.setBuffer(ropeMeta, offset: 0, index: 2)
-            encoder.setBuffer(paramsBuf, offset: 0, index: 3)
+        if simulationEnabled {
+            if let encoder = commandBuffer.makeComputeCommandEncoder() {
+                encoder.setComputePipelineState(ropePipeline)
+                encoder.setBuffer(particlePos, offset: 0, index: 0)
+                encoder.setBuffer(particlePrev, offset: 0, index: 1)
+                encoder.setBuffer(ropeMeta, offset: 0, index: 2)
+                encoder.setBuffer(paramsBuf, offset: 0, index: 3)
 
-            let threadsPerThreadgroup = MTLSize(width: 128, height: 1, depth: 1)
-            encoder.dispatchThreadgroups(
-                MTLSize(width: ropeCount, height: 1, depth: 1),
-                threadsPerThreadgroup: threadsPerThreadgroup
-            )
-            encoder.endEncoding()
+                let threadsPerThreadgroup = MTLSize(width: 128, height: 1, depth: 1)
+                encoder.dispatchThreadgroups(
+                    MTLSize(width: ropeCount, height: 1, depth: 1),
+                    threadsPerThreadgroup: threadsPerThreadgroup
+                )
+                encoder.endEncoding()
+            }
         }
 
         if let encoder = commandBuffer.makeComputeCommandEncoder() {
@@ -164,7 +169,7 @@ final class RopeSimulation {
             encoder.setBuffer(targetPos, offset: 0, index: 2)
             encoder.setBuffer(ropeMeta, offset: 0, index: 3)
 
-            var alpha: Float = 0.28
+            var alpha: Float = max(0, min(1, projectAlpha))
             var ppr: UInt32 = UInt32(particlesPerRope)
             encoder.setBytes(&alpha, length: MemoryLayout<Float>.stride, index: 4)
             encoder.setBytes(&ppr, length: MemoryLayout<UInt32>.stride, index: 5)
@@ -177,7 +182,8 @@ final class RopeSimulation {
             encoder.endEncoding()
         }
 
-        for _ in 0..<1 {
+        if collisionsEnabled {
+            for _ in 0..<1 {
             if let encoder = commandBuffer.makeComputeCommandEncoder() {
                 encoder.setComputePipelineState(gridClearPipeline)
                 encoder.setBuffer(gridHeads, offset: 0, index: 0)
@@ -220,6 +226,7 @@ final class RopeSimulation {
                     count: ropeCount * particlesPerRope
                 )
                 encoder.endEncoding()
+            }
             }
         }
 

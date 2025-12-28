@@ -6,6 +6,7 @@ struct TopologyCrossing: Hashable {
     let ropeB: Int
     let position: SIMD2<Float>
     let ropeOver: Int
+    let handedness: Int
 }
 
 enum TopologyNode: Hashable {

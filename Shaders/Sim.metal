@@ -29,9 +29,6 @@ kernel void ropeProjectToTargets(device float4* posBuf [[buffer(0)]],
     uint ropeIndex = pid / particlesPerRope;
     if (metaBuf[ropeIndex].count == 0) return;
 
-    uint localIndex = pid - ropeIndex * particlesPerRope;
-    if (localIndex == 0 || localIndex == particlesPerRope - 1) return;
-
     float3 p = posBuf[pid].xyz;
     float3 t = targetBuf[pid].xyz;
     p = mix(p, t, alpha);

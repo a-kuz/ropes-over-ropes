@@ -3,35 +3,62 @@ import simd
 
 struct LevelDefinition: Codable {
     struct Vec2: Codable {
-        let posX: Float
-        let posY: Float
+        let xPosition: Float
+        let yPosition: Float
 
         enum CodingKeys: String, CodingKey {
-            case posX = "x"
-            case posY = "y"
+            case xPosition = "x"
+            case yPosition = "y"
         }
 
-        var simd: SIMD2<Float> { SIMD2<Float>(posX, posY) }
+        var simd: SIMD2<Float> { SIMD2<Float>(xPosition, yPosition) }
     }
 
     struct Color: Codable {
-        let red: Float
-        let green: Float
-        let blue: Float
+        let redChannel: Float
+        let greenChannel: Float
+        let blueChannel: Float
 
         enum CodingKeys: String, CodingKey {
-            case red = "r"
-            case green = "g"
-            case blue = "b"
+            case redChannel = "r"
+            case greenChannel = "g"
+            case blueChannel = "b"
         }
 
-        var simd: SIMD3<Float> { SIMD3<Float>(red, green, blue) }
+        var simd: SIMD3<Float> { SIMD3<Float>(redChannel, greenChannel, blueChannel) }
     }
 
     struct Rope: Codable {
         let startHole: Int
         let endHole: Int
         let color: Color
+        let width: Float
+        let height: Float
+
+        enum CodingKeys: String, CodingKey {
+            case startHole
+            case endHole
+            case color
+            case width
+            case height
+        }
+
+        init(startHole: Int, endHole: Int, color: Color, width: Float, height: Float) {
+            self.startHole = startHole
+            self.endHole = endHole
+            self.color = color
+            self.width = width
+            self.height = height
+        }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            startHole = try c.decode(Int.self, forKey: .startHole)
+            endHole = try c.decode(Int.self, forKey: .endHole)
+            color = try c.decode(Color.self, forKey: .color)
+            width = try c.decodeIfPresent(Float.self, forKey: .width) ?? 0.085
+            height = try c.decodeIfPresent(Float.self, forKey: .height) ?? 0.030
+        }
     }
 
     let id: Int

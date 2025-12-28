@@ -84,10 +84,9 @@ enum TopologySampler {
             ]
         }
 
-        let otherRope = (crossing.ropeA == ropeIndex) ? crossing.ropeB : crossing.ropeA
-        let otherDir = crossingTangent(engine: engine, ropeIndex: otherRope, crossingId: crossingId) ?? SIMD2<Float>(dir.y, -dir.x)
-        let sign = cross2(dir, otherDir) >= 0 ? 1.0 as Float : -1.0 as Float
         let sideDir = normalize2(SIMD2<Float>(-dir.y, dir.x))
+        let base = Float(crossing.handedness)
+        let sign = (ropeIndex == crossing.ropeA) ? base : -base
         let sideScale = holeSideOffset(lift: lift) * sign
         let side = sideDir * sideScale
 
@@ -107,28 +106,10 @@ enum TopologySampler {
         max(0.05, min(0.10, lift * 0.55))
     }
 
-    private static func crossingTangent(engine: TopologyEngine, ropeIndex: Int, crossingId: Int) -> SIMD2<Float>? {
-        if ropeIndex < 0 || ropeIndex >= engine.ropes.count { return nil }
-        let nodes = engine.ropes[ropeIndex].nodes
-        let idx = nodes.firstIndex { node in
-            if case .crossing(let id) = node { return id == crossingId }
-            return false
-        }
-        guard let idx else { return nil }
-        if idx == 0 || idx >= nodes.count - 1 { return nil }
-        let prevXY = engine.position(of: nodes[idx - 1])
-        let nextXY = engine.position(of: nodes[idx + 1])
-        return normalize2(nextXY - prevXY)
-    }
-
     private static func normalize2(_ v: SIMD2<Float>) -> SIMD2<Float> {
         let l2 = simd_length_squared(v)
         if l2 < 1e-12 { return .zero }
         return v / sqrt(l2)
-    }
-
-    private static func cross2(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
-        a.x * b.y - a.y * b.x
     }
 
     private static func cumulativeLengths(poly: [SIMD3<Float>]) -> [Float] {

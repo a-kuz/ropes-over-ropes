@@ -24,8 +24,8 @@ extension Renderer {
             let endpoints = ropes[ropeIndex]
             let startHoleIndex = endpoints.startHole
             let endHoleIndex = endpoints.endHole
-            let startHolePosition = holePositions[startHoleIndex]
-            let endHolePosition = holePositions[endHoleIndex]
+            guard let startHolePosition = holePositions[safe: startHoleIndex],
+                  let endHolePosition = holePositions[safe: endHoleIndex] else { continue }
 
             let startDistance = simd_length(world - startHolePosition)
             if startDistance < hitRadius && (best == nil || startDistance < best!.distance) {
@@ -40,7 +40,12 @@ extension Renderer {
 
         if let best {
             dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex)
-            dragWorld = holePositions[best.holeIndex]
+            guard let initial = holePositions[safe: best.holeIndex],
+                  holeOccupied.indices.contains(best.holeIndex) else {
+                dragState = nil
+                return
+            }
+            dragWorld = initial
             lastDragWorld = dragWorld
             holeOccupied[best.holeIndex] = false
             topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorld)
@@ -59,12 +64,17 @@ extension Renderer {
 
     private func endDrag(world: SIMD2<Float>) {
         guard let dragState else { return }
+        guard ropes.indices.contains(dragState.ropeIndex) else {
+            self.dragState = nil
+            return
+        }
 
         let snapRadius = holeRadius * 1.9
         var bestIndex: Int?
         var bestDistance: Float = .greatestFiniteMagnitude
 
         for holeIndex in holePositions.indices {
+            guard holeOccupied.indices.contains(holeIndex) else { continue }
             if holeOccupied[holeIndex] { continue }
             let distance = simd_length(holePositions[holeIndex] - world)
             if distance < snapRadius && distance < bestDistance {
@@ -79,23 +89,31 @@ extension Renderer {
             } else {
                 ropes[dragState.ropeIndex].endHole = snappedHoleIndex
             }
-            holeOccupied[snappedHoleIndex] = true
+            if holeOccupied.indices.contains(snappedHoleIndex) {
+                holeOccupied[snappedHoleIndex] = true
+            }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: snappedHoleIndex)
         } else {
-            holeOccupied[dragState.originalHoleIndex] = true
+            if holeOccupied.indices.contains(dragState.originalHoleIndex) {
+                holeOccupied[dragState.originalHoleIndex] = true
+            }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: dragState.originalHoleIndex)
         }
 
         self.dragState = nil
 
         let endpoints = ropes[dragState.ropeIndex]
-        let pinStart = holePositions[endpoints.startHole]
-        let pinEnd = holePositions[endpoints.endHole]
-        simulation.setPins(
-            ropeIndex: dragState.ropeIndex,
-            pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
-            pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
-        )
+        if let pinStart = holePositions[safe: endpoints.startHole],
+           let pinEnd = holePositions[safe: endpoints.endHole] {
+            simulation.setPins(
+                ropeIndex: dragState.ropeIndex,
+                pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
+                pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
+            )
+        } else {
+            simulation.deactivateRope(ropeIndex: dragState.ropeIndex)
+            topology?.deactivateRope(ropeIndex: dragState.ropeIndex)
+        }
 
         removeUntangledRopes()
     }

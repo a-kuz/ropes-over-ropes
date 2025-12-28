@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */; };
+		0BFCB97BE05C11AA504AF80A /* Renderer+MTKViewDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1198646DB4FE9E0D90C7A571 /* Renderer+MTKViewDelegate.swift */; };
 		16BB647DCC46849DA718F8DA /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B0BFBA0DA3848A126EB434 /* GameView.swift */; };
 		1F2A105232B213DC816A79F8 /* GameMTKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CB472A4725395DD246579F /* GameMTKView.swift */; };
 		250A297F236F415557B72231 /* TopologySampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA61C6BAB24A7F83FE508DF6 /* TopologySampler.swift */; };
@@ -19,6 +20,7 @@
 		71F88EED711DDE8DFC0AEED0 /* FrameTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */; };
 		799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */; };
 		805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */ = {isa = PBXBuildFile; fileRef = EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */; };
+		8883100995DA40185E925B68 /* Array+Safe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C82451EEE2B4B0C6A03DC23 /* Array+Safe.swift */; };
 		8EDE8DD2CC65E6EE108B7FA0 /* Renderer+Bloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */; };
 		A3945957757B30539F65F76A /* TopologyTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CD006271F5BB97CC853822 /* TopologyTypes.swift */; };
 		BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6663864E2CD1FBEE57B6F14 /* Renderer.swift */; };
@@ -32,12 +34,14 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
+		1198646DB4FE9E0D90C7A571 /* Renderer+MTKViewDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+MTKViewDelegate.swift"; sourceTree = "<group>"; };
 		18CD006271F5BB97CC853822 /* TopologyTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyTypes.swift; sourceTree = "<group>"; };
 		19B0BFBA0DA3848A126EB434 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
 		2D7BD441C280F325936786F3 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
 		404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentIntersection.swift; sourceTree = "<group>"; };
 		4B12E7FCD84630A87A47BAAB /* TopologyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEngine.swift; sourceTree = "<group>"; };
 		55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeSimulation.swift; sourceTree = "<group>"; };
+		5C82451EEE2B4B0C6A03DC23 /* Array+Safe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Array+Safe.swift"; sourceTree = "<group>"; };
 		7018E1B69CE11AB4624A9C0E /* LevelDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDefinition.swift; sourceTree = "<group>"; };
 		7BFEFEBF4D97EDF74AA9A7A2 /* UzlsFourApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UzlsFourApp.swift; sourceTree = "<group>"; };
 		7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeMeshBuilder.swift; sourceTree = "<group>"; };
@@ -76,6 +80,14 @@
 			);
 			sourceTree = "<group>";
 		};
+		52418EB7ECC95E2932EFFFF3 /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				5C82451EEE2B4B0C6A03DC23 /* Array+Safe.swift */,
+			);
+			path = Utils;
+			sourceTree = "<group>";
+		};
 		6FDBB1947B577E0BAB98F132 /* App */ = {
 			isa = PBXGroup;
 			children = (
@@ -111,6 +123,7 @@
 				E7875CF336B44C4405E53573 /* Renderer */,
 				A1C7509C589A17ED4687745A /* Simulation */,
 				CED1FDB8E40D1005BB7370D1 /* Topology */,
+				52418EB7ECC95E2932EFFFF3 /* Utils */,
 			);
 			path = Game;
 			sourceTree = "<group>";
@@ -144,6 +157,7 @@
 				F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */,
 				CFEA9CC03036E7509C64C8B5 /* Renderer+Holes.swift */,
 				95442C4BCC472AED86316E91 /* Renderer+Interaction.swift */,
+				1198646DB4FE9E0D90C7A571 /* Renderer+MTKViewDelegate.swift */,
 				D7D7E804648F39B3DEF407AE /* Renderer+RopeMesh.swift */,
 				AF6F2ECD6D6F29B3AD1472C9 /* Renderer+WinCheck.swift */,
 				7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */,
@@ -206,6 +220,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				8883100995DA40185E925B68 /* Array+Safe.swift in Sources */,
 				353F2A7C4FBCF82468CA8A4E /* Base.metal in Sources */,
 				DEEC5B22CB2859CFB7527C03 /* Camera.swift in Sources */,
 				47298DEF4D70639C3D1DBCDF /* ContentView.swift in Sources */,
@@ -217,6 +232,7 @@
 				8EDE8DD2CC65E6EE108B7FA0 /* Renderer+Bloom.swift in Sources */,
 				F12694A569C5BF5F129BC771 /* Renderer+Holes.swift in Sources */,
 				C63393857DAAC804BCD9203D /* Renderer+Interaction.swift in Sources */,
+				0BFCB97BE05C11AA504AF80A /* Renderer+MTKViewDelegate.swift in Sources */,
 				C8606235B81639CBC17AE961 /* Renderer+RopeMesh.swift in Sources */,
 				71D9F96C6F4FDDC7AED37618 /* Renderer+WinCheck.swift in Sources */,
 				BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */,
