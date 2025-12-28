@@ -69,27 +69,27 @@ extension Renderer {
         var bestDistAlong: Float = 0
         var bestD2: Float = .greatestFiniteMagnitude
 
-        var s: Float = 0
-        for i in 0..<(points.count - 1) {
-            let a3 = points[i]
-            let b3 = points[i + 1]
-            let a = SIMD2<Float>(a3.x, a3.y)
-            let b = SIMD2<Float>(b3.x, b3.y)
-            let ab = b - a
-            let ab2 = simd_length_squared(ab)
-            let t: Float
-            if ab2 < 1e-10 {
-                t = 0
+        var distanceAlong: Float = 0
+        for segmentIndex in 0..<(points.count - 1) {
+            let pointA3 = points[segmentIndex]
+            let pointB3 = points[segmentIndex + 1]
+            let pointA2 = SIMD2<Float>(pointA3.x, pointA3.y)
+            let pointB2 = SIMD2<Float>(pointB3.x, pointB3.y)
+            let segment = pointB2 - pointA2
+            let segmentLen2 = simd_length_squared(segment)
+            let segmentT: Float
+            if segmentLen2 < 1e-10 {
+                segmentT = 0
             } else {
-                t = max(0, min(1, simd_dot(target - a, ab) / ab2))
+                segmentT = max(0, min(1, simd_dot(target - pointA2, segment) / segmentLen2))
             }
-            let p = a + ab * t
-            let d2 = simd_length_squared(p - target)
-            if d2 < bestD2 {
-                bestD2 = d2
-                bestDistAlong = s + simd_length(b3 - a3) * t
+            let projectedPoint = pointA2 + segment * segmentT
+            let projectedDist2 = simd_length_squared(projectedPoint - target)
+            if projectedDist2 < bestD2 {
+                bestD2 = projectedDist2
+                bestDistAlong = distanceAlong + simd_length(pointB3 - pointA3) * segmentT
             }
-            s += simd_length(b3 - a3)
+            distanceAlong += simd_length(pointB3 - pointA3)
         }
 
         return bestDistAlong

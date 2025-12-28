@@ -4,15 +4,21 @@ final class Renderer: NSObject, MTKViewDelegate {
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let tablePipeline: MTLRenderPipelineState
-    let scenePipeline: MTLRenderPipelineState
+    let holePipeline: MTLRenderPipelineState
     let ropePipeline: MTLRenderPipelineState
     let postPipeline: MTLRenderPipelineState
+    let shadowRopePipeline: MTLRenderPipelineState
+    let shadowHolePipeline: MTLRenderPipelineState
     let bloomThreshold: MTLComputePipelineState
     let bloomBlurH: MTLComputePipelineState
     let bloomBlurV: MTLComputePipelineState
 
     var depthStateScene: MTLDepthStencilState
     var depthStateBackground: MTLDepthStencilState
+    var depthStateShadow: MTLDepthStencilState
+
+    var shadowDepthTex: MTLTexture?
+    let shadowMapSize: Int = 2048
 
     var camera = Camera()
     var time: Float = 0
@@ -21,6 +27,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var frameUniforms: MTLBuffer?
     var holeInstances: MTLBuffer?
+    var holeVB: MTLBuffer?
+    var holeIB: MTLBuffer?
+    var holeIndexCount: Int = 0
 
     var holePositions: [SIMD2<Float>] = []
     var holeRadius: Float = 0.105
@@ -69,9 +78,27 @@ final class Renderer: NSObject, MTKViewDelegate {
         let levelHoles = (decodedHoles?.isEmpty == false) ? (decodedHoles ?? fallbackLayout.positions) : fallbackLayout.positions
         let levelHoleRadius = level?.holeRadius ?? fallbackLayout.radius
         let defaultRopes: [LevelDefinition.Rope] = [
-            LevelDefinition.Rope(startHole: 0, endHole: min(14, levelHoles.count - 1), color: .init(redChannel: 0.20, greenChannel: 0.95, blueChannel: 0.35), width: 0.090, height: 0.030),
-            LevelDefinition.Rope(startHole: 3, endHole: min(17, levelHoles.count - 1), color: .init(redChannel: 0.30, greenChannel: 0.55, blueChannel: 0.98), width: 0.088, height: 0.029),
-            LevelDefinition.Rope(startHole: min(6, levelHoles.count - 1), endHole: min(11, levelHoles.count - 1), color: .init(redChannel: 0.96, greenChannel: 0.28, blueChannel: 0.33), width: 0.086, height: 0.028)
+            LevelDefinition.Rope(
+                startHole: 0,
+                endHole: min(14, levelHoles.count - 1),
+                color: .init(redChannel: 0.20, greenChannel: 0.95, blueChannel: 0.35),
+                width: 0.090,
+                height: 0.030
+            ),
+            LevelDefinition.Rope(
+                startHole: 3,
+                endHole: min(17, levelHoles.count - 1),
+                color: .init(redChannel: 0.30, greenChannel: 0.55, blueChannel: 0.98),
+                width: 0.088,
+                height: 0.029
+            ),
+            LevelDefinition.Rope(
+                startHole: min(6, levelHoles.count - 1),
+                endHole: min(11, levelHoles.count - 1),
+                color: .init(redChannel: 0.96, greenChannel: 0.28, blueChannel: 0.33),
+                width: 0.086,
+                height: 0.028
+            )
         ]
         let candidateRopes = level?.ropes ?? defaultRopes
         var validatedRopes = candidateRopes.filter { rope in
@@ -80,7 +107,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             return rope.startHole != rope.endHole
         }
         if validatedRopes.isEmpty, levelHoles.count >= 2 {
-            validatedRopes = [LevelDefinition.Rope(startHole: 0, endHole: 1, color: .init(redChannel: 0.85, greenChannel: 0.85, blueChannel: 0.92), width: 0.090, height: 0.030)]
+            validatedRopes = [
+                LevelDefinition.Rope(
+                    startHole: 0,
+                    endHole: 1,
+                    color: .init(redChannel: 0.85, greenChannel: 0.85, blueChannel: 0.92),
+                    width: 0.090,
+                    height: 0.030
+                )
+            ]
         }
         let particlesPerRope = max(8, level?.particlesPerRope ?? 64)
 
@@ -91,17 +126,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         self.tablePipeline = Self.makeTablePipeline(device: device, view: view, library: library)
-        self.scenePipeline = Self.makeScenePipeline(device: device, view: view, library: library)
+        self.holePipeline = Self.makeHolePipeline(device: device, view: view, library: library)
         self.ropePipeline = Self.makeRopePipeline(device: device, view: view, library: library)
         self.postPipeline = Self.makePostPipeline(device: device, view: view, library: library)
+        self.shadowRopePipeline = Self.makeShadowRopePipeline(device: device, library: library)
+        self.shadowHolePipeline = Self.makeShadowHolePipeline(device: device, library: library)
         (self.bloomThreshold, self.bloomBlurH, self.bloomBlurV) = Self.makeBloomPipelines(device: device, library: library)
-        (self.depthStateScene, self.depthStateBackground) = Self.makeDepthStates(device: device)
+        (self.depthStateScene, self.depthStateBackground, self.depthStateShadow) = Self.makeDepthStates(device: device)
 
         self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
         self.holePositions = levelHoles
         self.holeRadius = levelHoleRadius
         self.holeOccupied = Array(repeating: false, count: levelHoles.count)
         self.holeInstances = Self.makeHoleInstances(device: device, positions: levelHoles, radius: levelHoleRadius)
+        Self.buildHoleMeshBuffers(device: device, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
 
         self.ropes = validatedRopes.map { rope in
             RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, width: rope.width, height: rope.height)
@@ -155,13 +193,14 @@ final class Renderer: NSObject, MTKViewDelegate {
         return makePipeline(device: device, descriptor: descriptor)
     }
 
-    private static func makeScenePipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
+    private static func makeHolePipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
         let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "sceneVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "sceneFragment")
+        descriptor.vertexFunction = library.makeFunction(name: "holeVertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "holeFragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
+        descriptor.vertexDescriptor = makeHoleVertexDescriptor()
         return makePipeline(device: device, descriptor: descriptor)
     }
 
@@ -173,6 +212,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.vertexDescriptor = makeRopeVertexDescriptor()
+        return makePipeline(device: device, descriptor: descriptor)
+    }
+
+    private static func makeShadowRopePipeline(device: MTLDevice, library: MTLLibrary) -> MTLRenderPipelineState {
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "ropeShadowVertex")
+        descriptor.depthAttachmentPixelFormat = .depth32Float
+        descriptor.vertexDescriptor = makeRopeVertexDescriptor()
+        return makePipeline(device: device, descriptor: descriptor)
+    }
+
+    private static func makeShadowHolePipeline(device: MTLDevice, library: MTLLibrary) -> MTLRenderPipelineState {
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "holeShadowVertex")
+        descriptor.depthAttachmentPixelFormat = .depth32Float
+        descriptor.vertexDescriptor = makeHoleVertexDescriptor()
         return makePipeline(device: device, descriptor: descriptor)
     }
 
@@ -199,7 +254,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         )
     }
 
-    private static func makeDepthStates(device: MTLDevice) -> (MTLDepthStencilState, MTLDepthStencilState) {
+    private static func makeDepthStates(device: MTLDevice) -> (MTLDepthStencilState, MTLDepthStencilState, MTLDepthStencilState) {
         let backgroundDescriptor = MTLDepthStencilDescriptor()
         backgroundDescriptor.depthCompareFunction = .always
         backgroundDescriptor.isDepthWriteEnabled = false
@@ -208,12 +263,17 @@ final class Renderer: NSObject, MTKViewDelegate {
         sceneDescriptor.depthCompareFunction = .lessEqual
         sceneDescriptor.isDepthWriteEnabled = true
 
+        let shadowDescriptor = MTLDepthStencilDescriptor()
+        shadowDescriptor.depthCompareFunction = .lessEqual
+        shadowDescriptor.isDepthWriteEnabled = true
+
         guard let backgroundState = device.makeDepthStencilState(descriptor: backgroundDescriptor),
-              let sceneState = device.makeDepthStencilState(descriptor: sceneDescriptor) else {
+              let sceneState = device.makeDepthStencilState(descriptor: sceneDescriptor),
+              let shadowState = device.makeDepthStencilState(descriptor: shadowDescriptor) else {
             fatalError("Failed to create depth states")
         }
 
-        return (sceneState, backgroundState)
+        return (sceneState, backgroundState, shadowState)
     }
 
     private static func makeRopeVertexDescriptor() -> MTLVertexDescriptor {
@@ -236,6 +296,27 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         descriptor.layouts[0].stride = MemoryLayout<RopeVertex>.stride
         return descriptor
+    }
+
+    private static func makeHoleVertexDescriptor() -> MTLVertexDescriptor {
+        let descriptor = MTLVertexDescriptor()
+        descriptor.attributes[0].format = .float3
+        descriptor.attributes[0].offset = 0
+        descriptor.attributes[0].bufferIndex = 0
+
+        descriptor.attributes[1].format = .float3
+        descriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
+        descriptor.attributes[1].bufferIndex = 0
+
+        descriptor.layouts[0].stride = MemoryLayout<HoleVertex>.stride
+        return descriptor
+    }
+
+    private static func buildHoleMeshBuffers(device: MTLDevice, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
+        let mesh = HoleMeshBuilder.build()
+        indexCount = mesh.indices.count
+        vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
+        indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])
     }
 
 }

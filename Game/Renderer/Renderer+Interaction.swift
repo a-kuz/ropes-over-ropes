@@ -28,12 +28,14 @@ extension Renderer {
                   let endHolePosition = holePositions[safe: endHoleIndex] else { continue }
 
             let startDistance = simd_length(world - startHolePosition)
-            if startDistance < hitRadius && (best == nil || startDistance < best!.distance) {
+            let startTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 0) ?? true
+            if startTopAllowed, startDistance < hitRadius && (best == nil || startDistance < best!.distance) {
                 best = (ropeIndex, 0, startHoleIndex, startDistance)
             }
 
             let endDistance = simd_length(world - endHolePosition)
-            if endDistance < hitRadius && (best == nil || endDistance < best!.distance) {
+            let endTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 1) ?? true
+            if endTopAllowed, endDistance < hitRadius && (best == nil || endDistance < best!.distance) {
                 best = (ropeIndex, 1, endHoleIndex, endDistance)
             }
         }

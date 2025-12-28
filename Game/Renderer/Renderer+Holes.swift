@@ -31,7 +31,7 @@ extension Renderer {
         var holes: [HoleInstance] = []
         holes.reserveCapacity(positions.count)
         for position in positions {
-            holes.append(HoleInstance(position_radius: SIMD4<Float>(position.x, position.y, 0, radius)))
+            holes.append(HoleInstance(positionRadius: SIMD4<Float>(position.x, position.y, 0, radius)))
         }
 
         guard let buffer = device.makeBuffer(

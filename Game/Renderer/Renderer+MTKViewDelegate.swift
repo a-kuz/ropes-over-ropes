@@ -29,6 +29,7 @@ extension Renderer {
         guard let bloomB else { return }
         guard let depth = view.depthStencilTexture else { return }
 
+        encodeShadowPass(commandBuffer: commandBuffer)
         encodeHDRPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: depth)
         encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
         encodeCompositePass(commandBuffer: commandBuffer, view: view, hdrTexture: hdrTex, bloomTextureA: bloomA)
@@ -118,18 +119,25 @@ extension Renderer {
         if let frameUniforms {
             encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
         }
+        if let shadowDepthTex {
+            encoder.setFragmentTexture(shadowDepthTex, index: 2)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         encoder.setDepthStencilState(depthStateScene)
-        encoder.setRenderPipelineState(scenePipeline)
-        if let frameUniforms {
-            encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
-            encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
-        }
-        if let holeInstances {
+        encoder.setRenderPipelineState(holePipeline)
+        if let holeVB, let holeIB, holeIndexCount > 0, let holeInstances {
+            encoder.setVertexBuffer(holeVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
             encoder.setVertexBuffer(holeInstances, offset: 0, index: 2)
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
             let instanceCount = holeInstances.length / MemoryLayout<HoleInstance>.stride
-            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 6, instanceCount: instanceCount)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: holeIndexCount, indexType: .uint16, indexBuffer: holeIB, indexBufferOffset: 0, instanceCount: instanceCount)
         }
 
         encoder.setRenderPipelineState(ropePipeline)
@@ -138,6 +146,47 @@ extension Renderer {
             if let frameUniforms {
                 encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
                 encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
+        }
+
+        encoder.endEncoding()
+    }
+
+    private func encodeShadowPass(commandBuffer: MTLCommandBuffer) {
+        if shadowDepthTex == nil {
+            resizeTextures(size: CGSize(width: 1, height: 1))
+        }
+        guard let shadowDepthTex else { return }
+
+        let renderPass = MTLRenderPassDescriptor()
+        renderPass.depthAttachment.texture = shadowDepthTex
+        renderPass.depthAttachment.loadAction = .clear
+        renderPass.depthAttachment.storeAction = .store
+        renderPass.depthAttachment.clearDepth = 1
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
+        encoder.setDepthStencilState(depthStateShadow)
+
+        if let holeVB, let holeIB, holeIndexCount > 0, let holeInstances {
+            encoder.setRenderPipelineState(shadowHolePipeline)
+            encoder.setVertexBuffer(holeVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            encoder.setVertexBuffer(holeInstances, offset: 0, index: 2)
+            let instanceCount = holeInstances.length / MemoryLayout<HoleInstance>.stride
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: holeIndexCount, indexType: .uint16, indexBuffer: holeIB, indexBufferOffset: 0, instanceCount: instanceCount)
+        }
+
+        if let ropeVB, let ropeIB, ropeIndexCount > 0 {
+            encoder.setRenderPipelineState(shadowRopePipeline)
+            encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
             }
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
         }
@@ -185,6 +234,16 @@ extension Renderer {
         bloomDesc.usage = [.shaderRead, .shaderWrite]
         bloomA = device.makeTexture(descriptor: bloomDesc)
         bloomB = device.makeTexture(descriptor: bloomDesc)
+
+        let shadowDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float,
+            width: shadowMapSize,
+            height: shadowMapSize,
+            mipmapped: false
+        )
+        shadowDesc.usage = [.renderTarget, .shaderRead]
+        shadowDesc.storageMode = .private
+        shadowDepthTex = device.makeTexture(descriptor: shadowDesc)
     }
 
     private func updateFrameUniforms(view: MTKView) {
@@ -193,13 +252,33 @@ extension Renderer {
         let viewProjection = camera.viewProj(aspect: aspect)
 
         let lightDir = simd_normalize(SIMD3<Float>(-0.35, 0.25, 0.9))
+        let halfH = camera.orthoHalfHeight
+        let halfW = halfH * aspect
+        let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)
+        let invShadow = 1.0 / Float(max(1, shadowMapSize))
+
         let uniforms = FrameUniforms(
             viewProj: viewProjection,
-            lightDir_intensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, 2.8),
+            lightViewProj: lightViewProj,
+            lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, 2.8),
             ambientColor: SIMD4<Float>(0.08, 0.09, 0.12, 1),
-            cameraPos: SIMD4<Float>(0, 0, camera.distance, 1)
+            cameraPos: SIMD4<Float>(camera.center.x, camera.center.y, camera.center.z + camera.distance, 1),
+            orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0022, 0),
+            shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
+    }
+
+    private func makeLightViewProj(lightDir: SIMD3<Float>, halfW: Float, halfH: Float) -> simd_float4x4 {
+        let target = SIMD3<Float>(0, 0, 0)
+        let eye = target + lightDir * 4.9
+        var up = SIMD3<Float>(0, 1, 0)
+        if abs(simd_dot(up, lightDir)) > 0.95 {
+            up = SIMD3<Float>(1, 0, 0)
+        }
+        let view = simd_float4x4.lookAt(eye: eye, center: target, up: up)
+        let proj = simd_float4x4.ortho(left: -halfW * 1.08, right: halfW * 1.08, bottom: -halfH * 1.08, top: halfH * 1.08, near: 0.01, far: 12.0)
+        return proj * view
     }
 }
 

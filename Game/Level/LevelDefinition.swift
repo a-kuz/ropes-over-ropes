@@ -52,12 +52,12 @@ struct LevelDefinition: Codable {
         }
 
         init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            startHole = try c.decode(Int.self, forKey: .startHole)
-            endHole = try c.decode(Int.self, forKey: .endHole)
-            color = try c.decode(Color.self, forKey: .color)
-            width = try c.decodeIfPresent(Float.self, forKey: .width) ?? 0.085
-            height = try c.decodeIfPresent(Float.self, forKey: .height) ?? 0.030
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            startHole = try container.decode(Int.self, forKey: .startHole)
+            endHole = try container.decode(Int.self, forKey: .endHole)
+            color = try container.decode(Color.self, forKey: .color)
+            width = try container.decodeIfPresent(Float.self, forKey: .width) ?? 0.085
+            height = try container.decodeIfPresent(Float.self, forKey: .height) ?? 0.030
         }
     }
 
