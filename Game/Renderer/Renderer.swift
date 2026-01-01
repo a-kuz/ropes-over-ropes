@@ -1,6 +1,9 @@
 import MetalKit
+import os.log
 
 final class Renderer: NSObject, MTKViewDelegate {
+    private static let logger = Logger(subsystem: "com.uzls.four", category: "Renderer")
+
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
     let tablePipeline: MTLRenderPipelineState
@@ -45,11 +48,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     var ropes: [RopeEndpoints] = []
     var topology: TopologyEngine?
     var lastDragWorld: SIMD2<Float> = .zero
+    var dragStartWorld: SIMD2<Float> = .zero
 
     struct DragState {
         var ropeIndex: Int
         var endIndex: Int
         var originalHoleIndex: Int
+        var topologySnapshot: TopologySnapshot
     }
 
     var dragState: DragState?
@@ -73,10 +78,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.commandQueue = commandQueue
 
         let fallbackLayout = Self.makeHoleLayout()
+        Self.logger.info("Initializing renderer, loading level 1...")
+        Self.logger.info("Fallback layout has \(fallbackLayout.positions.count) holes, radius: \(fallbackLayout.radius)")
+        
         let level = LevelLoader.load(levelId: 1)
+
+        if level == nil {
+            Self.logger.warning("Level 1 failed to load, using fallback")
+        } else {
+            Self.logger.info("Level 1 loaded successfully: \(level!.ropes.count) ropes, \(level!.holes.count) holes from JSON")
+        }
+
         let decodedHoles = level?.holes.map { $0.simd }
+        Self.logger.info("Decoded holes count: \(decodedHoles?.count ?? 0)")
         let levelHoles = (decodedHoles?.isEmpty == false) ? (decodedHoles ?? fallbackLayout.positions) : fallbackLayout.positions
         let levelHoleRadius = level?.holeRadius ?? fallbackLayout.radius
+        Self.logger.info("Using \(levelHoles.count) holes with radius \(levelHoleRadius)")
         let defaultRopes: [LevelDefinition.Rope] = [
             LevelDefinition.Rope(
                 startHole: 0,
@@ -100,13 +117,35 @@ final class Renderer: NSObject, MTKViewDelegate {
                 height: 0.028
             )
         ]
-        let candidateRopes = level?.ropes ?? defaultRopes
-        var validatedRopes = candidateRopes.filter { rope in
-            guard levelHoles.indices.contains(rope.startHole) else { return false }
-            guard levelHoles.indices.contains(rope.endHole) else { return false }
-            return rope.startHole != rope.endHole
+        let candidateRopes = (level != nil && !level!.ropes.isEmpty) ? level!.ropes : defaultRopes
+        Self.logger.info("Candidate ropes: \(candidateRopes.count) (level has \(level?.ropes.count ?? 0) ropes, default has \(defaultRopes.count))")
+
+        if level == nil {
+            Self.logger.warning("Level is nil, using default ropes (\(defaultRopes.count) ropes)")
+        } else if level!.ropes.isEmpty {
+            Self.logger.warning("Level has empty ropes array, using default ropes (\(defaultRopes.count) ropes)")
+        } else {
+            Self.logger.info("Using level ropes: \(level!.ropes.count) ropes")
         }
+
+        var validatedRopes = candidateRopes.filter { rope in
+            guard levelHoles.indices.contains(rope.startHole) else {
+                Self.logger.warning("Rope validation failed: startHole \(rope.startHole) out of bounds (0..<\(levelHoles.count))")
+                return false
+            }
+            guard levelHoles.indices.contains(rope.endHole) else {
+                Self.logger.warning("Rope validation failed: endHole \(rope.endHole) out of bounds (0..<\(levelHoles.count))")
+                return false
+            }
+            if rope.startHole == rope.endHole {
+                Self.logger.warning("Rope validation failed: startHole == endHole (\(rope.startHole))")
+                return false
+            }
+            return true
+        }
+
         if validatedRopes.isEmpty, levelHoles.count >= 2 {
+            Self.logger.warning("All ropes invalidated, creating fallback rope")
             validatedRopes = [
                 LevelDefinition.Rope(
                     startHole: 0,
@@ -117,6 +156,8 @@ final class Renderer: NSObject, MTKViewDelegate {
                 )
             ]
         }
+
+        Self.logger.info("Final rope count: \(validatedRopes.count) (from \(candidateRopes.count) candidate ropes)")
         let particlesPerRope = max(8, level?.particlesPerRope ?? 64)
 
         self.simulation = RopeSimulation(device: device, ropeCount: max(1, validatedRopes.count), particlesPerRope: particlesPerRope)
@@ -188,6 +229,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.vertexFunction = library.makeFunction(name: "fullscreenVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "tableFragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        descriptor.colorAttachments[0].isBlendingEnabled = false
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         return makePipeline(device: device, descriptor: descriptor)
@@ -198,6 +240,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.vertexFunction = library.makeFunction(name: "holeVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "holeFragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        descriptor.colorAttachments[0].isBlendingEnabled = false
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.vertexDescriptor = makeHoleVertexDescriptor()
@@ -209,6 +252,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.vertexFunction = library.makeFunction(name: "ropeVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "ropeFragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
+        descriptor.colorAttachments[0].isBlendingEnabled = false
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.vertexDescriptor = makeRopeVertexDescriptor()
@@ -236,6 +280,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         descriptor.vertexFunction = library.makeFunction(name: "fullscreenVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "postFragment")
         descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        descriptor.colorAttachments[0].isBlendingEnabled = false
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         return makePipeline(device: device, descriptor: descriptor)

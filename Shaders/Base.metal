@@ -18,6 +18,34 @@ struct FrameUniforms {
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
 
+static float hash21(float2 p) {
+    float n = sin(dot(p, float2(127.1, 311.7)));
+    return fract(n * 43758.5453123);
+}
+
+static float3 matteRubber(float3 baseColor, float3 n, float3 l, float3 v) {
+    float nl = saturate(dot(n, l));
+    float nv = saturate(dot(n, v));
+    float3 h = normalize(l + v);
+    float nh = saturate(dot(n, h));
+
+    float wrap = saturate((nl + 0.55) / 1.55);
+    float3 lambert = baseColor * wrap;
+
+    float s = nl - nv;
+    float oren = 1.0 - 0.35 * (s * s) * (1.0 - nl) * (1.0 - nv);
+    float3 diff = lambert * (0.55 + 0.45 * oren);
+
+    float sheen = pow(1.0 - nv, 4.0) * 0.08;
+    float3 sheenCol = mix(baseColor, float3(1.0), 0.22) * sheen;
+
+    float spec = pow(nh, 1.6) * 0.010;
+    float3 sp = float3(spec);
+
+    float subsurface = (1.0 - nl) * 0.05;
+    return diff * (1.0 + subsurface) + sheenCol + sp;
+}
+
 struct HoleInstance {
     float4 position_radius;
 };
@@ -54,7 +82,6 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     float v = smoothstep(1.35, 0.0, dot(p, p));
     float3 base = mix(float3(0.92, 0.93, 0.96), float3(0.86, 0.88, 0.94), uv.y);
     float3 c = base * (0.86 + 0.14 * v);
-    c += frame.ambientColor.xyz * 0.12;
 
     float halfW = frame.orthoHalfSize_shadowBias.x;
     float halfH = frame.orthoHalfSize_shadowBias.y;
@@ -66,7 +93,8 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     if (shadowMap.get_width() > 0) {
         shadow = shadowVisibility(worldPos, worldN, frame, shadowMap);
     }
-    c *= mix(0.62, 1.0, shadow);
+    shadow = pow(shadow, 2.2);
+    c *= mix(0.18, 1.0, shadow);
     return float4(c, 1.0);
 }
 
@@ -114,13 +142,13 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
     float ndh = saturate(dot(n, h));
     float spec = pow(ndh, 32.0) * 0.18;
     float3 lit = col * (0.25 + 0.75 * ndl) + float3(spec);
-    lit += frame.ambientColor.xyz * col * 0.35;
 
     float shadow = 1.0;
     if (shadowMap.get_width() > 0) {
         shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
     }
-    lit *= mix(0.55, 1.0, shadow);
+    shadow = pow(shadow, 1.8);
+    lit *= mix(0.25, 1.0, shadow);
     return float4(lit, 1.0);
 }
 
@@ -136,6 +164,7 @@ struct RopeOut {
     float3 normal;
     float3 color;
     float3 worldPos;
+    float2 uv;
 };
 
 vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
@@ -145,6 +174,7 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     o.position = frame.viewProj * float4(in.position, 1.0);
     o.normal = in.normal;
     o.color = in.color;
+    o.uv = in.uv;
     return o;
 }
 
@@ -153,15 +183,18 @@ static float3 rubberShading(float3 baseColor, float3 n, float3 l, float3 v) {
     float3 h = normalize(l + v);
     float ndh = saturate(dot(n, h));
 
-    float rough = 0.72;
-    float specPow = mix(16.0, 2.0, rough);
-    float spec = pow(ndh, specPow) * 0.22;
-    float wrap = saturate((ndl + 0.35) / 1.35);
+    float wrap = saturate((ndl + 0.48) / 1.48);
+    float3 diff = baseColor * (0.18 + 0.82 * wrap);
 
-    float3 diff = baseColor * (0.35 + 0.65 * wrap);
-    float3 sp = float3(spec);
-    float fres = pow(1.0 - saturate(dot(n, v)), 5.0);
-    return diff + sp * (0.35 + 0.65 * fres);
+    float nv = saturate(dot(n, v));
+    float fres = pow(1.0 - nv, 6.0);
+
+    float specPow = 2.2;
+    float spec = pow(ndh, specPow) * 0.018;
+    float3 sp = float3(spec) * (0.15 + 0.85 * fres);
+
+    float subsurface = (1.0 - ndl) * 0.06;
+    return diff * (1.0 + subsurface) + sp;
 }
 
 fragment float4 ropeFragment(RopeOut in [[stage_in]],
@@ -171,8 +204,19 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
     float3 n = normalize(in.normal);
 
-    float3 c = rubberShading(in.color, n, l, v);
-    c += frame.ambientColor.xyz * in.color * 0.55;
+    float2 p = in.worldPos.xy * 42.0 + in.uv.x * 13.0;
+    float n0 = hash21(p);
+    float n1 = hash21(p.yx + 17.3);
+    float3 t = cross(n, float3(0.0, 0.0, 1.0));
+    if (length(t) < 1e-3) {
+        t = cross(n, float3(0.0, 1.0, 0.0));
+    }
+    t = normalize(t);
+    float3 b = normalize(cross(n, t));
+    float3 micro = (t * (n0 - 0.5) + b * (n1 - 0.5)) * 0.10;
+    n = normalize(n + micro);
+
+    float3 c = matteRubber(in.color, n, l, v);
 
     float h = saturate(in.worldPos.z / 0.35);
     c += float3(0.08, 0.10, 0.16) * h * 0.6;
@@ -181,7 +225,8 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     if (shadowMap.get_width() > 0) {
         shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
     }
-    c *= mix(0.55, 1.0, shadow);
+    shadow = pow(shadow, 1.85);
+    c *= mix(0.22, 1.0, shadow);
     return float4(c, 1.0);
 }
 
@@ -305,9 +350,10 @@ fragment float4 postFragment(VSOut in [[stage_in]],
     float2 uv = in.uv;
     float3 c = hdr.sample(s, uv).xyz;
     float3 b = bloom.sample(s, uv).xyz;
-    c += b * 1.05;
-    float3 mapped = c / (c + float3(1.0));
-    mapped = pow(mapped, float3(1.0 / 2.2));
+    c += b * 0.18;
+    float exposure = 1.35;
+    float3 mapped = 1.0 - exp(-c * exposure);
+    mapped = pow(saturate(mapped), float3(1.0 / 2.2));
     return float4(mapped, 1.0);
 }
 

@@ -9,6 +9,9 @@ struct GameView: UIViewRepresentable {
         view.clearColor = MTLClearColor(red: 0.07, green: 0.08, blue: 0.12, alpha: 1.0)
         view.preferredFramesPerSecond = 120
         view.framebufferOnly = false
+        view.isOpaque = true
+        view.backgroundColor = .black
+        view.alpha = 1.0
 
         let renderer = Renderer(view: view)
         context.coordinator.renderer = renderer
@@ -33,4 +36,3 @@ struct GameView: UIViewRepresentable {
         var renderer: Renderer?
     }
 }
-
