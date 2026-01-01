@@ -90,58 +90,6 @@ final class TopologyEngine {
         logState(label: "After endDrag")
     }
 
-    func applyCanonicalMove(ropeIndex: Int, endIndex: Int, from: SIMD2<Float>, to: SIMD2<Float>) {
-        if ropeIndex < 0 || ropeIndex >= ropes.count { return }
-        if !ropes[ropeIndex].active { return }
-        if ropes[ropeIndex].nodes.count < 2 { return }
-
-        let dir = to - from
-        if simd_length_squared(dir) < 1e-8 { return }
-
-        let hits = allIntersectionsForMove(ropeIndex: ropeIndex, from: from, to: to)
-        if hits.isEmpty { return }
-
-        let moveDir = normalize2(to - from)
-        for hit in hits {
-            if let existing = findCloseCrossing(ropeA: ropeIndex, ropeB: hit.otherRopeIndex, near: hit.point),
-               canUndoCrossing(ropeIndex: ropeIndex, endIndex: endIndex, otherRopeIndex: hit.otherRopeIndex, crossingId: existing) {
-                removeCrossing(crossingId: existing)
-                continue
-            }
-
-            let crossingId = nextCrossingId
-            nextCrossingId += 1
-
-            let otherNodes = ropes[hit.otherRopeIndex].nodes
-            if otherNodes.count < 2 { continue }
-            let bSeg = nearestSegmentIndex(ropeIndex: hit.otherRopeIndex, near: hit.point)
-            let b0 = position(of: otherNodes[bSeg])
-            let b1 = position(of: otherNodes[min(bSeg + 1, otherNodes.count - 1)])
-            let bDir = normalize2(b1 - b0)
-            let handedness = cross2(moveDir, bDir) >= 0 ? 1 : -1
-
-            let low = min(ropeIndex, hit.otherRopeIndex)
-            let high = max(ropeIndex, hit.otherRopeIndex)
-            let crossing = TopologyCrossing(
-                id: crossingId,
-                ropeA: low,
-                ropeB: high,
-                position: hit.point,
-                ropeOver: ropeIndex,
-                handedness: handedness
-            )
-            crossings[crossingId] = crossing
-            needsRelaxation = true
-
-            insertCrossing(ropeIndex: hit.otherRopeIndex, segmentIndex: bSeg, crossingId: crossingId)
-            insertCrossingNearEnd(ropeIndex: ropeIndex, endIndex: endIndex, crossingId: crossingId)
-        }
-
-        if needsRelaxation {
-            normalizeCrossings()
-        }
-    }
-
     func deactivateRope(ropeIndex: Int) {
         if ropeIndex < 0 || ropeIndex >= ropes.count { return }
         ropes[ropeIndex].active = false
@@ -158,60 +106,76 @@ final class TopologyEngine {
         }
     }
 
-    func processDragSegment(ropeIndex: Int, from: SIMD2<Float>, to toPoint: SIMD2<Float>) {
-        var currentFrom = from
-        let dir = toPoint - from
+    func processCanonicalMove(ropeIndex: Int, endIndex: Int, from: SIMD2<Float>, to: SIMD2<Float>) {
+        let dir = to - from
         if simd_length_squared(dir) < 1e-8 { return }
 
-        Self.logger.info("🔄 PROCESS DRAG SEGMENT: rope=\(ropeIndex) from=(\(from.x), \(from.y)) to=(\(toPoint.x), \(toPoint.y))")
-        let endIndex = draggingEndIndex(ropeIndex: ropeIndex)
-        for _ in 0..<16 {
-            guard let hit = earliestIntersection(ropeIndex: ropeIndex, from: currentFrom, to: toPoint) else { break }
+        Self.logger.info("🔄 CANONICAL MOVE: rope=\(ropeIndex) end=\(endIndex) from=(\(from.x), \(from.y)) to=(\(to.x), \(to.y))")
 
-            if let existing = findCloseCrossing(ropeA: ropeIndex, ropeB: hit.otherRopeIndex, near: hit.point),
-               canUndoCrossing(ropeIndex: ropeIndex, endIndex: endIndex, otherRopeIndex: hit.otherRopeIndex, crossingId: existing) {
-                Self.logger.info("  ❌ UNDO crossing[\(existing)] at (\(hit.point.x), \(hit.point.y))")
-                removeCrossing(crossingId: existing)
-                let direction = simd_normalize(toPoint - currentFrom)
-                currentFrom = hit.point + direction * 1e-3
+        var hits: [(t: Float, point: SIMD2<Float>, otherRopeIndex: Int, otherSegmentIndex: Int)] = []
+        
+        for otherRopeIndex in ropes.indices where otherRopeIndex != ropeIndex {
+            if !ropes[otherRopeIndex].active { continue }
+            let otherNodes = ropes[otherRopeIndex].nodes
+            if otherNodes.count < 2 { continue }
+
+            for segmentIndex in 0..<(otherNodes.count - 1) {
+                let segmentStart = position(of: otherNodes[segmentIndex])
+                let segmentEnd = position(of: otherNodes[segmentIndex + 1])
+                if let intersection = SegmentIntersection.intersect(a0: from, a1: to, b0: segmentStart, b1: segmentEnd) {
+                    hits.append((intersection.t, intersection.p, otherRopeIndex, segmentIndex))
+                }
+            }
+        }
+
+        hits.sort { $0.t < $1.t }
+
+        for hit in hits {
+            let existingInSegment = findCrossingInSegment(
+                ropeIndex: hit.otherRopeIndex,
+                segmentIndex: hit.otherSegmentIndex,
+                withRope: ropeIndex
+            )
+            
+            if let existing = existingInSegment,
+               let existingCrossing = crossings[existing] {
+                
+                if existingCrossing.ropeOver == ropeIndex {
+                    Self.logger.info("  ❌ UNDO crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was over, undoing")
+                    removeCrossing(crossingId: existing)
+                } else {
+                    Self.logger.info("  ⏭️ SKIP crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was under, no loop")
+                }
                 continue
             }
 
             let low = min(ropeIndex, hit.otherRopeIndex)
             let high = max(ropeIndex, hit.otherRopeIndex)
-            if ropeIndex == high {
-                let direction = simd_normalize(toPoint - currentFrom)
-                currentFrom = hit.point + direction * 1e-3
-                continue
-            }
 
             let crossingId = nextCrossingId
             nextCrossingId += 1
-            let aDir = normalize2(toPoint - currentFrom)
+            
+            let aDir = normalize2(to - from)
             let otherNodes = ropes[hit.otherRopeIndex].nodes
             let b0 = position(of: otherNodes[hit.otherSegmentIndex])
             let b1 = position(of: otherNodes[hit.otherSegmentIndex + 1])
             let bDir = normalize2(b1 - b0)
             let handedness = cross2(aDir, bDir) >= 0 ? 1 : -1
 
-            let ropeOver = nextRopeOverForPair(low: low, high: high)
             let crossing = TopologyCrossing(
                 id: crossingId,
                 ropeA: low,
                 ropeB: high,
                 position: hit.point,
-                ropeOver: ropeOver,
+                ropeOver: ropeIndex,
                 handedness: handedness
             )
             crossings[crossingId] = crossing
             needsRelaxation = true
 
-            Self.logger.info("  ✅ ADD crossing[\(crossingId)] at (\(hit.point.x), \(hit.point.y)) ropeA=\(low) ropeB=\(high) over=\(ropeOver)")
+            Self.logger.info("  ✅ CREATE crossing[\(crossingId)] at (\(hit.point.x), \(hit.point.y)) ropeA=\(low) ropeB=\(high) over=\(ropeIndex)")
             insertCrossing(ropeIndex: hit.otherRopeIndex, segmentIndex: hit.otherSegmentIndex, crossingId: crossingId)
             insertCrossingNearEnd(ropeIndex: ropeIndex, endIndex: endIndex, crossingId: crossingId)
-
-            let direction = simd_normalize(toPoint - currentFrom)
-            currentFrom = hit.point + direction * 1e-3
         }
 
         if needsRelaxation {
@@ -344,6 +308,22 @@ final class TopologyEngine {
         return bestId
     }
 
+    private func findCrossingInSegment(ropeIndex: Int, segmentIndex: Int, withRope otherRopeIndex: Int) -> Int? {
+        guard ropes.indices.contains(ropeIndex) else { return nil }
+        guard ropes[ropeIndex].active else { return nil }
+        let nodes = ropes[ropeIndex].nodes
+        guard segmentIndex >= 0 && segmentIndex < nodes.count - 1 else { return nil }
+        
+        for nodeIndex in segmentIndex...(segmentIndex + 1) {
+            if case .crossing(let crossingId) = nodes[nodeIndex],
+               let crossing = crossings[crossingId],
+               (crossing.ropeA == otherRopeIndex || crossing.ropeB == otherRopeIndex) {
+                return crossingId
+            }
+        }
+        return nil
+    }
+
     private func canUndoCrossing(ropeIndex: Int, endIndex: Int, otherRopeIndex: Int, crossingId: Int) -> Bool {
         guard let crossing = crossings[crossingId] else { return false }
         if crossing.ropeOver != ropeIndex { return false }
@@ -431,28 +411,6 @@ final class TopologyEngine {
         var otherSegmentIndex: Int
     }
 
-    private func allIntersectionsForMove(ropeIndex: Int, from: SIMD2<Float>, to toPoint: SIMD2<Float>) -> [IntersectionHit] {
-        var hits: [IntersectionHit] = []
-        hits.reserveCapacity(8)
-
-        for otherRopeIndex in ropes.indices where otherRopeIndex != ropeIndex {
-            if !ropes[otherRopeIndex].active { continue }
-            let otherNodes = ropes[otherRopeIndex].nodes
-            if otherNodes.count < 2 { continue }
-
-            for segmentIndex in 0..<(otherNodes.count - 1) {
-                let segmentStart = position(of: otherNodes[segmentIndex])
-                let segmentEnd = position(of: otherNodes[segmentIndex + 1])
-                if let hit = SegmentIntersection.intersect(a0: from, a1: toPoint, b0: segmentStart, b1: segmentEnd) {
-                    hits.append(IntersectionHit(t: hit.t, point: hit.p, otherRopeIndex: otherRopeIndex, otherSegmentIndex: segmentIndex))
-                }
-            }
-        }
-
-        hits.sort { $0.t < $1.t }
-        return hits
-    }
-
     private func earliestIntersection(ropeIndex: Int, from: SIMD2<Float>, to toPoint: SIMD2<Float>) -> IntersectionHit? {
         var best: IntersectionHit?
 
@@ -473,26 +431,6 @@ final class TopologyEngine {
         }
 
         return best
-    }
-
-    private func nearestSegmentIndex(ropeIndex: Int, near point: SIMD2<Float>) -> Int {
-        if ropeIndex < 0 || ropeIndex >= ropes.count { return 0 }
-        let nodes = ropes[ropeIndex].nodes
-        if nodes.count < 2 { return 0 }
-
-        var bestIndex = 0
-        var bestD2: Float = .greatestFiniteMagnitude
-        for segmentIndex in 0..<(nodes.count - 1) {
-            let a = position(of: nodes[segmentIndex])
-            let b = position(of: nodes[segmentIndex + 1])
-            let projected = closestPointOnSegment(point: point, segmentStart: a, segmentEnd: b)
-            let d2 = simd_length_squared(projected - point)
-            if d2 < bestD2 {
-                bestD2 = d2
-                bestIndex = segmentIndex
-            }
-        }
-        return bestIndex
     }
 
     private func buildInitialCrossings() {
@@ -555,14 +493,6 @@ final class TopologyEngine {
 
     private func cross2(_ a: SIMD2<Float>, _ b: SIMD2<Float>) -> Float {
         a.x * b.y - a.y * b.x
-    }
-
-    private func closestPointOnSegment(point: SIMD2<Float>, segmentStart: SIMD2<Float>, segmentEnd: SIMD2<Float>) -> SIMD2<Float> {
-        let segment = segmentEnd - segmentStart
-        let len2 = simd_length_squared(segment)
-        if len2 < 1e-12 { return segmentStart }
-        let t = max(0, min(1, simd_dot(point - segmentStart, segment) / len2))
-        return segmentStart + segment * t
     }
 
     private func closestMidpointBetweenSegments(
