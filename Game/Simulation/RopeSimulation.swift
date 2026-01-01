@@ -136,10 +136,10 @@ final class RopeSimulation {
         let params = RopeSimParams(
             deltaTime: deltaTime,
             gravity: SIMD3<Float>(0, 0, 0),
-            stretchStiffness: 1.0,
-            iterations: 6,
-            particleRadius: 0.045,
-            damping: 0.22
+            stretchStiffness: 0.95,
+            iterations: 8,
+            particleRadius: 0.048,
+            damping: 0.35
         )
         paramsBuf.contents().copyMemory(from: [params], byteCount: MemoryLayout<RopeSimParams>.stride)
 
@@ -292,4 +292,5 @@ final class RopeSimulation {
         }
     }
 }
+
 
