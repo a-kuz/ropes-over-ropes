@@ -46,30 +46,34 @@ extension Renderer {
         return true
     }
 
-    private func segmentsIntersect(a0: SIMD2<Float>, a1: SIMD2<Float>, b0: SIMD2<Float>, b1: SIMD2<Float>) -> Bool {
-        let o1 = orient(a: a0, b: a1, c: b0)
-        let o2 = orient(a: a0, b: a1, c: b1)
-        let o3 = orient(a: b0, b: b1, c: a0)
-        let o4 = orient(a: b0, b: b1, c: a1)
+    private func segmentsIntersect(
+        segmentAStart: SIMD2<Float>,
+        segmentAEnd: SIMD2<Float>,
+        segmentBStart: SIMD2<Float>,
+        segmentBEnd: SIMD2<Float>
+    ) -> Bool {
+        let orient1 = orient(pointA: segmentAStart, pointB: segmentAEnd, pointC: segmentBStart)
+        let orient2 = orient(pointA: segmentAStart, pointB: segmentAEnd, pointC: segmentBEnd)
+        let orient3 = orient(pointA: segmentBStart, pointB: segmentBEnd, pointC: segmentAStart)
+        let orient4 = orient(pointA: segmentBStart, pointB: segmentBEnd, pointC: segmentAEnd)
 
-        if o1 == 0 && onSegment(a: a0, b: a1, p: b0) { return true }
-        if o2 == 0 && onSegment(a: a0, b: a1, p: b1) { return true }
-        if o3 == 0 && onSegment(a: b0, b: b1, p: a0) { return true }
-        if o4 == 0 && onSegment(a: b0, b: b1, p: a1) { return true }
+        if orient1 == 0 && onSegment(start: segmentAStart, end: segmentAEnd, point: segmentBStart) { return true }
+        if orient2 == 0 && onSegment(start: segmentAStart, end: segmentAEnd, point: segmentBEnd) { return true }
+        if orient3 == 0 && onSegment(start: segmentBStart, end: segmentBEnd, point: segmentAStart) { return true }
+        if orient4 == 0 && onSegment(start: segmentBStart, end: segmentBEnd, point: segmentAEnd) { return true }
 
-        return (o1 != o2) && (o3 != o4)
+        return (orient1 != orient2) && (orient3 != orient4)
     }
 
-    private func orient(a: SIMD2<Float>, b: SIMD2<Float>, c: SIMD2<Float>) -> Int {
-        let v = (b.y - a.y) * (c.x - b.x) - (b.x - a.x) * (c.y - b.y)
+    private func orient(pointA: SIMD2<Float>, pointB: SIMD2<Float>, pointC: SIMD2<Float>) -> Int {
+        let value = (pointB.y - pointA.y) * (pointC.x - pointB.x) - (pointB.x - pointA.x) * (pointC.y - pointB.y)
         let eps: Float = 1e-6
-        if abs(v) < eps { return 0 }
-        return v > 0 ? 1 : 2
+        if abs(value) < eps { return 0 }
+        return value > 0 ? 1 : 2
     }
 
-    private func onSegment(a: SIMD2<Float>, b: SIMD2<Float>, p: SIMD2<Float>) -> Bool {
-        min(a.x, b.x) - 1e-6 <= p.x && p.x <= max(a.x, b.x) + 1e-6 &&
-        min(a.y, b.y) - 1e-6 <= p.y && p.y <= max(a.y, b.y) + 1e-6
+    private func onSegment(start: SIMD2<Float>, end: SIMD2<Float>, point: SIMD2<Float>) -> Bool {
+        min(start.x, end.x) - 1e-6 <= point.x && point.x <= max(start.x, end.x) + 1e-6 &&
+        min(start.y, end.y) - 1e-6 <= point.y && point.y <= max(start.y, end.y) + 1e-6
     }
 }
-

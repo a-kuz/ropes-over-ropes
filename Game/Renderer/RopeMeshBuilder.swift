@@ -18,6 +18,8 @@ enum RopeMeshBuilder {
 
         let bandWidth = max(0.0005, width)
         let bandHeight = max(0.0005, height)
+        let profile = beveledProfile(width: bandWidth, height: bandHeight, radiusFactor: 0.22, cornerSegments: 5)
+        let profileCount = profile.positions.count
 
         var totalLen: Float = 0
         for pointIndex in 1..<pointCount {
@@ -26,10 +28,10 @@ enum RopeMeshBuilder {
         totalLen = max(1e-6, totalLen)
 
         var vertices: [RopeVertex] = []
-        vertices.reserveCapacity(pointCount * 8)
+        vertices.reserveCapacity(pointCount * profileCount)
 
         var indices: [UInt32] = []
-        indices.reserveCapacity((pointCount - 1) * 24)
+        indices.reserveCapacity((pointCount - 1) * profileCount * 6)
 
         let up = SIMD3<Float>(0, 0, 1)
 
@@ -90,31 +92,27 @@ enum RopeMeshBuilder {
             }
 
             let uCoord = distanceAlong / totalLen
-            let halfWidth = bandWidth * 0.5
-            let halfHeight = bandHeight * 0.5
-
-            let c00 = position + (-nrm * halfWidth) + (-bin * halfHeight)
-            let c01 = position + (-nrm * halfWidth) + ( bin * halfHeight)
-            let c10 = position + ( nrm * halfWidth) + (-bin * halfHeight)
-            let c11 = position + ( nrm * halfWidth) + ( bin * halfHeight)
-
-            vertices.append(RopeVertex(position: c00, normal: -nrm, color: color, texCoord: SIMD2<Float>(uCoord, 0)))
-            vertices.append(RopeVertex(position: c01, normal: -nrm, color: color, texCoord: SIMD2<Float>(uCoord, 1)))
-            vertices.append(RopeVertex(position: c10, normal: nrm, color: color, texCoord: SIMD2<Float>(uCoord, 0)))
-            vertices.append(RopeVertex(position: c11, normal: nrm, color: color, texCoord: SIMD2<Float>(uCoord, 1)))
-
-            vertices.append(RopeVertex(position: c00, normal: -bin, color: color, texCoord: SIMD2<Float>(uCoord, 0)))
-            vertices.append(RopeVertex(position: c10, normal: -bin, color: color, texCoord: SIMD2<Float>(uCoord, 1)))
-            vertices.append(RopeVertex(position: c01, normal: bin, color: color, texCoord: SIMD2<Float>(uCoord, 0)))
-            vertices.append(RopeVertex(position: c11, normal: bin, color: color, texCoord: SIMD2<Float>(uCoord, 1)))
+            for k in 0..<profileCount {
+                let localPos = profile.positions[k]
+                let localN = profile.normals[k]
+                let worldPos = position + nrm * localPos.x + bin * localPos.y
+                let worldN = simd_normalize(nrm * localN.x + bin * localN.y)
+                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: color, texCoord: SIMD2<Float>(uCoord, profile.v[k])))
+            }
 
             if pointIndex < pointCount - 1 {
-                let baseA = UInt32(pointIndex * 8)
-                let baseB = UInt32((pointIndex + 1) * 8)
-                appendQuad(indices: &indices, a0: baseA + 0, a1: baseA + 1, b0: baseB + 0, b1: baseB + 1)
-                appendQuad(indices: &indices, a0: baseA + 2, a1: baseA + 3, b0: baseB + 2, b1: baseB + 3)
-                appendQuad(indices: &indices, a0: baseA + 4, a1: baseA + 5, b0: baseB + 4, b1: baseB + 5)
-                appendQuad(indices: &indices, a0: baseA + 6, a1: baseA + 7, b0: baseB + 6, b1: baseB + 7)
+                let baseA = UInt32(pointIndex * profileCount)
+                let baseB = UInt32((pointIndex + 1) * profileCount)
+                for k in 0..<profileCount {
+                    let k0 = UInt32(k)
+                    let k1 = UInt32((k + 1) % profileCount)
+                    indices.append(baseA + k0)
+                    indices.append(baseB + k0)
+                    indices.append(baseB + k1)
+                    indices.append(baseA + k0)
+                    indices.append(baseB + k1)
+                    indices.append(baseA + k1)
+                }
             }
 
             tPrev = tangent
@@ -122,15 +120,6 @@ enum RopeMeshBuilder {
         }
 
         return RopeMesh(vertices: vertices, indices: indices)
-    }
-
-    private static func appendQuad(indices: inout [UInt32], a0: UInt32, a1: UInt32, b0: UInt32, b1: UInt32) {
-        indices.append(a0)
-        indices.append(b0)
-        indices.append(b1)
-        indices.append(a0)
-        indices.append(b1)
-        indices.append(a1)
     }
 
     private static func rotate(vector: SIMD3<Float>, axis: SIMD3<Float>, angle: Float) -> SIMD3<Float> {
@@ -156,6 +145,56 @@ enum RopeMeshBuilder {
     private static func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
         let normalized = max(0, min(1, (value - edge0) / (edge1 - edge0)))
         return normalized * normalized * (3 - 2 * normalized)
+    }
+
+    private struct Profile2D {
+        let positions: [SIMD2<Float>]
+        let normals: [SIMD2<Float>]
+        let v: [Float]
+    }
+
+    private static func beveledProfile(width: Float, height: Float, radiusFactor: Float, cornerSegments: Int) -> Profile2D {
+        let halfW = width * 0.5
+        let halfH = height * 0.5
+        let rMax = max(0.0005, min(halfW, halfH))
+        let r = min(rMax * radiusFactor, rMax * 0.92)
+        let seg = max(2, min(12, cornerSegments))
+
+        var pos: [SIMD2<Float>] = []
+        var nrm: [SIMD2<Float>] = []
+        var v: [Float] = []
+
+        pos.reserveCapacity(seg * 4 + 8)
+        nrm.reserveCapacity(seg * 4 + 8)
+        v.reserveCapacity(seg * 4 + 8)
+
+        func addArc(cx: Float, cy: Float, a0: Float, a1: Float) {
+            for i in 0...seg {
+                let t = Float(i) / Float(seg)
+                let a = a0 + (a1 - a0) * t
+                let ca = cos(a)
+                let sa = sin(a)
+                pos.append(SIMD2<Float>(cx + ca * r, cy + sa * r))
+                nrm.append(simd_normalize(SIMD2<Float>(ca, sa)))
+            }
+        }
+
+        addArc(cx: halfW - r, cy: halfH - r, a0: 0, a1: Float.pi * 0.5)
+        addArc(cx: -halfW + r, cy: halfH - r, a0: Float.pi * 0.5, a1: Float.pi)
+        addArc(cx: -halfW + r, cy: -halfH + r, a0: Float.pi, a1: Float.pi * 1.5)
+        addArc(cx: halfW - r, cy: -halfH + r, a0: Float.pi * 1.5, a1: Float.pi * 2.0)
+
+        if pos.count > 1 {
+            pos.removeLast()
+            nrm.removeLast()
+        }
+
+        let count = pos.count
+        for i in 0..<count {
+            v.append(Float(i) / Float(count))
+        }
+
+        return Profile2D(positions: pos, normals: nrm, v: v)
     }
 }
 

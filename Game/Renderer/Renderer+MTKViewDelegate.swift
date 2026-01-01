@@ -44,7 +44,6 @@ extension Renderer {
             return
         }
 
-        let lift: Float = 0.14
         let targetLift = (dragState != nil) ? dragHeight : 0
         dragLiftCurrent += (targetLift - dragLiftCurrent) * min(1, deltaTime * 18)
 
@@ -52,6 +51,8 @@ extension Renderer {
         let ropeCount = min(simulation.ropeCount, topology.ropes.count)
         if ropeCount > 0 {
             for ropeIndex in 0..<ropeCount {
+                let ropeHeight = ropes[safe: ropeIndex]?.height ?? 0.03
+                let lift = max(ropeHeight * 1.35, 0.02)
                 let targets = TopologySampler.sampleRope(
                     engine: topology,
                     ropeIndex: ropeIndex,
@@ -63,9 +64,9 @@ extension Renderer {
             }
         }
 
-        simulation.projectAlpha = 1.0
-        simulation.collisionsEnabled = false
-        simulation.simulationEnabled = false
+        simulation.projectAlpha = 0.65
+        simulation.collisionsEnabled = true
+        simulation.simulationEnabled = true
     }
 
     private func applyDragPinsIfNeeded() {
@@ -251,7 +252,7 @@ extension Renderer {
         let aspect = Float(view.drawableSize.width / max(1, view.drawableSize.height))
         let viewProjection = camera.viewProj(aspect: aspect)
 
-        let lightDir = simd_normalize(SIMD3<Float>(-0.35, 0.25, 0.9))
+        let lightDir = simd_normalize(SIMD3<Float>(-0.92, -0.18, 0.35))
         let halfH = camera.orthoHalfHeight
         let halfW = halfH * aspect
         let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)
@@ -260,10 +261,10 @@ extension Renderer {
         let uniforms = FrameUniforms(
             viewProj: viewProjection,
             lightViewProj: lightViewProj,
-            lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, 2.8),
-            ambientColor: SIMD4<Float>(0.08, 0.09, 0.12, 1),
+            lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, 5.2),
+            ambientColor: SIMD4<Float>(0, 0, 0, 1),
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y, camera.center.z + camera.distance, 1),
-            orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0022, 0),
+            orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)

@@ -45,24 +45,7 @@ extension Renderer {
     }
 
     static func makeTwistEvents(topology: TopologyEngine?, ropeIndex: Int, points: UnsafeBufferPointer<SIMD3<Float>>) -> [RopeMeshBuilder.TwistEvent] {
-        guard let topology else { return [] }
-        if points.count < 2 { return [] }
-
-        var events: [RopeMeshBuilder.TwistEvent] = []
-        events.reserveCapacity(topology.crossings.count)
-
-        for (_, crossing) in topology.crossings {
-            if crossing.ropeOver == ropeIndex { continue }
-            if crossing.ropeA != ropeIndex && crossing.ropeB != ropeIndex { continue }
-
-            let base = Float(crossing.handedness)
-            let sign: Float = (ropeIndex == crossing.ropeA) ? base : -base
-            let angle = (Float.pi * 0.5) * sign
-            let dist = closestDistanceAlong(points: points, toXY: crossing.position)
-            events.append(RopeMeshBuilder.TwistEvent(dist: dist, angle: angle, window: 0.16))
-        }
-
-        return events
+        return []
     }
 
     private static func closestDistanceAlong(points: UnsafeBufferPointer<SIMD3<Float>>, toXY target: SIMD2<Float>) -> Float {
@@ -95,4 +78,3 @@ extension Renderer {
         return bestDistAlong
     }
 }
-

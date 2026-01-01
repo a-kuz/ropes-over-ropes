@@ -175,6 +175,7 @@
 			isa = PBXNativeTarget;
 			buildConfigurationList = 5B6DF971C20E3D1F53136ECD /* Build configuration list for PBXNativeTarget "UzlsFour" */;
 			buildPhases = (
+				A83469D647880321F0264CC6 /* Copy Level Files */,
 				C9BB5D461E695168575167B5 /* Sources */,
 			);
 			buildRules = (
@@ -217,6 +218,27 @@
 			);
 		};
 /* End PBXProject section */
+
+/* Begin PBXShellScriptBuildPhase section */
+		A83469D647880321F0264CC6 /* Copy Level Files */ = {
+			isa = PBXShellScriptBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "Copy Level Files";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "mkdir -p \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/levels\"\ncp \"${SRCROOT}/Resources/levels\"/*.json \"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/levels/\"\n";
+		};
+/* End PBXShellScriptBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
 		C9BB5D461E695168575167B5 /* Sources */ = {
