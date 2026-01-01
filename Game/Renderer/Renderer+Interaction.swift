@@ -2,6 +2,14 @@ import MetalKit
 import simd
 
 extension Renderer {
+    private struct DragCandidate {
+        var ropeIndex: Int
+        var endIndex: Int
+        var holeIndex: Int
+        var score: Float
+    }
+
+    @MainActor
     func handleTouch(phase: UITouch.Phase, location: CGPoint, in view: MTKView) {
         let worldPosition = screenToWorld(location, view: view)
         switch phase {
@@ -18,7 +26,7 @@ extension Renderer {
 
     private func beginDrag(world: SIMD2<Float>) {
         let hitRadius = holeRadius * 1.65
-        var best: (ropeIndex: Int, endIndex: Int, holeIndex: Int, distance: Float)?
+        var best: DragCandidate?
 
         for ropeIndex in ropes.indices {
             let endpoints = ropes[ropeIndex]
@@ -29,28 +37,32 @@ extension Renderer {
 
             let startDistance = simd_length(world - startHolePosition)
             let startTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 0) ?? true
-            if startTopAllowed, startDistance < hitRadius && (best == nil || startDistance < best!.distance) {
-                best = (ropeIndex, 0, startHoleIndex, startDistance)
+            let startScore = startDistance + (startTopAllowed ? 0 : hitRadius * 0.75)
+            if startDistance < hitRadius && (best == nil || startScore < best!.score) {
+                best = DragCandidate(ropeIndex: ropeIndex, endIndex: 0, holeIndex: startHoleIndex, score: startScore)
             }
 
             let endDistance = simd_length(world - endHolePosition)
             let endTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 1) ?? true
-            if endTopAllowed, endDistance < hitRadius && (best == nil || endDistance < best!.distance) {
-                best = (ropeIndex, 1, endHoleIndex, endDistance)
+            let endScore = endDistance + (endTopAllowed ? 0 : hitRadius * 0.75)
+            if endDistance < hitRadius && (best == nil || endScore < best!.score) {
+                best = DragCandidate(ropeIndex: ropeIndex, endIndex: 1, holeIndex: endHoleIndex, score: endScore)
             }
         }
 
         if let best {
-            dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex)
             guard let initial = holePositions[safe: best.holeIndex],
                   holeOccupied.indices.contains(best.holeIndex) else {
                 dragState = nil
                 return
             }
             dragWorld = initial
+            dragStartWorld = initial
             lastDragWorld = dragWorld
             holeOccupied[best.holeIndex] = false
+            let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], crossings: [:], nextCrossingId: 1, floatingPositions: [:])
             topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorld)
+            dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex, topologySnapshot: snapshot)
         }
     }
 
@@ -58,8 +70,6 @@ extension Renderer {
         guard dragState != nil else { return }
         if let state = dragState {
             topology?.setFloating(ropeIndex: state.ropeIndex, position: world)
-            topology?.processDragSegment(ropeIndex: state.ropeIndex, from: lastDragWorld, to: world)
-            lastDragWorld = world
         }
         dragWorld = world
     }
@@ -94,10 +104,19 @@ extension Renderer {
             if holeOccupied.indices.contains(snappedHoleIndex) {
                 holeOccupied[snappedHoleIndex] = true
             }
+            if let fromPos = holePositions[safe: dragState.originalHoleIndex],
+               let toPos = holePositions[safe: snappedHoleIndex] {
+                topology?.restore(dragState.topologySnapshot)
+                topology?.applyCanonicalMove(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, from: fromPos, to: toPos)
+            }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: snappedHoleIndex)
         } else {
             if holeOccupied.indices.contains(dragState.originalHoleIndex) {
                 holeOccupied[dragState.originalHoleIndex] = true
+            }
+            if let fromPos = holePositions[safe: dragState.originalHoleIndex] {
+                topology?.restore(dragState.topologySnapshot)
+                topology?.applyCanonicalMove(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, from: fromPos, to: fromPos)
             }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: dragState.originalHoleIndex)
         }
@@ -120,6 +139,7 @@ extension Renderer {
         removeUntangledRopes()
     }
 
+    @MainActor
     private func screenToWorld(_ location: CGPoint, view: MTKView) -> SIMD2<Float> {
         let width = max(1.0, Float(view.bounds.size.width))
         let height = max(1.0, Float(view.bounds.size.height))

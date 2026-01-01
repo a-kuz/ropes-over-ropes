@@ -12,7 +12,14 @@ targets:
       - path: Game
       - path: Shaders
     resources:
-      - path: Resources
+      - path: Resources/levels/level_001.json
+      - path: Resources/levels/level_002.json
+      - path: Resources/levels/level_003.json
+    preBuildScripts:
+      - name: Copy Level Files
+        script: |
+          mkdir -p "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/levels"
+          cp "${SRCROOT}/Resources/levels"/*.json "${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/levels/"
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.uzls.four
