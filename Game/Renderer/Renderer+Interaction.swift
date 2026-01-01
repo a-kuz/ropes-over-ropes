@@ -60,8 +60,8 @@ extension Renderer {
             dragStartWorld = initial
             lastDragWorld = dragWorld
             holeOccupied[best.holeIndex] = false
-            let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], crossings: [:], nextCrossingId: 1, floatingPositions: [:])
             topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorld)
+            let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], crossings: [:], nextCrossingId: 1, floatingPositions: [:])
             dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex, topologySnapshot: snapshot)
         }
     }
@@ -95,6 +95,23 @@ extension Renderer {
             }
         }
 
+        let snappedHoleIndex = bestIndex ?? dragState.originalHoleIndex
+        
+        topology?.restore(dragState.topologySnapshot)
+        
+        guard let fromPos = holePositions[safe: dragState.originalHoleIndex],
+              let toPos = holePositions[safe: snappedHoleIndex] else {
+            self.dragState = nil
+            return
+        }
+        
+        topology?.processCanonicalMove(
+            ropeIndex: dragState.ropeIndex,
+            endIndex: dragState.endIndex,
+            from: fromPos,
+            to: toPos
+        )
+
         if let snappedHoleIndex = bestIndex {
             if dragState.endIndex == 0 {
                 ropes[dragState.ropeIndex].startHole = snappedHoleIndex
@@ -104,19 +121,10 @@ extension Renderer {
             if holeOccupied.indices.contains(snappedHoleIndex) {
                 holeOccupied[snappedHoleIndex] = true
             }
-            if let fromPos = holePositions[safe: dragState.originalHoleIndex],
-               let toPos = holePositions[safe: snappedHoleIndex] {
-                topology?.restore(dragState.topologySnapshot)
-                topology?.applyCanonicalMove(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, from: fromPos, to: toPos)
-            }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: snappedHoleIndex)
         } else {
             if holeOccupied.indices.contains(dragState.originalHoleIndex) {
                 holeOccupied[dragState.originalHoleIndex] = true
-            }
-            if let fromPos = holePositions[safe: dragState.originalHoleIndex] {
-                topology?.restore(dragState.topologySnapshot)
-                topology?.applyCanonicalMove(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, from: fromPos, to: fromPos)
             }
             topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: dragState.originalHoleIndex)
         }

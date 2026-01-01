@@ -110,28 +110,32 @@ enum TopologySampler {
         let dir = normalize2(nextXY - prevXY)
         if simd_length_squared(dir) < 1e-8 { return nil }
 
-        let window: Float = 0.11
+        let window: Float = 0.18
         let entryXY = currXY - dir * window
         let exitXY = currXY + dir * window
 
         let isOver = crossing.ropeOver == ropeIndex
 
         if isOver {
-            let z1 = lift * 0.30
-            let z2 = lift
-            let z3 = lift * 0.30
+            let z1 = lift * 0.35
+            let z2 = lift * 0.95
+            let z3 = lift * 0.35
+            return [
+                SIMD3<Float>(entryXY.x, entryXY.y, z1),
+                SIMD3<Float>(currXY.x, currXY.y, z2),
+                SIMD3<Float>(exitXY.x, exitXY.y, z3)
+            ]
+        } else {
+            let dipAmount: Float = -lift * 0.15
+            let z1 = dipAmount * 0.5
+            let z2 = dipAmount
+            let z3 = dipAmount * 0.5
             return [
                 SIMD3<Float>(entryXY.x, entryXY.y, z1),
                 SIMD3<Float>(currXY.x, currXY.y, z2),
                 SIMD3<Float>(exitXY.x, exitXY.y, z3)
             ]
         }
-        let z = max(0, lift * 0.06)
-        return [
-            SIMD3<Float>(entryXY.x, entryXY.y, z),
-            SIMD3<Float>(currXY.x, currXY.y, 0),
-            SIMD3<Float>(exitXY.x, exitXY.y, z)
-        ]
     }
 
     private static func isLoopPair(engine: TopologyEngine, crossingA: TopologyCrossing, crossingB: TopologyCrossing, ropeIndex: Int) -> Bool {
