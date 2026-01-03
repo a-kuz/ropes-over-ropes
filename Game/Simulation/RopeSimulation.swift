@@ -52,7 +52,7 @@ final class RopeSimulation {
     var collisionsEnabled: Bool = false
     var simulationEnabled: Bool = true
 
-    init(device: MTLDevice, ropeCount: Int = 1, particlesPerRope: Int = 64) {
+    init(device: MTLDevice, ropeCount: Int = 1, particlesPerRope: Int = 6400) {
         self.device = device
         guard let commandQueue = device.makeCommandQueue() else {
             fatalError("Failed to create MTLCommandQueue")

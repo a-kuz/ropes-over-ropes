@@ -141,12 +141,28 @@ final class TopologyEngine {
                let existingCrossing = crossings[existing] {
                 
                 if existingCrossing.ropeOver == ropeIndex {
-                    Self.logger.info("  ❌ UNDO crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was over, undoing")
-                    removeCrossing(crossingId: existing)
+                    let distanceToExisting = simd_length(hit.point - existingCrossing.position)
+                    let threshold: Float = 0.15
+                    
+                    if distanceToExisting < threshold {
+                        Self.logger.info("  ❌ UNDO crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was over, undoing")
+                        removeCrossing(crossingId: existing)
+                    } else {
+                        Self.logger.info("  ❌ UNDO crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was over, far away, undoing")
+                        removeCrossing(crossingId: existing)
+                    }
+                    continue
                 } else {
-                    Self.logger.info("  ⏭️ SKIP crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was under, no loop")
+                    let distanceToExisting = simd_length(hit.point - existingCrossing.position)
+                    let threshold: Float = 0.15
+                    
+                    if distanceToExisting < threshold {
+                        Self.logger.info("  ⏭️ SKIP crossing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - moving rope was under, too close")
+                        continue
+                    } else {
+                        Self.logger.info("  🔄 CREATE NEW crossing near existing[\(existing)] at (\(hit.point.x), \(hit.point.y)) - distance=\(distanceToExisting), loop")
+                    }
                 }
-                continue
             }
 
             let low = min(ropeIndex, hit.otherRopeIndex)
@@ -154,6 +170,20 @@ final class TopologyEngine {
 
             let crossingId = nextCrossingId
             nextCrossingId += 1
+            
+            var existingCount = 0
+            for (_, existing) in crossings {
+                if existing.ropeA == low && existing.ropeB == high {
+                    existingCount += 1
+                }
+            }
+            
+            let ropeOver: Int
+            if existingCount % 2 == 0 {
+                ropeOver = hit.otherRopeIndex
+            } else {
+                ropeOver = ropeIndex
+            }
             
             let aDir = normalize2(to - from)
             let otherNodes = ropes[hit.otherRopeIndex].nodes
@@ -167,7 +197,7 @@ final class TopologyEngine {
                 ropeA: low,
                 ropeB: high,
                 position: hit.point,
-                ropeOver: ropeIndex,
+                ropeOver: ropeOver,
                 handedness: handedness
             )
             crossings[crossingId] = crossing
@@ -211,7 +241,7 @@ final class TopologyEngine {
             return
         }
 
-        var toRemove: [Int] = []
+        let toRemove: [Int] = []
         for (crossingId, crossing) in crossings {
             let aIndex = crossing.ropeA
             let bIndex = crossing.ropeB

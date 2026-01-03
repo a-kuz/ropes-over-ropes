@@ -58,7 +58,11 @@ extension Renderer {
                     ropeIndex: ropeIndex,
                     count: simulation.particlesPerRope,
                     lift: lift,
-                    dragLift: dragLift
+                    dragLift: dragLift,
+                    ropeWidth: ropes[safe: ropeIndex]?.width ?? 0.085,
+                    ropeWidthForIndex: { idx in
+                        return ropes[safe: idx]?.width ?? 0.085
+                    }
                 )
                 simulation.updateTargets(ropeIndex: ropeIndex, positions: targets)
             }
