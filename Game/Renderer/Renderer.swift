@@ -158,7 +158,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         Self.logger.info("Final rope count: \(validatedRopes.count) (from \(candidateRopes.count) candidate ropes)")
-        let particlesPerRope = max(8, level?.particlesPerRope ?? 64)
+        let particlesPerRope = max(8, level?.particlesPerRope ?? 6400)
 
         self.simulation = RopeSimulation(device: device, ropeCount: max(1, validatedRopes.count), particlesPerRope: particlesPerRope)
 

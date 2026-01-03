@@ -1,64 +1,154 @@
 import simd
 
 enum TopologySampler {
-    static func sampleRope(engine: TopologyEngine, ropeIndex: Int, count: Int, lift: Float, dragLift: Float) -> [SIMD3<Float>] {
-        let rope = engine.ropes[ropeIndex]
-        if !rope.active { return Array(repeating: SIMD3<Float>(0, 0, 0), count: count) }
-
-        let nodes = rope.nodes
-        if nodes.count < 2 { return Array(repeating: SIMD3<Float>(0, 0, 0), count: count) }
-
-        var poly: [SIMD3<Float>] = []
-        poly.reserveCapacity(nodes.count * 3)
-
-        var nodeIndex = 0
-        while nodeIndex < nodes.count {
-            let node = nodes[nodeIndex]
-
-            if case .crossing(let crossingIdA) = node,
-               nodeIndex + 1 < nodes.count,
-               case .crossing(let crossingIdB) = nodes[nodeIndex + 1],
-               let crossingA = engine.crossings[crossingIdA],
-               let crossingB = engine.crossings[crossingIdB],
-               isLoopPair(engine: engine, crossingA: crossingA, crossingB: crossingB, ropeIndex: ropeIndex) {
-
-                let pointA = crossingA.position
-                let pointB = crossingB.position
-                let span = pointB - pointA
-                let spanLen2 = simd_length_squared(span)
-                if spanLen2 > 1e-10 {
-                    let direction = span / sqrt(spanLen2)
-                    let normal = SIMD2<Float>(-direction.y, direction.x)
-                    let sign = loopSideSign(crossing: crossingA, ropeIndex: ropeIndex)
-                    let bulge = loopBulge(spanLength: sqrt(spanLen2))
-
-                    let startZ = baseZ(engine: engine, ropeIndex: ropeIndex, node: .crossing(crossingIdA), lift: lift, dragLift: dragLift)
-                    let endZ = baseZ(engine: engine, ropeIndex: ropeIndex, node: .crossing(crossingIdB), lift: lift, dragLift: dragLift)
-
-                    poly.append(SIMD3<Float>(pointA.x, pointA.y, startZ))
-
-                    let arcPointCount = 7
-                    for arcIndex in 1..<(arcPointCount - 1) {
-                        let tValue = Float(arcIndex) / Float(arcPointCount - 1)
-                        let along = pointA + span * tValue
-                        let sValue = sin(tValue * Float.pi)
-                        let offset = normal * (bulge * sign * sValue)
-                        let pValue = along + offset
-                        let zValue = startZ + (endZ - startZ) * tValue
-                        poly.append(SIMD3<Float>(pValue.x, pValue.y, zValue))
-                    }
-
-                    poly.append(SIMD3<Float>(pointB.x, pointB.y, endZ))
-
-                    nodeIndex += 2
-                    continue
+    static func sampleRope(engine: TopologyEngine, ropeIndex: Int, count: Int, lift: Float, dragLift: Float, ropeWidth: Float, ropeWidthForIndex: (Int) -> Float) -> [SIMD3<Float>] {
+        let poly = buildPoly(engine: engine, ropeIndex: ropeIndex, lift: lift, dragLift: dragLift, ropeWidth: ropeWidth, ropeWidthForIndex: ropeWidthForIndex)
+        return resample(poly: poly, count: count)
+    }
+    
+    static func sampleRopeRender(engine: TopologyEngine, ropeIndex: Int, lift: Float, dragLift: Float, ropeWidth: Float, ropeWidthForIndex: (Int) -> Float) -> [SIMD3<Float>] {
+        return buildPoly(engine: engine, ropeIndex: ropeIndex, lift: lift, dragLift: dragLift, ropeWidth: ropeWidth, ropeWidthForIndex: ropeWidthForIndex)
+    }
+    
+    static func hookCenters(engine: TopologyEngine) -> [SIMD2<Float>] {
+        var centers: [SIMD2<Float>] = []
+        var processed = Set<Int>()
+        
+        for ropeIndex in engine.ropes.indices {
+            let rope = engine.ropes[ropeIndex]
+            if !rope.active { continue }
+            let nodes = rope.nodes
+            
+            for i in 0..<nodes.count {
+                guard case .crossing(let idA) = nodes[i],
+                      let crossingA = engine.crossings[idA],
+                      !processed.contains(idA) else { continue }
+                
+                for j in (i + 1)..<nodes.count {
+                    guard case .crossing(let idB) = nodes[j],
+                          let crossingB = engine.crossings[idB],
+                          !processed.contains(idB),
+                          isHookPair(crossingA: crossingA, crossingB: crossingB, ropeIndex: ropeIndex) else { continue }
+                    
+                    let prevPos = (i > 0) ? engine.position(of: nodes[i - 1]) : .zero
+                    let nextPos = (j + 1 < nodes.count) ? engine.position(of: nodes[j + 1]) : .zero
+                    
+                    let otherRopeIndex = (ropeIndex == crossingA.ropeA) ? crossingA.ropeB : crossingA.ropeA
+                    let otherPrevNext = otherRopeNeighbors(engine: engine, ropeIndex: otherRopeIndex, crossingA: crossingA, crossingB: crossingB)
+                    
+                    let center = (prevPos + nextPos + otherPrevNext.0 + otherPrevNext.1) * 0.25
+                    
+                    centers.append(center)
+                    processed.insert(idA)
+                    processed.insert(idB)
+                    break
                 }
             }
+        }
+        return centers
+    }
+    
+    private static func buildPoly(engine: TopologyEngine, ropeIndex: Int, lift: Float, dragLift: Float, ropeWidth: Float, ropeWidthForIndex: (Int) -> Float) -> [SIMD3<Float>] {
+        let rope = engine.ropes[ropeIndex]
+        if !rope.active { return [] }
 
-            if case .crossing(let crossingId) = node,
-               let shaped = shapeCrossing(engine: engine, ropeIndex: ropeIndex, nodeIndex: nodeIndex, crossingId: crossingId, lift: lift, dragLift: dragLift) {
-                poly.append(contentsOf: shaped)
+        let nodes = rope.nodes
+        if nodes.count < 2 { return [] }
+
+        var poly: [SIMD3<Float>] = []
+        poly.reserveCapacity(nodes.count * 16)
+
+        var hookPairs: [(indexA: Int, indexB: Int, crossingA: TopologyCrossing, crossingB: TopologyCrossing)] = []
+        
+        for i in 0..<nodes.count {
+            guard case .crossing(let crossingIdA) = nodes[i],
+                  let crossingA = engine.crossings[crossingIdA] else { continue }
+            
+            for j in (i + 1)..<nodes.count {
+                guard case .crossing(let crossingIdB) = nodes[j],
+                      let crossingB = engine.crossings[crossingIdB],
+                      isHookPair(crossingA: crossingA, crossingB: crossingB, ropeIndex: ropeIndex) else { continue }
+                
+                hookPairs.append((indexA: i, indexB: j, crossingA: crossingA, crossingB: crossingB))
+                break
+            }
+        }
+        
+        var processedNodeIndices = Set<Int>()
+        
+        var nodeIndex = 0
+        while nodeIndex < nodes.count {
+            if processedNodeIndices.contains(nodeIndex) {
                 nodeIndex += 1
+                continue
+            }
+            
+            let node = nodes[nodeIndex]
+            
+            if case .crossing = node,
+               let hookPair = hookPairs.first(where: { $0.indexA == nodeIndex || $0.indexB == nodeIndex }) {
+                
+                let crossingA = hookPair.crossingA
+                let indexA = hookPair.indexA
+                let indexB = hookPair.indexB
+                
+                let otherRopeIndex = (ropeIndex == crossingA.ropeA) ? crossingA.ropeB : crossingA.ropeA
+                let otherWidth = ropeWidthForIndex(otherRopeIndex)
+                let hookRadius = (ropeWidth + otherWidth) * 0.5
+                
+                let prevPos = (indexA > 0) ? engine.position(of: nodes[indexA - 1]) : .zero
+                let nextPos = (indexB + 1 < nodes.count) ? engine.position(of: nodes[indexB + 1]) : .zero
+                
+                let otherPrevNext = otherRopeNeighbors(engine: engine, ropeIndex: otherRopeIndex, crossingA: crossingA, crossingB: hookPair.crossingB)
+                
+                let hookCenter = (prevPos + nextPos + otherPrevNext.0 + otherPrevNext.1) * 0.25
+                
+                let aIsUnder = crossingA.ropeOver != ropeIndex
+                
+                let overZ: Float = lift
+                let underZ: Float = -lift * 0.25
+                
+                let lineDir = simd_normalize(nextPos - prevPos)
+                let toCenter = hookCenter - prevPos
+                let perpDist = toCenter.x * (-lineDir.y) + toCenter.y * lineDir.x
+                let farSide: Float = perpDist >= 0 ? 1 : -1
+                let farDir = SIMD2<Float>(-lineDir.y, lineDir.x) * farSide
+                
+                let touch1 = tangentPointOnSide(from: prevPos, center: hookCenter, radius: hookRadius, sideDir: farDir)
+                let touch2 = tangentPointOnSide(from: nextPos, center: hookCenter, radius: hookRadius, sideDir: farDir)
+                
+                let angle1 = atan2(touch1.y - hookCenter.y, touch1.x - hookCenter.x)
+                let angle2 = atan2(touch2.y - hookCenter.y, touch2.x - hookCenter.x)
+                
+                var angleDiff = angle2 - angle1
+                if angleDiff > Float.pi { angleDiff -= 2 * Float.pi }
+                if angleDiff < -Float.pi { angleDiff += 2 * Float.pi }
+                
+                poly.append(SIMD3<Float>(touch1.x, touch1.y, aIsUnder ? underZ : overZ))
+                
+                let arcSteps = max(4, Int(abs(angleDiff) * hookRadius / 0.01))
+                for step in 1..<arcSteps {
+                    let t = Float(step) / Float(arcSteps)
+                    let angle = angle1 + angleDiff * t
+                    let arcX = hookCenter.x + cos(angle) * hookRadius
+                    let arcY = hookCenter.y + sin(angle) * hookRadius
+                    
+                    let arcZ: Float
+                    if aIsUnder {
+                        arcZ = underZ + (overZ - underZ) * t
+                    } else {
+                        arcZ = overZ + (underZ - overZ) * t
+                    }
+                    poly.append(SIMD3<Float>(arcX, arcY, arcZ))
+                }
+                
+                poly.append(SIMD3<Float>(touch2.x, touch2.y, aIsUnder ? overZ : underZ))
+
+                for idx in indexA...indexB {
+                    processedNodeIndices.insert(idx)
+                }
+
+                nodeIndex = indexB + 1
                 continue
             }
 
@@ -67,110 +157,142 @@ enum TopologySampler {
             poly.append(SIMD3<Float>(positionXY.x, positionXY.y, positionZ))
             nodeIndex += 1
         }
-
-        let lengths = cumulativeLengths(poly: poly)
-        let total = lengths.last ?? 0
-        if total <= 1e-6 { return Array(repeating: poly.first ?? .zero, count: count) }
-
-        var out: [SIMD3<Float>] = []
-        out.reserveCapacity(count)
-
-        for sampleIndex in 0..<count {
-            let tValue = Float(sampleIndex) / Float(max(1, count - 1))
-            let distance = total * tValue
-            out.append(sample(poly: poly, cum: lengths, dist: distance))
-        }
-
-        return out
+        return poly
     }
 
     private static func baseZ(engine: TopologyEngine, ropeIndex: Int, node: TopologyNode, lift: Float, dragLift: Float) -> Float {
         switch node {
         case .floating:
             return dragLift
-        case .crossing(let crossingId):
-            if let crossing = engine.crossings[crossingId], crossing.ropeOver == ropeIndex {
-                return lift
-            }
+        case .crossing:
             return 0
         default:
             return 0
         }
     }
 
-    private static func shapeCrossing(engine: TopologyEngine, ropeIndex: Int, nodeIndex: Int, crossingId: Int, lift: Float, dragLift: Float) -> [SIMD3<Float>]? {
-        let nodes = engine.ropes[ropeIndex].nodes
-        if nodeIndex == 0 || nodeIndex >= nodes.count - 1 { return nil }
-        guard let crossing = engine.crossings[crossingId] else { return nil }
-
-        let prevXY = engine.position(of: nodes[nodeIndex - 1])
-        let currXY = engine.position(of: nodes[nodeIndex])
-        let nextXY = engine.position(of: nodes[nodeIndex + 1])
-
-        let dir = normalize2(nextXY - prevXY)
-        if simd_length_squared(dir) < 1e-8 { return nil }
-
-        let window: Float = 0.18
-        let entryXY = currXY - dir * window
-        let exitXY = currXY + dir * window
-
-        let isOver = crossing.ropeOver == ropeIndex
-
-        if isOver {
-            let z1 = lift * 0.35
-            let z2 = lift * 0.95
-            let z3 = lift * 0.35
-            return [
-                SIMD3<Float>(entryXY.x, entryXY.y, z1),
-                SIMD3<Float>(currXY.x, currXY.y, z2),
-                SIMD3<Float>(exitXY.x, exitXY.y, z3)
-            ]
-        } else {
-            let dipAmount: Float = -lift * 0.15
-            let z1 = dipAmount * 0.5
-            let z2 = dipAmount
-            let z3 = dipAmount * 0.5
-            return [
-                SIMD3<Float>(entryXY.x, entryXY.y, z1),
-                SIMD3<Float>(currXY.x, currXY.y, z2),
-                SIMD3<Float>(exitXY.x, exitXY.y, z3)
-            ]
-        }
-    }
-
-    private static func isLoopPair(engine: TopologyEngine, crossingA: TopologyCrossing, crossingB: TopologyCrossing, ropeIndex: Int) -> Bool {
+    private static func isHookPair(crossingA: TopologyCrossing, crossingB: TopologyCrossing, ropeIndex: Int) -> Bool {
         if crossingA.id == crossingB.id { return false }
-        if crossingA.ropeA != ropeIndex && crossingA.ropeB != ropeIndex { return false }
-        if crossingB.ropeA != ropeIndex && crossingB.ropeB != ropeIndex { return false }
         if crossingA.ropeA != crossingB.ropeA || crossingA.ropeB != crossingB.ropeB { return false }
-
-        var count = 0
-        for (_, crossing) in engine.crossings {
-            if crossing.ropeA == crossingA.ropeA && crossing.ropeB == crossingA.ropeB {
-                count += 1
-                if count >= 2 { return true }
+        if crossingA.ropeA != ropeIndex && crossingA.ropeB != ropeIndex { return false }
+        
+        let aIsOver = crossingA.ropeOver == ropeIndex
+        let bIsOver = crossingB.ropeOver == ropeIndex
+        return aIsOver != bIsOver
+    }
+    
+    private static func otherRopeNeighbors(engine: TopologyEngine, ropeIndex: Int, crossingA: TopologyCrossing, crossingB: TopologyCrossing) -> (SIMD2<Float>, SIMD2<Float>) {
+        guard engine.ropes.indices.contains(ropeIndex) else {
+            return (.zero, .zero)
+        }
+        let otherNodes = engine.ropes[ropeIndex].nodes
+        if otherNodes.count < 2 {
+            return (.zero, .zero)
+        }
+        
+        var firstCrossingIdx: Int?
+        var lastCrossingIdx: Int?
+        
+        for (idx, node) in otherNodes.enumerated() {
+            if case .crossing(let id) = node {
+                if id == crossingA.id || id == crossingB.id {
+                    if firstCrossingIdx == nil {
+                        firstCrossingIdx = idx
+                    }
+                    lastCrossingIdx = idx
+                }
             }
         }
-        return false
+        
+        guard let firstIdx = firstCrossingIdx, let lastIdx = lastCrossingIdx else {
+            let first = engine.position(of: otherNodes.first!)
+            let last = engine.position(of: otherNodes.last!)
+            return (first, last)
+        }
+        
+        let prevIdx = max(0, firstIdx - 1)
+        let nextIdx = min(otherNodes.count - 1, lastIdx + 1)
+        
+        let prev = engine.position(of: otherNodes[prevIdx])
+        let next = engine.position(of: otherNodes[nextIdx])
+        return (prev, next)
     }
-
-    private static func loopSideSign(crossing: TopologyCrossing, ropeIndex: Int) -> Float {
-        let base = Float(crossing.handedness)
-        return (ropeIndex == crossing.ropeA) ? base : -base
+    
+    private static func tangentPointOnSide(from point: SIMD2<Float>, center: SIMD2<Float>, radius: Float, sideDir: SIMD2<Float>) -> SIMD2<Float> {
+        let d = center - point
+        let dist = simd_length(d)
+        
+        if dist <= radius {
+            return center + simd_normalize(sideDir) * radius
+        }
+        
+        let theta = acos(radius / dist)
+        let baseAngle = atan2(d.y, d.x)
+        
+        let tangentAnglePlus = baseAngle + theta
+        let tangentAngleMinus = baseAngle - theta
+        
+        let touchPlus = center - SIMD2<Float>(cos(tangentAnglePlus), sin(tangentAnglePlus)) * radius
+        let touchMinus = center - SIMD2<Float>(cos(tangentAngleMinus), sin(tangentAngleMinus)) * radius
+        
+        let dotPlus = simd_dot(touchPlus - center, sideDir)
+        let dotMinus = simd_dot(touchMinus - center, sideDir)
+        
+        return dotPlus > dotMinus ? touchPlus : touchMinus
     }
-
-    private static func loopBulge(spanLength: Float) -> Float {
-        let scaled = spanLength * 0.35
-        return max(0.08, min(0.22, scaled))
+    
+    private static func optimalHookPoint(
+        ropeSegmentStart: SIMD2<Float>,
+        ropeSegmentEnd: SIMD2<Float>,
+        hookFrom: SIMD2<Float>,
+        hookTo: SIMD2<Float>
+    ) -> SIMD2<Float> {
+        let segDir = ropeSegmentEnd - ropeSegmentStart
+        let segLen2 = simd_length_squared(segDir)
+        
+        if segLen2 < 1e-8 {
+            return ropeSegmentStart
+        }
+        
+        let segLen = sqrt(segLen2)
+        let segNorm = segDir / segLen
+        let segPerp = SIMD2<Float>(-segNorm.y, segNorm.x)
+        
+        let toHookTo = hookTo - ropeSegmentStart
+        let perpDist = simd_dot(toHookTo, segPerp)
+        let hookToReflected = hookTo - 2 * perpDist * segPerp
+        
+        let rayDir = hookToReflected - hookFrom
+        let rayDirLen2 = simd_length_squared(rayDir)
+        
+        if rayDirLen2 < 1e-8 {
+            let t = simd_dot(hookFrom - ropeSegmentStart, segDir) / segLen2
+            let tClamped = max(0, min(1, t))
+            return ropeSegmentStart + segDir * tClamped
+        }
+        
+        let cross = rayDir.x * segDir.y - rayDir.y * segDir.x
+        
+        if abs(cross) < 1e-8 {
+            let t = simd_dot(hookFrom - ropeSegmentStart, segDir) / segLen2
+            let tClamped = max(0, min(1, t))
+            return ropeSegmentStart + segDir * tClamped
+        }
+        
+        let d = ropeSegmentStart - hookFrom
+        let u = (d.x * rayDir.y - d.y * rayDir.x) / cross
+        
+        let uClamped = max(0, min(1, u))
+        return ropeSegmentStart + segDir * uClamped
     }
-
-    private static func normalize2(_ vector: SIMD2<Float>) -> SIMD2<Float> {
-        let lengthSquared = simd_length_squared(vector)
-        if lengthSquared < 1e-12 { return .zero }
-        return vector / sqrt(lengthSquared)
+    
+    private static func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
+        let normalized = max(0, min(1, (value - edge0) / (edge1 - edge0)))
+        return normalized * normalized * (3 - 2 * normalized)
     }
 
     private static func cumulativeLengths(poly: [SIMD3<Float>]) -> [Float] {
+        if poly.count < 2 { return [0] }
         var cum: [Float] = [0]
         cum.reserveCapacity(poly.count)
         for pointIndex in 1..<poly.count {
@@ -182,6 +304,7 @@ enum TopologySampler {
     }
 
     private static func sample(poly: [SIMD3<Float>], cum: [Float], dist: Float) -> SIMD3<Float> {
+        if poly.count <= 1 { return poly.first ?? .zero }
         var lowerIndex = 0
         var upperIndex = cum.count - 1
         while lowerIndex + 1 < upperIndex {
@@ -200,5 +323,25 @@ enum TopologySampler {
         let segmentSpan = max(1e-6, endDist - startDist)
         let tValue = (dist - startDist) / segmentSpan
         return pointA + (pointB - pointA) * tValue
+    }
+
+    private static func resample(poly: [SIMD3<Float>], count: Int) -> [SIMD3<Float>] {
+        let safeCount = max(0, count)
+        if safeCount == 0 { return [] }
+        if poly.isEmpty { return Array(repeating: .zero, count: safeCount) }
+        if poly.count == 1 { return Array(repeating: poly[0], count: safeCount) }
+
+        let lengths = cumulativeLengths(poly: poly)
+        let total = lengths.last ?? 0
+        if total <= 1e-6 { return Array(repeating: poly[0], count: safeCount) }
+
+        var out: [SIMD3<Float>] = []
+        out.reserveCapacity(safeCount)
+        for sampleIndex in 0..<safeCount {
+            let tValue = Float(sampleIndex) / Float(max(1, safeCount - 1))
+            let distance = total * tValue
+            out.append(sample(poly: poly, cum: lengths, dist: distance))
+        }
+        return out
     }
 }
