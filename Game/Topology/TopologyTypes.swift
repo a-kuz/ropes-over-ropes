@@ -21,3 +21,12 @@ struct TopologyRope {
     var active: Bool
 }
 
+struct HookPair {
+    let crossingIdA: Int
+    let crossingIdB: Int
+    let ropeA: Int
+    let ropeB: Int
+    let ropeAUpperEnd: Int
+    let ropeBUpperEnd: Int
+}
+

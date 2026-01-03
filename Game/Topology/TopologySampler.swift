@@ -94,7 +94,7 @@ enum TopologySampler {
                 
                 let otherRopeIndex = (ropeIndex == crossingA.ropeA) ? crossingA.ropeB : crossingA.ropeA
                 let otherWidth = ropeWidthForIndex(otherRopeIndex)
-                let hookRadius = (ropeWidth + otherWidth) * 0.5
+                let hookRadius = otherWidth * 0.5
                 
                 let prevPos = (indexA > 0) ? engine.position(of: nodes[indexA - 1]) : .zero
                 let nextPos = (indexB + 1 < nodes.count) ? engine.position(of: nodes[indexB + 1]) : .zero
@@ -109,8 +109,9 @@ enum TopologySampler {
                 let underZ: Float = -lift * 0.25
                 
                 let lineDir = simd_normalize(nextPos - prevPos)
-                let toCenter = hookCenter - prevPos
-                let perpDist = toCenter.x * (-lineDir.y) + toCenter.y * lineDir.x
+                let otherMid = (otherPrevNext.0 + otherPrevNext.1) * 0.5
+                let toOther = otherMid - prevPos
+                let perpDist = toOther.x * (-lineDir.y) + toOther.y * lineDir.x
                 let farSide: Float = perpDist >= 0 ? 1 : -1
                 let farDir = SIMD2<Float>(-lineDir.y, lineDir.x) * farSide
                 
@@ -143,6 +144,7 @@ enum TopologySampler {
                 }
                 
                 poly.append(SIMD3<Float>(touch2.x, touch2.y, aIsUnder ? overZ : underZ))
+                poly.append(SIMD3<Float>(touch2.x, touch2.y, aIsUnder ? overZ : underZ))
 
                 for idx in indexA...indexB {
                     processedNodeIndices.insert(idx)
@@ -152,6 +154,61 @@ enum TopologySampler {
                 continue
             }
 
+            if case .crossing(let crossingId) = node,
+               let crossing = engine.crossings[crossingId] {
+                let isOver = crossing.ropeOver == ropeIndex
+                let otherRopeIndex = (ropeIndex == crossing.ropeA) ? crossing.ropeB : crossing.ropeA
+                let otherWidth = ropeWidthForIndex(otherRopeIndex)
+                
+                let bumpHeight: Float = isOver ? (lift + otherWidth * 0.3) : (-lift * 0.15)
+                let bumpRadius = max(ropeWidth, otherWidth) * 1.5
+                
+                var prevIdx = nodeIndex - 1
+                while prevIdx >= 0 {
+                    let n = nodes[prevIdx]
+                    if case .hole = n { break }
+                    if case .floating = n { break }
+                    prevIdx -= 1
+                }
+                let prevAnchor = prevIdx >= 0 ? engine.position(of: nodes[prevIdx]) : crossing.position
+                
+                var nextIdx = nodeIndex + 1
+                while nextIdx < nodes.count {
+                    let n = nodes[nextIdx]
+                    if case .hole = n { break }
+                    if case .floating = n { break }
+                    nextIdx += 1
+                }
+                let nextAnchor = nextIdx < nodes.count ? engine.position(of: nodes[nextIdx]) : crossing.position
+                
+                let line = nextAnchor - prevAnchor
+                let lineLen = simd_length(line)
+                let lineDir = lineLen > 1e-6 ? line / lineLen : SIMD2<Float>(1, 0)
+                
+                let t = lineLen > 1e-6 ? simd_dot(crossing.position - prevAnchor, lineDir) / lineLen : 0.5
+                let crossingPosOnLine = prevAnchor + line * max(0.01, min(0.99, t))
+                
+                let distFromPrev = t * lineLen
+                let distToNext = (1 - t) * lineLen
+                
+                let rampBefore = min(bumpRadius, distFromPrev * 0.7)
+                let rampAfter = min(bumpRadius, distToNext * 0.7)
+                
+                let steps = 8
+                for i in 0...steps {
+                    let s = Float(i) / Float(steps)
+                    let offset = (s - 0.5) * 2.0
+                    let ramp = offset < 0 ? rampBefore : rampAfter
+                    let posXY = crossingPosOnLine + lineDir * offset * ramp
+                    let curve = 1.0 - offset * offset
+                    let z = bumpHeight * curve
+                    poly.append(SIMD3<Float>(posXY.x, posXY.y, z))
+                }
+                
+                nodeIndex += 1
+                continue
+            }
+            
             let positionXY = engine.position(of: node)
             let positionZ = baseZ(engine: engine, ropeIndex: ropeIndex, node: node, lift: lift, dragLift: dragLift)
             poly.append(SIMD3<Float>(positionXY.x, positionXY.y, positionZ))

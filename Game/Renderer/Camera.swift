@@ -4,9 +4,12 @@ struct Camera {
     var center: SIMD3<Float> = .zero
     var distance: Float = 2.8
     var orthoHalfHeight: Float = 2.05
+    var tiltAngle: Float = 0.25
 
     func viewProj(aspect: Float) -> simd_float4x4 {
-        let eye = center + SIMD3<Float>(0, 0, distance)
+        let yOffset = distance * sin(tiltAngle)
+        let zOffset = distance * cos(tiltAngle)
+        let eye = center + SIMD3<Float>(0, yOffset, zOffset)
         let view = simd_float4x4.lookAt(eye: eye, center: center, up: SIMD3<Float>(0, 1, 0))
         let halfH = orthoHalfHeight
         let halfW = orthoHalfHeight * aspect
