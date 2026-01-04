@@ -13,7 +13,55 @@ extension Renderer {
         let deltaTime = 1.0 / Float(max(1, view.preferredFramesPerSecond))
         time += deltaTime
 
+        if dragState != nil {
+            let v = (dragWorldTarget - lastDragWorld) / max(1e-4, deltaTime)
+            lastDragWorld = dragWorldTarget
+            let speed = simd_length(v)
+            let target = min(1, speed * 0.025)
+            dragVisualEnergy += (target - dragVisualEnergy) * min(1, deltaTime * 18)
+            dragVisualEnergy *= pow(0.5, deltaTime * 1.4)
+            
+            if dragOscillationRopeIndex != nil {
+                let damping: Float = 0.88
+                let spring: Float = 14.0
+                let oldPhase = dragOscillationPhase
+                dragOscillationPhase += dragOscillationVelocity * deltaTime
+                dragOscillationVelocity -= dragOscillationPhase * spring * deltaTime
+                dragOscillationVelocity *= damping
+                dragOscillationPhase *= damping
+                
+                if Int(time * 10) % 10 == 0 {
+                    Self.logger.info("🌊 Oscillation during drag: phase=\(String(format: "%.4f", self.dragOscillationPhase)) velocity=\(String(format: "%.4f", self.dragOscillationVelocity))")
+                }
+                
+                if abs(dragOscillationPhase) < 0.0005 && abs(dragOscillationVelocity) < 0.0005 {
+                    dragOscillationPhase = 0.0
+                    dragOscillationVelocity = 0.0
+                }
+            }
+        } else {
+            dragVisualEnergy *= pow(0.5, deltaTime * 6.0)
+            lastDragWorld = dragWorld
+            
+            if dragOscillationRopeIndex != nil {
+                let damping: Float = 0.92
+                let spring: Float = 12.0
+                dragOscillationPhase += dragOscillationVelocity * deltaTime
+                dragOscillationVelocity -= dragOscillationPhase * spring * deltaTime
+                dragOscillationVelocity *= damping
+                dragOscillationPhase *= damping
+                
+                if abs(dragOscillationPhase) < 0.001 && abs(dragOscillationVelocity) < 0.001 {
+                    dragOscillationPhase = 0.0
+                    dragOscillationVelocity = 0.0
+                    dragOscillationRopeIndex = nil
+                }
+            }
+        }
+
         updateFrameUniforms(view: view)
+        updateSnapAnimation(deltaTime: deltaTime)
+        updateLazyDrag(deltaTime: deltaTime)
         updateSimulationTargets(deltaTime: deltaTime)
         applyDragPinsIfNeeded()
 
@@ -44,13 +92,15 @@ extension Renderer {
             return
         }
 
-        let targetLift = (dragState != nil) ? dragHeight : 0
+        let targetLift = (dragState != nil || snapAnimationState != nil) ? dragHeight : 0
         dragLiftCurrent += (targetLift - dragLiftCurrent) * min(1, deltaTime * 18)
 
         let dragLift: Float = dragLiftCurrent
         let ropeCount = min(simulation.ropeCount, topology.ropes.count)
+        let animatingRopeIndex = snapAnimationState?.ropeIndex
         if ropeCount > 0 {
             for ropeIndex in 0..<ropeCount {
+                if ropeIndex == animatingRopeIndex { continue }
                 let ropeHeight = ropes[safe: ropeIndex]?.height ?? 0.03
                 let lift = max(ropeHeight * 1.35, 0.02)
                 let targets = TopologySampler.sampleRope(
@@ -61,8 +111,12 @@ extension Renderer {
                     dragLift: dragLift,
                     ropeWidth: ropes[safe: ropeIndex]?.width ?? 0.085,
                     ropeWidthForIndex: { idx in
-                        return ropes[safe: idx]?.width ?? 0.085
-                    }
+                        self.ropes[safe: idx]?.width ?? 0.085
+                    },
+                    ropeHeightForIndex: { idx in
+                        self.ropes[safe: idx]?.height ?? 0.03
+                    },
+                    holeRadius: holeRadius
                 )
                 simulation.updateTargets(ropeIndex: ropeIndex, positions: targets)
             }
@@ -71,6 +125,133 @@ extension Renderer {
         simulation.projectAlpha = 0.65
         simulation.collisionsEnabled = true
         simulation.simulationEnabled = true
+    }
+
+    private func updateSnapAnimation(deltaTime: Float) {
+        guard var snapState = snapAnimationState else { return }
+        guard ropes.indices.contains(snapState.ropeIndex) else {
+            snapAnimationState = nil
+            return
+        }
+
+        let animationSpeed: Float = 8.0
+        snapState.progress += deltaTime * animationSpeed
+        snapState.progress = min(1.0, snapState.progress)
+
+        let t = snapState.progress
+        let easeOut = 1.0 - pow(1.0 - t, 3.0)
+        let currentPos = snapState.startPosition + (snapState.targetPosition - snapState.startPosition) * easeOut
+        let currentZ = snapState.startZ * (1.0 - easeOut)
+
+        let endpoints = ropes[snapState.ropeIndex]
+        let fixedHoleIndex = (snapState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
+        guard let fixedPos = holePositions[safe: fixedHoleIndex] else {
+            snapAnimationState = nil
+            return
+        }
+
+        if snapState.endIndex == 0 {
+            simulation.setPins(
+                ropeIndex: snapState.ropeIndex,
+                pinStart: SIMD3<Float>(currentPos.x, currentPos.y, currentZ),
+                pinEnd: SIMD3<Float>(fixedPos.x, fixedPos.y, 0)
+            )
+        } else {
+            simulation.setPins(
+                ropeIndex: snapState.ropeIndex,
+                pinStart: SIMD3<Float>(fixedPos.x, fixedPos.y, 0),
+                pinEnd: SIMD3<Float>(currentPos.x, currentPos.y, currentZ)
+            )
+        }
+
+        topology?.setFloating(ropeIndex: snapState.ropeIndex, position: currentPos)
+
+        if snapState.progress >= 1.0 {
+            topology?.endDrag(ropeIndex: snapState.ropeIndex, endIndex: snapState.endIndex, holeIndex: snapState.targetHoleIndex)
+            
+            if let pinStart = holePositions[safe: endpoints.startHole],
+               let pinEnd = holePositions[safe: endpoints.endHole] {
+                simulation.setPins(
+                    ropeIndex: snapState.ropeIndex,
+                    pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
+                    pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
+                )
+            } else {
+                simulation.deactivateRope(ropeIndex: snapState.ropeIndex)
+                topology?.deactivateRope(ropeIndex: snapState.ropeIndex)
+            }
+
+            removeUntangledRopes()
+            snapAnimationState = nil
+        } else {
+            snapAnimationState = snapState
+        }
+    }
+
+    private func updateLazyDrag(deltaTime: Float) {
+        guard let dragState, ropes.indices.contains(dragState.ropeIndex) else { return }
+
+        let endpoints = ropes[dragState.ropeIndex]
+        let fixedHoleIndex = (dragState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
+        guard let fixedPos = holePositions[safe: fixedHoleIndex] else { return }
+
+        let targetLength = simd_length(dragWorldTarget - fixedPos)
+        let currentLazyLength = simd_length(dragWorldLazy - fixedPos)
+        let restLength = dragState.restLength
+
+        let isStretching = targetLength > currentLazyLength
+        let isShrinking = targetLength < currentLazyLength
+
+        if isStretching {
+            let stretchSpeed: Float = 12.0
+            let toTarget = dragWorldTarget - dragWorldLazy
+            let moveAmount = min(simd_length(toTarget), stretchSpeed * deltaTime)
+            if moveAmount > 1e-6 {
+                let moveDir = toTarget / simd_length(toTarget)
+                dragWorldLazy += moveDir * moveAmount
+            }
+            dragSagProgress = 0.0
+        } else if isShrinking {
+            let sagThreshold: Float = 0.02
+            let lengthDiff = currentLazyLength - targetLength
+            
+            if lengthDiff > sagThreshold {
+                let sagSpeed: Float = 4.0
+                dragSagProgress += deltaTime * sagSpeed
+                dragSagProgress = min(1.0, dragSagProgress)
+                
+                let sagFactor = 1.0 - dragSagProgress
+                let sagAmount = lengthDiff * sagFactor * 0.4
+                
+                let toTarget = dragWorldTarget - fixedPos
+                let toTargetLen = simd_length(toTarget)
+                if toTargetLen > 1e-6 {
+                    let targetDir = toTarget / toTargetLen
+                    let saggedLength = targetLength + sagAmount
+                    let targetLazyPos = fixedPos + targetDir * saggedLength
+                    
+                    let pullSpeed: Float = 8.0
+                    dragWorldLazy = dragWorldLazy + (targetLazyPos - dragWorldLazy) * min(1.0, deltaTime * pullSpeed)
+                }
+            } else {
+                let shrinkSpeed: Float = 15.0
+                let toTarget = dragWorldTarget - dragWorldLazy
+                let moveAmount = min(simd_length(toTarget), shrinkSpeed * deltaTime)
+                if moveAmount > 1e-6 {
+                    let moveDir = toTarget / simd_length(toTarget)
+                    dragWorldLazy += moveDir * moveAmount
+                }
+                if dragSagProgress > 0.0 {
+                    dragSagProgress = max(0.0, dragSagProgress - deltaTime * 5.0)
+                }
+            }
+        } else {
+            if dragSagProgress > 0.0 {
+                dragSagProgress = max(0.0, dragSagProgress - deltaTime * 5.0)
+            }
+        }
+
+        topology?.setFloating(ropeIndex: dragState.ropeIndex, position: dragWorldLazy)
     }
 
     private func applyDragPinsIfNeeded() {
@@ -90,14 +271,14 @@ extension Renderer {
         if dragState.endIndex == 0 {
             simulation.setPins(
                 ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(dragWorld.x, dragWorld.y, dragLiftCurrent),
+                pinStart: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent),
                 pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0)
             )
         } else {
             simulation.setPins(
                 ropeIndex: ropeIndex,
                 pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
-                pinEnd: SIMD3<Float>(dragWorld.x, dragWorld.y, dragLiftCurrent)
+                pinEnd: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent)
             )
         }
     }
@@ -269,7 +450,8 @@ extension Renderer {
             ambientColor: SIMD4<Float>(0, 0, 0, 1),
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
             orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
-            shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0)
+            shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0),
+            timeDrag: SIMD4<Float>(time, dragVisualEnergy, dragLiftCurrent, dragState != nil ? 1 : 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
     }

@@ -12,7 +12,7 @@ enum RopeMeshBuilder {
         let window: Float
     }
 
-    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, width: Float, height: Float, color: SIMD3<Float>, twistEvents: [TwistEvent]) -> RopeMesh {
+    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, width: Float, height: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0) -> RopeMesh {
         let pointCount = points.count
         if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
 
@@ -44,7 +44,7 @@ enum RopeMeshBuilder {
         }()
 
         for pointIndex in 0..<pointCount {
-            let position = points[pointIndex]
+            var position = points[pointIndex]
             if pointIndex > 0 {
                 distanceAlong += simd_length(points[pointIndex] - points[pointIndex - 1])
             }
@@ -92,12 +92,80 @@ enum RopeMeshBuilder {
             }
 
             let uCoord = distanceAlong / totalLen
+            let center = sin(uCoord * Float.pi)
+            let centerMask = center * center
+            
+            let stretchEffect = stretchRatio - 1.0
+            let stretchPinch = stretchEffect > 0 ? stretchEffect * 0.35 * centerMask : 0.0
+            let stretchRelax = stretchEffect < 0 ? abs(stretchEffect) * 0.25 * centerMask : 0.0
+            
+            let basePinch = tautness * centerMask
+            let pinch = basePinch + stretchPinch - stretchRelax * 0.4
+            
+            let adjustedTautness = max(0.0, tautness - stretchRelax * 0.3)
+            
+            let endFade = smoothstep(edge0: 0.04, edge1: 0.14, value: uCoord) * smoothstep(edge0: 0.04, edge1: 0.14, value: 1 - uCoord)
+
+            var repelMagTotal: Float = 0
+            if !repulsors.isEmpty && endFade > 1e-4 {
+                let p2 = SIMD2<Float>(position.x, position.y)
+                var repel = SIMD2<Float>(0, 0)
+                for r in repulsors {
+                    let c = SIMD2<Float>(r.x, r.y)
+                    let radius = r.z
+                    let strength = r.w
+                    let d = p2 - c
+                    let d2 = simd_length_squared(d)
+                    if d2 < 1e-12 { continue }
+                    let dist = sqrt(d2)
+                    let falloff = max(1e-4, radius * 0.85)
+                    let w = smoothstep(edge0: radius + falloff, edge1: radius, value: dist)
+                    if w <= 0 { continue }
+                    let dir = d / dist
+                    repel += dir * (w * strength)
+                    repelMagTotal += w * strength
+                }
+                let repelScale = endFade * (0.35 + 0.65 * (1 - pinch))
+                position.x += repel.x * repelScale
+                position.y += repel.y * repelScale
+                position.z += min(0.02, repelMagTotal * 0.22) * endFade
+            }
+
+            let params = SIMD4<Float>(adjustedTautness, pinch, min(1, repelMagTotal / max(1e-4, width)), 0)
+            
+            let stretchScaleW = stretchEffect > 0 ? (1.0 - stretchEffect * 0.18 * centerMask) : 1.0
+            let stretchScaleH = stretchEffect > 0 ? (1.0 - stretchEffect * 0.12 * centerMask) : 1.0
+            let scaleW = max(0.65, 1.0 - pinch * 0.22) * stretchScaleW
+            let scaleH = max(0.72, 1.0 - pinch * 0.12) * stretchScaleH
+            
+            let lightenAmount = stretchEffect > 0 ? stretchEffect * 0.32 * centerMask : 0.0
+            let adjustedColor = color * (1.0 + lightenAmount) + SIMD3<Float>(lightenAmount * 0.15, lightenAmount * 0.15, lightenAmount * 0.15)
+            
+            let oscWave = sin(uCoord * Float.pi * 3.0 + oscillation * 6.0)
+            let oscAmplitude = abs(oscillation) * 0.12
+            let oscOffset = oscWave * oscAmplitude
+            let oscDir = SIMD2<Float>(nrm.x, nrm.y)
+            let oscDirLen = simd_length(oscDir)
+            if oscDirLen > 1e-6 {
+                let oscDirNorm = oscDir / oscDirLen
+                position.x += oscDirNorm.x * oscOffset
+                position.y += oscDirNorm.y * oscOffset
+            } else {
+                let fallbackDir = SIMD2<Float>(bin.x, bin.y)
+                let fallbackLen = simd_length(fallbackDir)
+                if fallbackLen > 1e-6 {
+                    let fallbackNorm = fallbackDir / fallbackLen
+                    position.x += fallbackNorm.x * oscOffset
+                    position.y += fallbackNorm.y * oscOffset
+                }
+            }
+            
             for k in 0..<profileCount {
                 let localPos = profile.positions[k]
                 let localN = profile.normals[k]
-                let worldPos = position + nrm * localPos.x + bin * localPos.y
+                let worldPos = position + nrm * (localPos.x * scaleW) + bin * (localPos.y * scaleH)
                 let worldN = simd_normalize(nrm * localN.x + bin * localN.y)
-                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: color, texCoord: SIMD2<Float>(uCoord, profile.v[k])))
+                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uCoord, profile.v[k]), params: params))
             }
 
             if pointIndex < pointCount - 1 {

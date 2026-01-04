@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */; };
 		0BFCB97BE05C11AA504AF80A /* Renderer+MTKViewDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1198646DB4FE9E0D90C7A571 /* Renderer+MTKViewDelegate.swift */; };
+		1369491A41BD9ECEE99E72E4 /* RopePhysics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEB483D450E4831A8CC4850 /* RopePhysics.swift */; };
 		16BB647DCC46849DA718F8DA /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B0BFBA0DA3848A126EB434 /* GameView.swift */; };
 		1F2A105232B213DC816A79F8 /* GameMTKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = F1CB472A4725395DD246579F /* GameMTKView.swift */; };
 		250A297F236F415557B72231 /* TopologySampler.swift in Sources */ = {isa = PBXBuildFile; fileRef = AA61C6BAB24A7F83FE508DF6 /* TopologySampler.swift */; };
@@ -48,6 +49,7 @@
 		7BFEFEBF4D97EDF74AA9A7A2 /* UzlsFourApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = UzlsFourApp.swift; sourceTree = "<group>"; };
 		7F6CAA086B215DBC8DE5CD56 /* RopeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeMeshBuilder.swift; sourceTree = "<group>"; };
 		8D0446086F75BECFEAFA5AEA /* Base.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Base.metal; sourceTree = "<group>"; };
+		8FEB483D450E4831A8CC4850 /* RopePhysics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopePhysics.swift; sourceTree = "<group>"; };
 		95442C4BCC472AED86316E91 /* Renderer+Interaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Interaction.swift"; sourceTree = "<group>"; };
 		9D327857F82321017636A0E7 /* UzlsFour.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = UzlsFour.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameTypes.swift; sourceTree = "<group>"; };
@@ -111,6 +113,7 @@
 		A1C7509C589A17ED4687745A /* Simulation */ = {
 			isa = PBXGroup;
 			children = (
+				8FEB483D450E4831A8CC4850 /* RopePhysics.swift */,
 				55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */,
 			);
 			path = Simulation;
@@ -263,6 +266,7 @@
 				71D9F96C6F4FDDC7AED37618 /* Renderer+WinCheck.swift in Sources */,
 				BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */,
 				F027DB0E87B0147C8BF30B68 /* RopeMeshBuilder.swift in Sources */,
+				1369491A41BD9ECEE99E72E4 /* RopePhysics.swift in Sources */,
 				00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */,
 				799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */,
 				805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */,

@@ -8,6 +8,7 @@ struct FrameUniforms {
     var cameraPos: SIMD4<Float>
     var orthoHalfSizeShadowBias: SIMD4<Float>
     var shadowInvSizeUnused: SIMD4<Float>
+    var timeDrag: SIMD4<Float>
 }
 
 struct HoleInstance {
@@ -19,6 +20,7 @@ struct RopeVertex {
     var normal: SIMD3<Float>
     var color: SIMD3<Float>
     var texCoord: SIMD2<Float>
+    var params: SIMD4<Float>
 }
 
 struct HoleVertex {
