@@ -19,6 +19,18 @@ struct GameView: UIViewRepresentable {
         view.onTouch = { phase, location in
             renderer.handleTouch(phase: phase, location: location, in: view)
         }
+        view.onCameraPan = { translation in
+            renderer.handleCameraPan(translation: translation, in: view)
+        }
+        view.onCameraRotation = { delta in
+            renderer.handleCameraRotation(delta: delta)
+        }
+        view.onCameraZoom = { scale in
+            renderer.handleCameraZoom(scale: scale)
+        }
+        view.onCameraDebugToggle = {
+            renderer.cameraDebugMode.toggle()
+        }
 
         return view
     }

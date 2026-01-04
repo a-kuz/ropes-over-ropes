@@ -2,7 +2,7 @@ import MetalKit
 import os.log
 
 final class Renderer: NSObject, MTKViewDelegate {
-    private static let logger = Logger(subsystem: "com.uzls.four", category: "Renderer")
+    static let logger = Logger(subsystem: "com.uzls.four", category: "Renderer")
 
     let device: MTLDevice
     let commandQueue: MTLCommandQueue
@@ -24,7 +24,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     let shadowMapSize: Int = 2048
 
     var camera = Camera()
+    var cameraDebugMode = false
+    var cameraDebugTouchStart: CGPoint?
     var time: Float = 0
+    var dragVisualEnergy: Float = 0
 
     var simulation: RopeSimulation
 
@@ -55,12 +58,33 @@ final class Renderer: NSObject, MTKViewDelegate {
         var endIndex: Int
         var originalHoleIndex: Int
         var topologySnapshot: TopologySnapshot
+        var restLength: Float
     }
 
     var dragState: DragState?
     var dragWorld: SIMD2<Float> = .zero
-    var dragHeight: Float = 0.65
+    var dragWorldLazy: SIMD2<Float> = .zero
+    var dragWorldTarget: SIMD2<Float> = .zero
+    var dragSagProgress: Float = 0.0
+    var dragHeight: Float = 0.35
     var dragLiftCurrent: Float = 0
+    var dragStretchRatio: Float = 1.0
+    var dragOscillationPhase: Float = 0.0
+    var dragOscillationVelocity: Float = 0.0
+    var dragOscillationRopeIndex: Int? = nil
+
+    struct SnapAnimationState {
+        var ropeIndex: Int
+        var endIndex: Int
+        var targetHoleIndex: Int
+        var startPosition: SIMD2<Float>
+        var targetPosition: SIMD2<Float>
+        var startZ: Float
+        var progress: Float
+        var topologySnapshot: TopologySnapshot
+        var originalHoleIndex: Int
+    }
+    var snapAnimationState: SnapAnimationState?
 
     var ropeVB: MTLBuffer?
     var ropeIB: MTLBuffer?
@@ -69,6 +93,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var hdrTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
+    
+    var ropePhysicsLogger = RopePhysics()
+    var lastPhysicsLogTime: Double = 0
 
     init(view: MTKView) {
         guard let device = view.device else { fatalError("Metal device is required") }
@@ -324,20 +351,24 @@ final class Renderer: NSObject, MTKViewDelegate {
     private static func makeRopeVertexDescriptor() -> MTLVertexDescriptor {
         let descriptor = MTLVertexDescriptor()
         descriptor.attributes[0].format = .float3
-        descriptor.attributes[0].offset = 0
+        descriptor.attributes[0].offset = MemoryLayout<RopeVertex>.offset(of: \.position) ?? 0
         descriptor.attributes[0].bufferIndex = 0
 
         descriptor.attributes[1].format = .float3
-        descriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
+        descriptor.attributes[1].offset = MemoryLayout<RopeVertex>.offset(of: \.normal) ?? 0
         descriptor.attributes[1].bufferIndex = 0
 
         descriptor.attributes[2].format = .float3
-        descriptor.attributes[2].offset = MemoryLayout<SIMD3<Float>>.stride * 2
+        descriptor.attributes[2].offset = MemoryLayout<RopeVertex>.offset(of: \.color) ?? 0
         descriptor.attributes[2].bufferIndex = 0
 
         descriptor.attributes[3].format = .float2
-        descriptor.attributes[3].offset = MemoryLayout<SIMD3<Float>>.stride * 3
+        descriptor.attributes[3].offset = MemoryLayout<RopeVertex>.offset(of: \.texCoord) ?? 0
         descriptor.attributes[3].bufferIndex = 0
+
+        descriptor.attributes[4].format = .float4
+        descriptor.attributes[4].offset = MemoryLayout<RopeVertex>.offset(of: \.params) ?? 0
+        descriptor.attributes[4].bufferIndex = 0
 
         descriptor.layouts[0].stride = MemoryLayout<RopeVertex>.stride
         return descriptor

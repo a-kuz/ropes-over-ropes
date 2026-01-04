@@ -1,7 +1,10 @@
 import MetalKit
 import simd
+import os.log
 
 extension Renderer {
+    private static let interactionLogger = Logger(subsystem: "com.uzls.four", category: "Interaction")
+    
     private struct DragCandidate {
         var ropeIndex: Int
         var endIndex: Int
@@ -11,6 +14,36 @@ extension Renderer {
 
     @MainActor
     func handleTouch(phase: UITouch.Phase, location: CGPoint, in view: MTKView) {
+        if cameraDebugMode {
+            switch phase {
+            case .began:
+                cameraDebugTouchStart = location
+            case .moved:
+                if let start = cameraDebugTouchStart {
+                    let deltaX = Float(location.x - start.x)
+                    let deltaY = Float(location.y - start.y)
+                    let width = max(1.0, Float(view.bounds.size.width))
+                    let height = max(1.0, Float(view.bounds.size.height))
+                    let aspect = width / height
+                    let halfHeight = camera.orthoHalfHeight
+                    let halfWidth = halfHeight * aspect
+                    
+                    let worldDeltaX = (deltaX / width) * 2 * halfWidth
+                    camera.center.x -= worldDeltaX
+                    
+                    let rotationDelta = -deltaY / height * Float.pi * 0.5
+                    camera.tiltAngle += rotationDelta
+                    camera.tiltAngle = max(-Float.pi / 2 + 0.1, min(Float.pi / 2 - 0.1, camera.tiltAngle))
+                    
+                    cameraDebugTouchStart = location
+                }
+            case .ended, .cancelled:
+                cameraDebugTouchStart = nil
+            default:
+                break
+            }
+            return
+        }
         let worldPosition = screenToWorld(location, view: view)
         switch phase {
         case .began:
@@ -22,6 +55,36 @@ extension Renderer {
         default:
             break
         }
+    }
+
+    @MainActor
+    func handleCameraPan(translation: SIMD2<Float>, in view: MTKView) {
+        guard cameraDebugMode else { return }
+        let width = max(1.0, Float(view.bounds.size.width))
+        let height = max(1.0, Float(view.bounds.size.height))
+        let aspect = width / height
+        let halfHeight = camera.orthoHalfHeight
+        let halfWidth = halfHeight * aspect
+        
+        let worldDeltaX = (translation.x / width) * 2 * halfWidth
+        let worldDeltaY = -(translation.y / height) * 2 * halfHeight
+        
+        camera.center.x -= worldDeltaX
+        camera.center.y -= worldDeltaY
+    }
+
+    @MainActor
+    func handleCameraRotation(delta: Float) {
+        guard cameraDebugMode else { return }
+        camera.tiltAngle += delta
+        camera.tiltAngle = max(-Float.pi / 2 + 0.1, min(Float.pi / 2 - 0.1, camera.tiltAngle))
+    }
+
+    @MainActor
+    func handleCameraZoom(scale: Float) {
+        guard cameraDebugMode else { return }
+        camera.orthoHalfHeight *= scale
+        camera.orthoHalfHeight = max(0.1, min(10.0, camera.orthoHalfHeight))
     }
 
     private func beginDrag(world: SIMD2<Float>) {
@@ -57,21 +120,59 @@ extension Renderer {
                 return
             }
             dragWorld = initial
+            dragWorldLazy = initial
+            dragWorldTarget = initial
             dragStartWorld = initial
-            lastDragWorld = dragWorld
+            lastDragWorld = initial
+            dragSagProgress = 0.0
             holeOccupied[best.holeIndex] = false
-            topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorld)
+            topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorldLazy)
             let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], crossings: [:], nextCrossingId: 1, floatingPositions: [:])
-            dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex, topologySnapshot: snapshot)
+            
+            let endpoints = ropes[best.ropeIndex]
+            let startHoleIndex = endpoints.startHole
+            let endHoleIndex = endpoints.endHole
+            let restLength: Float
+            if let startPos = holePositions[safe: startHoleIndex],
+               let endPos = holePositions[safe: endHoleIndex] {
+                restLength = simd_length(endPos - startPos)
+            } else {
+                restLength = 1.0
+            }
+            
+            dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex, topologySnapshot: snapshot, restLength: restLength)
+            dragStretchRatio = 1.0
+            dragOscillationPhase = 0.0
+            dragOscillationVelocity = 0.0
+            dragOscillationRopeIndex = nil
         }
     }
 
     private func updateDrag(world: SIMD2<Float>) {
-        guard dragState != nil else { return }
-        if let state = dragState {
-            topology?.setFloating(ropeIndex: state.ropeIndex, position: world)
-        }
+        guard let dragState else { return }
+        
+        dragWorldTarget = world
         dragWorld = world
+        
+        let endpoints = ropes[dragState.ropeIndex]
+        let fixedHoleIndex = (dragState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
+        guard let fixedPos = holePositions[safe: fixedHoleIndex] else { return }
+        
+        let targetLength = simd_length(world - fixedPos)
+        let currentLazyLength = simd_length(dragWorldLazy - fixedPos)
+        let restLength = dragState.restLength
+        
+        dragStretchRatio = targetLength / max(1e-6, restLength)
+        
+        let deltaTime = Float(1.0 / 60.0)
+        let velocity = (world - dragWorld) / max(1e-4, deltaTime)
+        let speed = simd_length(velocity)
+        
+        if speed > 0.5 {
+            let impulse = speed * 0.12
+            dragOscillationVelocity += impulse
+            dragOscillationRopeIndex = dragState.ropeIndex
+        }
     }
 
     private func endDrag(world: SIMD2<Float>) {
@@ -97,10 +198,14 @@ extension Renderer {
 
         let snappedHoleIndex = bestIndex ?? dragState.originalHoleIndex
         
+        guard let targetPos = holePositions[safe: snappedHoleIndex] else {
+            self.dragState = nil
+            return
+        }
+
         topology?.restore(dragState.topologySnapshot)
         
-        guard let fromPos = holePositions[safe: dragState.originalHoleIndex],
-              let toPos = holePositions[safe: snappedHoleIndex] else {
+        guard let fromPos = holePositions[safe: dragState.originalHoleIndex] else {
             self.dragState = nil
             return
         }
@@ -109,7 +214,7 @@ extension Renderer {
             ropeIndex: dragState.ropeIndex,
             endIndex: dragState.endIndex,
             from: fromPos,
-            to: toPos
+            to: targetPos
         )
 
         if let snappedHoleIndex = bestIndex {
@@ -121,30 +226,34 @@ extension Renderer {
             if holeOccupied.indices.contains(snappedHoleIndex) {
                 holeOccupied[snappedHoleIndex] = true
             }
-            topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: snappedHoleIndex)
         } else {
             if holeOccupied.indices.contains(dragState.originalHoleIndex) {
                 holeOccupied[dragState.originalHoleIndex] = true
             }
-            topology?.endDrag(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, holeIndex: dragState.originalHoleIndex)
         }
 
+        let draggedRopeIndex = dragState.ropeIndex
+        let endpoints = ropes[draggedRopeIndex]
+        
+        let velocity = (dragWorldLazy - lastDragWorld) / max(1e-4, Float(1.0 / 60.0))
+        let speed = simd_length(velocity)
+        dragOscillationVelocity = speed * 0.15
+        dragOscillationPhase = 0.0
+        dragOscillationRopeIndex = draggedRopeIndex
+
+        snapAnimationState = SnapAnimationState(
+            ropeIndex: dragState.ropeIndex,
+            endIndex: dragState.endIndex,
+            targetHoleIndex: snappedHoleIndex,
+            startPosition: dragWorldLazy,
+            targetPosition: targetPos,
+            startZ: dragLiftCurrent,
+            progress: 0.0,
+            topologySnapshot: dragState.topologySnapshot,
+            originalHoleIndex: dragState.originalHoleIndex
+        )
+        
         self.dragState = nil
-
-        let endpoints = ropes[dragState.ropeIndex]
-        if let pinStart = holePositions[safe: endpoints.startHole],
-           let pinEnd = holePositions[safe: endpoints.endHole] {
-            simulation.setPins(
-                ropeIndex: dragState.ropeIndex,
-                pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
-                pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
-            )
-        } else {
-            simulation.deactivateRope(ropeIndex: dragState.ropeIndex)
-            topology?.deactivateRope(ropeIndex: dragState.ropeIndex)
-        }
-
-        removeUntangledRopes()
     }
 
     @MainActor
@@ -157,7 +266,25 @@ extension Renderer {
 
         let ndcX = (Float(location.x) / width) * 2 - 1
         let ndcY = (Float(location.y) / height) * 2 - 1
-        return SIMD2<Float>(ndcX * halfWidth, ndcY * halfHeight)
+        
+        if abs(camera.tiltAngle) < 0.01 {
+            return SIMD2<Float>(ndcX * halfWidth, ndcY * halfHeight)
+        }
+        
+        let yOffset = camera.distance * sin(camera.tiltAngle)
+        let zOffset = camera.distance * cos(camera.tiltAngle)
+        let eye = camera.center + SIMD3<Float>(0, yOffset, zOffset)
+        let viewMatrix = simd_float4x4.lookAt(eye: eye, center: camera.center, up: SIMD3<Float>(0, 1, 0))
+        
+        let right = SIMD3<Float>(viewMatrix[0].x, viewMatrix[0].y, viewMatrix[0].z)
+        let up = SIMD3<Float>(viewMatrix[1].x, viewMatrix[1].y, viewMatrix[1].z)
+        
+        let viewX = ndcX * halfWidth
+        let viewY = ndcY * halfHeight
+        
+        let worldPoint = camera.center + right * viewX + up * viewY
+        
+        return SIMD2<Float>(worldPoint.x, worldPoint.y)
     }
 }
 

@@ -1,7 +1,10 @@
 import Metal
 import simd
+import os.log
 
 extension Renderer {
+    private static let meshLogger = Logger(subsystem: "com.uzls.four", category: "RopeMesh")
+    
     func updateRopeMesh() {
         var allVertices: [RopeVertex] = []
         var allIndices: [UInt32] = []
@@ -11,14 +14,33 @@ extension Renderer {
         var baseVertex: UInt32 = 0
 
         let dragLift: Float = dragLiftCurrent
+        let repulsorsBase = makeRepulsorsBase()
+        let repulsorsWithTopology = makeRepulsorsWithTopology()
 
+        let ropeWidthForIndex: (Int) -> Float = { idx in
+            self.ropes[safe: idx]?.width ?? 0.085
+        }
+        let ropeHeightForIndex: (Int) -> Float = { idx in
+            self.ropes[safe: idx]?.height ?? 0.03
+        }
+        
+        var allRopePoints: [[SIMD3<Float>]] = []
+        var ropeWidths: [Float] = []
+        var ropeHeights: [Float] = []
+        
         for ropeIndex in ropes.indices {
-            if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 { continue }
-            let ropeColor = ropes[ropeIndex].color
+            if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 {
+                allRopePoints.append([])
+                ropeWidths.append(0)
+                ropeHeights.append(0)
+                continue
+            }
+            
             let ropeWidth = ropes[ropeIndex].width
             let ropeHeight = ropes[ropeIndex].height
+            ropeWidths.append(ropeWidth)
+            ropeHeights.append(ropeHeight)
             
-            let ropeMesh: RopeMesh
             if let topology {
                 let lift = max(ropeHeight * 1.35, 0.02)
                 let points = TopologySampler.sampleRopeRender(
@@ -27,45 +49,163 @@ extension Renderer {
                     lift: lift,
                     dragLift: dragLift,
                     ropeWidth: ropeWidth,
-                    ropeWidthForIndex: { idx in
-                        return ropes[safe: idx]?.width ?? ropeWidth
-                    }
+                    ropeWidthForIndex: ropeWidthForIndex,
+                    ropeHeightForIndex: ropeHeightForIndex,
+                    holeRadius: holeRadius
                 )
-                ropeMesh = points.withUnsafeBufferPointer { pointsBuffer in
-                    let events = Self.makeTwistEvents(topology: topology, ropeIndex: ropeIndex, points: pointsBuffer)
-                    return RopeMeshBuilder.buildRect(points: pointsBuffer, width: ropeWidth, height: ropeHeight, color: ropeColor, twistEvents: events)
-                }
+                allRopePoints.append(points)
             } else {
-                ropeMesh = simulation.withRopePositions(ropeIndex: ropeIndex) { points in
-                    let events = Self.makeTwistEvents(topology: topology, ropeIndex: ropeIndex, points: points)
-                    return RopeMeshBuilder.buildRect(points: points, width: ropeWidth, height: ropeHeight, color: ropeColor, twistEvents: events)
+                var points: [SIMD3<Float>] = []
+                simulation.withRopePositions(ropeIndex: ropeIndex) { buffer in
+                    points = Array(buffer)
+                }
+                allRopePoints.append(points)
+            }
+        }
+        
+        if let dragState, dragLift > 0.01, let topology {
+            let draggedRopeIndex = dragState.ropeIndex
+            if allRopePoints.indices.contains(draggedRopeIndex) && !allRopePoints[draggedRopeIndex].isEmpty {
+                
+                let draggedRope = topology.ropes[draggedRopeIndex]
+                var crossingsToUpdate: [(crossingId: Int, crossing: TopologyCrossing, otherRopeIndex: Int)] = []
+                
+                for node in draggedRope.nodes {
+                    if case .crossing(let cid) = node,
+                       let crossing = topology.crossings[cid] {
+                        let otherIndex = (crossing.ropeA == draggedRopeIndex) ? crossing.ropeB : crossing.ropeA
+                        
+                        if crossing.ropeOver != draggedRopeIndex {
+                            crossingsToUpdate.append((cid, crossing, otherIndex))
+                        }
+                    }
+                }
+                
+                for crossingInfo in crossingsToUpdate {
+                    let otherRopeIndex = crossingInfo.otherRopeIndex
+                    guard allRopePoints.indices.contains(otherRopeIndex) else { continue }
+                    guard !allRopePoints[otherRopeIndex].isEmpty else { continue }
+                    
+                    let draggedRopeEndpoints = ropes[draggedRopeIndex]
+                    let otherRopeEndpoints = ropes[otherRopeIndex]
+                    
+                    guard let draggedStart = holePositions[safe: draggedRopeEndpoints.startHole],
+                          let draggedEnd = holePositions[safe: draggedRopeEndpoints.endHole],
+                          let otherStart = holePositions[safe: otherRopeEndpoints.startHole],
+                          let otherEnd = holePositions[safe: otherRopeEndpoints.endHole] else { continue }
+                    
+                    var prevCrossingXY: SIMD2<Float>? = nil
+                    if let currentCrossingIndex = draggedRope.nodes.firstIndex(where: { 
+                        if case .crossing(let cid) = $0 { return cid == crossingInfo.crossingId }
+                        return false
+                    }) {
+                        for i in (0..<currentCrossingIndex).reversed() {
+                            if case .crossing(let prevCid) = draggedRope.nodes[i],
+                               let prevCrossing = topology.crossings[prevCid],
+                               prevCrossing.ropeOver != draggedRopeIndex {
+                                prevCrossingXY = prevCrossing.position
+                                break
+                            }
+                        }
+                    }
+                    
+                    let fixedAnchor = (dragState.endIndex == 0) ? draggedEnd : draggedStart
+                    let actualStartAnchor = prevCrossingXY ?? fixedAnchor
+                    
+                    var crossingPos = crossingInfo.crossing.position
+                    var lowerPoints = allRopePoints[draggedRopeIndex]
+                    var upperPoints = allRopePoints[otherRopeIndex]
+                    
+                    RopePhysics.computeDragCrossingPhysics(
+                        lowerRopePoints: &lowerPoints,
+                        upperRopePoints: &upperPoints,
+                        crossingPosition: &crossingPos,
+                        lowerRopeStartAnchor: actualStartAnchor,
+                        lowerRopeEndAnchor: fixedAnchor,
+                        upperRopeStartAnchor: otherStart,
+                        upperRopeEndAnchor: otherEnd,
+                        dragPosition: dragWorld,
+                        dragZ: dragLift,
+                        dragEndIndex: dragState.endIndex,
+                        lowerRopeWidth: ropeWidths[draggedRopeIndex],
+                        upperRopeHeight: ropeHeights[otherRopeIndex]
+                    )
+                    
+                    allRopePoints[draggedRopeIndex] = lowerPoints
+                    allRopePoints[otherRopeIndex] = upperPoints
                 }
             }
-
+        }
+        
+        if let topology, ropes.count >= 2 {
+            RopePhysics.applyBandRepulsion(
+                allRopePoints: &allRopePoints,
+                ropeWidths: ropeWidths,
+                ropeHeights: ropeHeights,
+                topology: topology,
+                iterations: 5
+            )
+        }
+        
+        for ropeIndex in ropes.indices {
+            if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 { continue }
+            if allRopePoints[ropeIndex].isEmpty { continue }
+            
+            let ropeColor = ropes[ropeIndex].color
+            let ropeWidth = ropes[ropeIndex].width
+            let ropeHeight = ropes[ropeIndex].height
+            
+            var renderPoints = allRopePoints[ropeIndex]
+            
+            if let topology {
+                renderPoints = Self.applyCrossingVisualDeform(
+                    points: renderPoints,
+                    topology: topology,
+                    ropeIndex: ropeIndex,
+                    ropeHeight: ropeHeight,
+                    ropeHeightForIndex: ropeHeightForIndex,
+                    ropeWidth: ropeWidth,
+                    ropeWidthForIndex: ropeWidthForIndex
+                )
+            }
+            
+            renderPoints = Self.applyHoleBendVisual(
+                points: renderPoints,
+                topology: topology,
+                ropeIndex: ropeIndex,
+                holeRadius: holeRadius,
+                holePositions: holePositions,
+                ropes: ropes
+            )
+            
+            let isDragged = dragState?.ropeIndex == ropeIndex
+            let stretchRatio = isDragged ? dragStretchRatio : 1.0
+            let oscillation = (dragOscillationRopeIndex == ropeIndex) ? dragOscillationPhase : 0.0
+            
+            if oscillation != 0 && Int(time * 10) % 10 == 0 {
+                Self.meshLogger.info("🎯 Applying oscillation to rope[\(ropeIndex)]: phase=\(String(format: "%.4f", oscillation)) amplitude=\(String(format: "%.4f", oscillation * 0.025))")
+            }
+            
+            let ropeMesh = renderPoints.withUnsafeBufferPointer { pointsBuffer in
+                let events = Self.makeTwistEvents(topology: topology, ropeIndex: ropeIndex, points: pointsBuffer)
+                let taut = Self.tautness(points: pointsBuffer)
+                let repulsors = topology != nil ? repulsorsWithTopology : repulsorsBase
+                return RopeMeshBuilder.buildRect(
+                    points: pointsBuffer,
+                    width: ropeWidth,
+                    height: ropeHeight,
+                    color: ropeColor,
+                    twistEvents: events,
+                    tautness: taut,
+                    repulsors: repulsors,
+                    stretchRatio: stretchRatio,
+                    oscillation: oscillation
+                )
+            }
+            
             allVertices.append(contentsOf: ropeMesh.vertices)
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
-        }
-        
-        if let topology {
-            let hookCenters = TopologySampler.hookCenters(engine: topology)
-            let avgWidth: Float = ropes.isEmpty ? 0.08 : ropes.reduce(0) { $0 + $1.width } / Float(ropes.count)
-            let cylinderRadius = avgWidth * 0.35
-            let cylinderHeight: Float = 0.12
-            let cylinderColor = SIMD3<Float>(0.95, 0.75, 0.2)
-            
-            for center in hookCenters {
-                let (verts, inds) = Self.buildCylinder(
-                    center: SIMD3<Float>(center.x, center.y, 0),
-                    radius: cylinderRadius,
-                    height: cylinderHeight,
-                    color: cylinderColor,
-                    segments: 16
-                )
-                allVertices.append(contentsOf: verts)
-                allIndices.append(contentsOf: inds.map { $0 + baseVertex })
-                baseVertex += UInt32(verts.count)
-            }
         }
 
         ropeIndexCount = allIndices.count
@@ -85,75 +225,228 @@ extension Renderer {
         if indexBytes > 0 {
             ropeIB?.contents().copyMemory(from: allIndices, byteCount: indexBytes)
         }
+        
+        if let topology {
+            var loggableRopes: [(index: Int, points: [SIMD3<Float>])] = []
+            for ropeIndex in ropes.indices {
+                if allRopePoints[ropeIndex].isEmpty { continue }
+                loggableRopes.append((index: ropeIndex, points: allRopePoints[ropeIndex]))
+            }
+            ropePhysicsLogger.logStateIfNeeded(
+                time: Double(time),
+                ropes: loggableRopes,
+                crossings: topology.crossings
+            )
+        }
+        
+        if Int(time) % 2 == 0 && time - Float(Int(time)) < 0.02 {
+            Self.meshLogger.info("Mesh stats: vertices=\(allVertices.count) indices=\(allIndices.count) ropeCount=\(self.ropes.count)")
+        }
     }
     
-    private static func buildCylinder(center: SIMD3<Float>, radius: Float, height: Float, color: SIMD3<Float>, segments: Int) -> ([RopeVertex], [UInt32]) {
-        var vertices: [RopeVertex] = []
-        var indices: [UInt32] = []
+    private func makeRepulsorsBase() -> [SIMD4<Float>] {
+        let r = holeRadius * 1.02
+        let strength = holeRadius * 0.08
+        var repulsors: [SIMD4<Float>] = []
+        repulsors.reserveCapacity(holePositions.count)
+        for p in holePositions {
+            repulsors.append(SIMD4<Float>(p.x, p.y, r, strength))
+        }
+        return repulsors
+    }
+
+    private func makeRepulsorsWithTopology() -> [SIMD4<Float>] {
+        var repulsors = makeRepulsorsBase()
+        guard let topology else { return repulsors }
+        let avgWidth: Float = ropes.isEmpty ? 0.08 : ropes.reduce(0) { $0 + $1.width } / Float(ropes.count)
+        let hookR = (avgWidth * 0.35) * 1.06
+        let hookStrength = hookR * 0.55
+        let hookCenters = TopologySampler.hookCenters(engine: topology)
+        repulsors.reserveCapacity(repulsors.count + hookCenters.count)
+        for c in hookCenters {
+            repulsors.append(SIMD4<Float>(c.x, c.y, hookR, hookStrength))
+        }
+        return repulsors
+    }
+
+    private static func tautness(points: UnsafeBufferPointer<SIMD3<Float>>) -> Float {
+        if points.count < 2 { return 0 }
+        var len: Float = 0
+        for i in 1..<points.count {
+            len += simd_length(points[i] - points[i - 1])
+        }
+        let chord = simd_length(points[points.count - 1] - points[0])
+        let stretch = chord / max(1e-6, len)
+        return smoothstep(edge0: 0.83, edge1: 0.985, value: stretch)
+    }
+
+    private static func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
+        let normalized = max(0, min(1, (value - edge0) / (edge1 - edge0)))
+        return normalized * normalized * (3 - 2 * normalized)
+    }
+    
+    private static func applyCrossingVisualDeform(points: [SIMD3<Float>], topology: TopologyEngine, ropeIndex: Int, ropeHeight: Float, ropeHeightForIndex: (Int) -> Float, ropeWidth: Float, ropeWidthForIndex: (Int) -> Float) -> [SIMD3<Float>] {
+        if points.count < 2 { return points }
+        if ropeIndex < 0 || ropeIndex >= topology.ropes.count { return points }
         
-        let bottomZ = center.z - height * 0.5
-        let topZ = center.z + height * 0.5
+        let nodes = topology.ropes[ropeIndex].nodes
+        var crossingIds: [Int] = []
+        crossingIds.reserveCapacity(nodes.count)
+        for n in nodes {
+            if case .crossing(let cid) = n {
+                crossingIds.append(cid)
+            }
+        }
+        if crossingIds.isEmpty { return points }
         
-        for i in 0...segments {
-            let angle = Float(i) / Float(segments) * Float.pi * 2
-            let x = center.x + cos(angle) * radius
-            let y = center.y + sin(angle) * radius
-            let normal = SIMD3<Float>(cos(angle), sin(angle), 0)
-            
-            vertices.append(RopeVertex(
-                position: SIMD3<Float>(x, y, bottomZ),
-                normal: normal,
-                color: color,
-                texCoord: SIMD2<Float>(Float(i) / Float(segments), 0)
-            ))
-            vertices.append(RopeVertex(
-                position: SIMD3<Float>(x, y, topZ),
-                normal: normal,
-                color: color,
-                texCoord: SIMD2<Float>(Float(i) / Float(segments), 1)
-            ))
+        let hookPairs = topology.findHookPairs()
+        var hookCrossingIds = Set<Int>()
+        hookCrossingIds.reserveCapacity(hookPairs.count * 2)
+        for hook in hookPairs {
+            hookCrossingIds.insert(hook.crossingIdA)
+            hookCrossingIds.insert(hook.crossingIdB)
         }
         
-        for i in 0..<segments {
-            let b0 = UInt32(i * 2)
-            let t0 = b0 + 1
-            let b1 = UInt32((i + 1) * 2)
-            let t1 = b1 + 1
-            
-            indices.append(contentsOf: [b0, b1, t1, b0, t1, t0])
+        struct CrossingInfluence {
+            let position: SIMD2<Float>
+            let radius: Float
+            let targetZ: Float
+            let isOver: Bool
         }
         
-        let bottomCenter = UInt32(vertices.count)
-        vertices.append(RopeVertex(
-            position: SIMD3<Float>(center.x, center.y, bottomZ),
-            normal: SIMD3<Float>(0, 0, -1),
-            color: color,
-            texCoord: SIMD2<Float>(0.5, 0.5)
-        ))
+        var influences: [CrossingInfluence] = []
+        influences.reserveCapacity(crossingIds.count)
         
-        let topCenter = UInt32(vertices.count)
-        vertices.append(RopeVertex(
-            position: SIMD3<Float>(center.x, center.y, topZ),
-            normal: SIMD3<Float>(0, 0, 1),
-            color: color,
-            texCoord: SIMD2<Float>(0.5, 0.5)
-        ))
-        
-        for i in 0..<segments {
-            let b0 = UInt32(i * 2)
-            let b1 = UInt32((i + 1) * 2)
-            indices.append(contentsOf: [bottomCenter, b1, b0])
-            
-            let t0 = b0 + 1
-            let t1 = b1 + 1
-            indices.append(contentsOf: [topCenter, t0, t1])
+        for cid in crossingIds {
+            if hookCrossingIds.contains(cid) { continue }
+            guard let cross = topology.crossings[cid] else { continue }
+            let isOver = cross.ropeOver == ropeIndex
+            let otherIndex = (cross.ropeA == ropeIndex) ? cross.ropeB : cross.ropeA
+            let otherHeight = ropeHeightForIndex(otherIndex)
+            let otherWidth = ropeWidthForIndex(otherIndex)
+            let base = max(ropeWidth, otherWidth)
+            let radius = max(base * 1.5, 0.06)
+            let targetZ: Float = isOver ? (otherHeight + 0.002) : 0
+            influences.append(CrossingInfluence(position: cross.position, radius: radius, targetZ: targetZ, isOver: isOver))
         }
         
-        return (vertices, indices)
+        if influences.isEmpty { return points }
+        
+        let count = points.count
+        var out = points
+        
+        for i in 0..<count {
+            let u = Float(i) / Float(max(1, count - 1))
+            let endFade = smoothstep(edge0: 0.08, edge1: 0.20, value: u) * smoothstep(edge0: 0.08, edge1: 0.20, value: 1 - u)
+            if endFade <= 1e-5 { continue }
+
+            var position = out[i]
+            let p2 = SIMD2<Float>(position.x, position.y)
+            var z = position.z
+
+            for inf in influences {
+                let dist = simd_length(p2 - inf.position)
+                if dist >= inf.radius { continue }
+                
+                let weight = 1.0 - (dist / inf.radius)
+                let smoothWeight = weight * weight * (3.0 - 2.0 * weight) * endFade
+                
+                if inf.isOver {
+                    z = max(z, inf.targetZ * smoothWeight)
+                }
+            }
+
+            position.z = z
+            out[i] = position
+        }
+        
+        return out
     }
 
     static func makeTwistEvents(topology: TopologyEngine?, ropeIndex: Int, points: UnsafeBufferPointer<SIMD3<Float>>) -> [RopeMeshBuilder.TwistEvent] {
         return []
+    }
+    
+    private static func applyHoleBendVisual(
+        points: [SIMD3<Float>],
+        topology: TopologyEngine?,
+        ropeIndex: Int,
+        holeRadius: Float,
+        holePositions: [SIMD2<Float>],
+        ropes: [RopeEndpoints]
+    ) -> [SIMD3<Float>] {
+        guard let topology, !points.isEmpty else { return points }
+        guard ropeIndex >= 0 && ropeIndex < topology.ropes.count else { return points }
+        
+        let rope = topology.ropes[ropeIndex]
+        guard rope.active && rope.nodes.count >= 2 else { return points }
+        
+        guard let startNode = rope.nodes.first,
+              let endNode = rope.nodes.last else { return points }
+        
+        guard ropeIndex < ropes.count else { return points }
+        let ropeEndpoints = ropes[ropeIndex]
+        
+        let holeDepth = holeRadius * 1.25
+        let holeInnerRadius = holeRadius * 0.76
+        
+        var startHolePos: SIMD2<Float>?
+        var endHolePos: SIMD2<Float>?
+        
+        if case .hole(let startHoleIndex) = startNode,
+           ropeEndpoints.startHole == startHoleIndex {
+            startHolePos = holePositions[safe: startHoleIndex]
+        }
+        
+        if case .hole(let endHoleIndex) = endNode,
+           ropeEndpoints.endHole == endHoleIndex {
+            endHolePos = holePositions[safe: endHoleIndex]
+        }
+        
+        guard startHolePos != nil || endHolePos != nil else { return points }
+        
+        var result = points
+        
+        for i in 0..<result.count {
+            let p = result[i]
+            let xy = SIMD2<Float>(p.x, p.y)
+            var z = p.z
+            
+            let wasRaisedByCrossing = z > 0.001
+            
+            if wasRaisedByCrossing {
+                result[i] = p
+                continue
+            }
+            
+            let u = Float(i) / Float(max(1, result.count - 1))
+            let nearStartWeight = 1.0 - smoothstep(edge0: 0.0, edge1: 0.25, value: u)
+            let nearEndWeight = 1.0 - smoothstep(edge0: 0.0, edge1: 0.25, value: 1.0 - u)
+            
+            if let startHole = startHolePos, nearStartWeight > 0.01 {
+                let distFromHoleCenter = simd_length(xy - startHole)
+                
+                if distFromHoleCenter <= holeInnerRadius {
+                    let depthFactor: Float = 1.0
+                    let holeBendZ = -holeDepth * depthFactor * nearStartWeight
+                    z = min(z, holeBendZ)
+                }
+            }
+            
+            if let endHole = endHolePos, nearEndWeight > 0.01 {
+                let distFromHoleCenter = simd_length(xy - endHole)
+                
+                if distFromHoleCenter <= holeInnerRadius {
+                    let depthFactor: Float = 1.0
+                    let holeBendZ = -holeDepth * depthFactor * nearEndWeight
+                    z = min(z, holeBendZ)
+                }
+            }
+            
+            result[i] = SIMD3<Float>(xy.x, xy.y, z)
+        }
+        
+        return result
     }
 
     private static func closestDistanceAlong(points: UnsafeBufferPointer<SIMD3<Float>>, toXY target: SIMD2<Float>) -> Float {
