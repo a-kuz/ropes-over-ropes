@@ -12,7 +12,7 @@ enum RopeMeshBuilder {
         let window: Float
     }
 
-    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, width: Float, height: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0, segmentStarts: [Int] = []) -> RopeMesh {
+    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, radius: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0, segmentStarts: [Int] = [], restLength: Float = 0) -> RopeMesh {
         let pointCount = points.count
         if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
         
@@ -28,9 +28,9 @@ enum RopeMeshBuilder {
         func segmentIndex(for pointIndex: Int) -> Int {
             if segmentStarts.isEmpty { return 0 }
             var seg = 0
-            for (i, start) in segmentStarts.enumerated() {
+            for (idx, start) in segmentStarts.enumerated() {
                 if pointIndex >= start {
-                    seg = i
+                    seg = idx
                 } else {
                     break
                 }
@@ -38,9 +38,8 @@ enum RopeMeshBuilder {
             return seg
         }
 
-        let bandWidth = max(0.0005, width)
-        let bandHeight = max(0.0005, height)
-        let profile = beveledProfile(width: bandWidth, height: bandHeight, radiusFactor: 0.22, cornerSegments: 5)
+        let r = max(0.0005, radius)
+        let profile = circularProfile(radius: r, segments: 16)
         let profileCount = profile.positions.count
 
         var totalLen: Float = 0
@@ -48,6 +47,9 @@ enum RopeMeshBuilder {
             totalLen += simd_length(points[pointIndex] - points[pointIndex - 1])
         }
         totalLen = max(1e-6, totalLen)
+        
+        let effectiveRestLength = restLength > 0 ? restLength : totalLen
+        let globalStretchFactor = totalLen / max(1e-6, effectiveRestLength)
 
         var vertices: [RopeVertex] = []
         vertices.reserveCapacity(pointCount * profileCount)
@@ -116,13 +118,22 @@ enum RopeMeshBuilder {
             let uCoord = distanceAlong / totalLen
             let center = sin(uCoord * Float.pi)
             let centerMask = center * center
+            let centerMaskStrong = centerMask * centerMask
+            
+            let baseLatexScale: Float = 0.90
+            
+            let stretchFromRest = max(0, globalStretchFactor - 1.0)
             
             let stretchEffect = stretchRatio - 1.0
-            let stretchPinch = stretchEffect > 0 ? stretchEffect * 0.35 * centerMask : 0.0
-            let stretchRelax = stretchEffect < 0 ? abs(stretchEffect) * 0.25 * centerMask : 0.0
+            let dragTension = max(0, stretchEffect)
             
-            let basePinch = tautness * centerMask
-            let pinch = basePinch + stretchPinch - stretchRelax * 0.4
+            let totalTension = stretchFromRest + dragTension * 0.8
+            
+            let latexDeform = totalTension * 0.35 * centerMaskStrong
+            
+            let stretchRelax = stretchEffect < 0 ? abs(stretchEffect) * 0.2 * centerMask : 0.0
+            
+            let pinch = latexDeform - stretchRelax * 0.3
             
             let adjustedTautness = max(0.0, tautness - stretchRelax * 0.3)
             
@@ -153,14 +164,13 @@ enum RopeMeshBuilder {
                 position.z += min(0.02, repelMagTotal * 0.22) * endFade
             }
 
-            let params = SIMD4<Float>(adjustedTautness, pinch, min(1, repelMagTotal / max(1e-4, width)), 0)
+            let params = SIMD4<Float>(adjustedTautness, pinch, min(1, repelMagTotal / max(1e-4, radius)), 0)
             
-            let stretchScaleW = stretchEffect > 0 ? (1.0 - stretchEffect * 0.18 * centerMask) : 1.0
-            let stretchScaleH = stretchEffect > 0 ? (1.0 - stretchEffect * 0.12 * centerMask) : 1.0
-            let scaleW = max(0.65, 1.0 - pinch * 0.22) * stretchScaleW
-            let scaleH = max(0.72, 1.0 - pinch * 0.12) * stretchScaleH
+            let latexThinning = 1.0 / sqrt(max(1.0, 1.0 + totalTension * 1.5 * centerMaskStrong))
+            let relaxThickening = 1.0 + stretchRelax * 0.15
+            let scale = max(0.45, baseLatexScale * latexThinning * relaxThickening)
             
-            let lightenAmount = stretchEffect > 0 ? stretchEffect * 0.32 * centerMask : 0.0
+            let lightenAmount = totalTension * centerMaskStrong * 0.35
             let baseColor: SIMD3<Float>
             if !segmentStarts.isEmpty {
                 let segIdx = segmentIndex(for: pointIndex)
@@ -192,7 +202,7 @@ enum RopeMeshBuilder {
             for k in 0..<profileCount {
                 let localPos = profile.positions[k]
                 let localN = profile.normals[k]
-                let worldPos = position + nrm * (localPos.x * scaleW) + bin * (localPos.y * scaleH)
+                let worldPos = position + nrm * (localPos.x * scale) + bin * (localPos.y * scale)
                 let worldN = simd_normalize(nrm * localN.x + bin * localN.y)
                 vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uCoord, profile.v[k]), params: params))
             }
@@ -250,45 +260,25 @@ enum RopeMeshBuilder {
         let v: [Float]
     }
 
-    private static func beveledProfile(width: Float, height: Float, radiusFactor: Float, cornerSegments: Int) -> Profile2D {
-        let halfW = width * 0.5
-        let halfH = height * 0.5
-        let rMax = max(0.0005, min(halfW, halfH))
-        let r = min(rMax * radiusFactor, rMax * 0.92)
-        let seg = max(2, min(12, cornerSegments))
+    private static func circularProfile(radius: Float, segments: Int) -> Profile2D {
+        let r = max(0.0005, radius)
+        let seg = max(8, min(32, segments))
 
         var pos: [SIMD2<Float>] = []
         var nrm: [SIMD2<Float>] = []
         var v: [Float] = []
 
-        pos.reserveCapacity(seg * 4 + 8)
-        nrm.reserveCapacity(seg * 4 + 8)
-        v.reserveCapacity(seg * 4 + 8)
+        pos.reserveCapacity(seg)
+        nrm.reserveCapacity(seg)
+        v.reserveCapacity(seg)
 
-        func addArc(cx: Float, cy: Float, a0: Float, a1: Float) {
-            for i in 0...seg {
-                let t = Float(i) / Float(seg)
-                let a = a0 + (a1 - a0) * t
-                let ca = cos(a)
-                let sa = sin(a)
-                pos.append(SIMD2<Float>(cx + ca * r, cy + sa * r))
-                nrm.append(simd_normalize(SIMD2<Float>(ca, sa)))
-            }
-        }
-
-        addArc(cx: halfW - r, cy: halfH - r, a0: 0, a1: Float.pi * 0.5)
-        addArc(cx: -halfW + r, cy: halfH - r, a0: Float.pi * 0.5, a1: Float.pi)
-        addArc(cx: -halfW + r, cy: -halfH + r, a0: Float.pi, a1: Float.pi * 1.5)
-        addArc(cx: halfW - r, cy: -halfH + r, a0: Float.pi * 1.5, a1: Float.pi * 2.0)
-
-        if pos.count > 1 {
-            pos.removeLast()
-            nrm.removeLast()
-        }
-
-        let count = pos.count
-        for i in 0..<count {
-            v.append(Float(i) / Float(count))
+        for i in 0..<seg {
+            let angle = Float(i) / Float(seg) * Float.pi * 2.0
+            let ca = cos(angle)
+            let sa = sin(angle)
+            pos.append(SIMD2<Float>(ca * r, sa * r))
+            nrm.append(simd_normalize(SIMD2<Float>(ca, sa)))
+            v.append(Float(i) / Float(seg))
         }
 
         return Profile2D(positions: pos, normals: nrm, v: v)

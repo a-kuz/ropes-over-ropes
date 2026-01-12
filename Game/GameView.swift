@@ -4,7 +4,7 @@ import SwiftUI
 class GameController: ObservableObject {
     weak var renderer: Renderer?
     
-    @Published var stepMultiplier: Float = 1.0 {
+    @Published var stepMultiplier: Float = 0.0200 {
         didSet { renderer?.hookStepMultiplier = stepMultiplier }
     }
     
@@ -12,7 +12,7 @@ class GameController: ObservableObject {
         didSet { renderer?.hookRadiusMultiplier = hookRadiusMultiplier }
     }
     
-    @Published var stepLimitMultiplier: Float = 1.0 {
+    @Published var stepLimitMultiplier: Float = 0.300 {
         didSet { renderer?.hookStepLimitMultiplier = stepLimitMultiplier }
     }
     
@@ -20,11 +20,11 @@ class GameController: ObservableObject {
         didSet { renderer?.debugSegmentColors = debugSegmentColors }
     }
     
-    @Published var smoothSubdivisions: Float = 6 {
+    @Published var smoothSubdivisions: Float = 1 {
         didSet { renderer?.smoothSubdivisions = Int(smoothSubdivisions) }
     }
     
-    @Published var smoothIterations: Float = 6 {
+    @Published var smoothIterations: Float = 2 {
         didSet { renderer?.smoothIterations = Int(smoothIterations) }
     }
     
@@ -59,6 +59,16 @@ struct GameView: UIViewRepresentable {
         let renderer = Renderer(view: view)
         context.coordinator.renderer = renderer
         controller.renderer = renderer
+        
+        renderer.hookStepMultiplier = controller.stepMultiplier
+        renderer.hookRadiusMultiplier = controller.hookRadiusMultiplier
+        renderer.hookStepLimitMultiplier = controller.stepLimitMultiplier
+        renderer.debugSegmentColors = controller.debugSegmentColors
+        renderer.smoothSubdivisions = Int(controller.smoothSubdivisions)
+        renderer.smoothIterations = Int(controller.smoothIterations)
+        renderer.smoothStrength = controller.smoothStrength
+        renderer.smoothZone = controller.smoothZone
+        
         view.delegate = renderer
         view.onTouch = { phase, location in
             renderer.handleTouch(phase: phase, location: location, in: view)

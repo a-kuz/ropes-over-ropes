@@ -62,6 +62,7 @@ extension Renderer {
         updateFrameUniforms(view: view)
         updateSnapAnimation(deltaTime: deltaTime)
         updateLazyDrag(deltaTime: deltaTime)
+        updateTension(deltaTime: deltaTime)
         updateSimulationTargets(deltaTime: deltaTime)
         applyDragPinsIfNeeded()
 
@@ -101,20 +102,17 @@ extension Renderer {
         if ropeCount > 0 {
             for ropeIndex in 0..<ropeCount {
                 if ropeIndex == animatingRopeIndex { continue }
-                let ropeHeight = ropes[safe: ropeIndex]?.height ?? 0.03
-                let lift = max(ropeHeight * 1.35, 0.02)
+                let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
+                let lift = max(ropeRadius * 2.7, 0.02)
                 let targets = TopologySampler.sampleRope(
                     engine: topology,
                     ropeIndex: ropeIndex,
                     count: simulation.particlesPerRope,
                     lift: lift,
                     dragLift: dragLift,
-                    ropeWidth: ropes[safe: ropeIndex]?.width ?? 0.085,
-                    ropeWidthForIndex: { idx in
-                        self.ropes[safe: idx]?.width ?? 0.085
-                    },
-                    ropeHeightForIndex: { idx in
-                        self.ropes[safe: idx]?.height ?? 0.03
+                    ropeRadius: ropeRadius,
+                    ropeRadiusForIndex: { idx in
+                        self.ropes[safe: idx]?.radius ?? 0.0425
                     },
                     holeRadius: holeRadius
                 )
@@ -122,7 +120,11 @@ extension Renderer {
             }
         }
 
-        simulation.projectAlpha = 0.65
+        if globalTensionActive {
+            simulation.projectAlpha = 0.92
+        } else {
+            simulation.projectAlpha = 0.65
+        }
         simulation.collisionsEnabled = true
         simulation.simulationEnabled = true
     }
@@ -182,6 +184,8 @@ extension Renderer {
             }
 
             removeUntangledRopes()
+            Self.logger.info("📍 SNAP ANIMATION COMPLETED - starting tension")
+            startTensionForAllRopes()
             snapAnimationState = nil
         } else {
             snapAnimationState = snapState
@@ -232,6 +236,146 @@ extension Renderer {
         }
 
         topology?.setFloating(ropeIndex: dragState.ropeIndex, position: dragWorldLazy)
+    }
+    
+    private func updateTension(deltaTime: Float) {
+        guard globalTensionActive else { return }
+        guard dragState == nil && snapAnimationState == nil else { return }
+        guard let topology else { return }
+        
+        let springK: Float = 25.0
+        let damping: Float = 6.0
+        let dt = min(deltaTime, 1.0 / 30.0)
+        
+        var anyActive = false
+        self.tensionLogCounter += 1
+        let shouldLog = self.tensionLogCounter % 60 == 0
+        
+        for ropeIndex in ropes.indices {
+            guard var state = ropeTensionStates[ropeIndex] else { continue }
+            
+            let restLength = ropeRestLengths[ropeIndex] ?? 1.0
+            let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
+            
+            let minPathLength = TopologySampler.ropePathLength(
+                engine: topology,
+                ropeIndex: ropeIndex,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: { self.ropes[safe: $0]?.radius ?? 0.0425 },
+                holeRadius: holeRadius
+            )
+            
+            let targetLength = max(restLength, minPathLength)
+            let prevLength = state.currentLength
+            let prevVel = state.velocity
+            
+            let displacement = state.currentLength - targetLength
+            let springForce = -springK * displacement
+            let dampingForce = -damping * state.velocity
+            let acceleration = springForce + dampingForce
+            
+            state.velocity += acceleration * dt
+            state.currentLength += state.velocity * dt
+            
+            var event = ""
+            if state.currentLength < targetLength {
+                state.currentLength = targetLength
+                if state.velocity < 0 {
+                    state.velocity = -state.velocity * 0.25
+                    event = "⚡BOUNCE"
+                }
+            }
+            
+            if prevVel * state.velocity < 0 && abs(prevVel) > 0.01 {
+                event += event.isEmpty ? "🔄REVERSE" : "+REV"
+            }
+            
+            let accelJump = abs(acceleration) > 5.0
+            if accelJump {
+                event += event.isEmpty ? "⚠️BIGACC" : "+BIGACC"
+            }
+            
+            if !event.isEmpty {
+                let sag = state.currentLength / max(0.001, restLength)
+                Self.logger.info("\(event) T[\(ropeIndex)] len:\(String(format: "%.3f", prevLength))→\(String(format: "%.3f", state.currentLength)) vel:\(String(format: "%.3f", prevVel))→\(String(format: "%.3f", state.velocity)) acc:\(String(format: "%.2f", acceleration)) sag:\(String(format: "%.3f", sag))")
+            } else if shouldLog {
+                let sag = state.currentLength / max(0.001, restLength)
+                Self.logger.info("🔧 T[\(ropeIndex)] len:\(String(format: "%.3f", state.currentLength)) tgt:\(String(format: "%.3f", targetLength)) vel:\(String(format: "%.3f", state.velocity)) sag:\(String(format: "%.3f", sag))")
+            }
+            
+            if abs(state.currentLength - targetLength) < 0.002 && abs(state.velocity) < 0.005 {
+                state.currentLength = targetLength
+                state.velocity = 0
+                ropeTensionStates.removeValue(forKey: ropeIndex)
+                Self.logger.info("✅ TENSION DONE rope[\(ropeIndex)]")
+            } else {
+                ropeTensionStates[ropeIndex] = state
+                anyActive = true
+            }
+            
+            let endpoints = ropes[ropeIndex]
+            guard let startPin = holePositions[safe: endpoints.startHole],
+                  let endPin = holePositions[safe: endpoints.endHole] else { continue }
+            
+            let sagMultiplier = state.currentLength / max(0.001, restLength)
+            
+            simulation.setPinsWithSag(
+                ropeIndex: ropeIndex,
+                pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
+                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
+                sagMultiplier: sagMultiplier
+            )
+        }
+        
+        if !anyActive {
+            globalTensionActive = false
+        }
+    }
+    
+    private func startTensionForAllRopes() {
+        guard let topology else { return }
+        
+        let stretchFactor: Float = 1.12
+        let initialVelocity: Float = -0.8
+        
+        for ropeIndex in ropes.indices {
+            let endpoints = ropes[ropeIndex]
+            guard holePositions[safe: endpoints.startHole] != nil,
+                  holePositions[safe: endpoints.endHole] != nil else { continue }
+            
+            let restLength = ropeRestLengths[ropeIndex] ?? 1.0
+            let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
+            
+            let currentPathLength = TopologySampler.ropePathLength(
+                engine: topology,
+                ropeIndex: ropeIndex,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: { self.ropes[safe: $0]?.radius ?? 0.0425 },
+                holeRadius: holeRadius
+            )
+            
+            let initialLength = max(currentPathLength * stretchFactor, restLength * stretchFactor)
+            
+            ropeTensionStates[ropeIndex] = RopeTensionState(
+                currentLength: initialLength,
+                velocity: initialVelocity
+            )
+            
+            guard let startPin = holePositions[safe: endpoints.startHole],
+                  let endPin = holePositions[safe: endpoints.endHole] else { continue }
+            
+            let sagMultiplier = initialLength / max(0.001, restLength)
+            
+            simulation.setPinsWithSag(
+                ropeIndex: ropeIndex,
+                pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
+                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
+                sagMultiplier: sagMultiplier
+            )
+        }
+        
+        globalTensionActive = true
+        Self.logger.info("🚀 TENSION STARTED for \(self.ropeTensionStates.count) ropes")
     }
 
     private func applyDragPinsIfNeeded() {
