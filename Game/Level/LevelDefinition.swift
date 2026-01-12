@@ -32,23 +32,20 @@ struct LevelDefinition: Codable {
         let startHole: Int
         let endHole: Int
         let color: Color
-        let width: Float
-        let height: Float
+        let radius: Float
 
         enum CodingKeys: String, CodingKey {
             case startHole
             case endHole
             case color
-            case width
-            case height
+            case radius
         }
 
-        init(startHole: Int, endHole: Int, color: Color, width: Float, height: Float) {
+        init(startHole: Int, endHole: Int, color: Color, radius: Float) {
             self.startHole = startHole
             self.endHole = endHole
             self.color = color
-            self.width = width
-            self.height = height
+            self.radius = radius
         }
 
         init(from decoder: Decoder) throws {
@@ -56,8 +53,28 @@ struct LevelDefinition: Codable {
             startHole = try container.decode(Int.self, forKey: .startHole)
             endHole = try container.decode(Int.self, forKey: .endHole)
             color = try container.decode(Color.self, forKey: .color)
-            width = try container.decodeIfPresent(Float.self, forKey: .width) ?? 0.085
-            height = try container.decodeIfPresent(Float.self, forKey: .height) ?? 0.030
+            if let radius = try? container.decode(Float.self, forKey: .radius) {
+                self.radius = radius
+            } else {
+                let allKeys = try decoder.container(keyedBy: AnyCodingKey.self)
+                let width = try allKeys.decodeIfPresent(Float.self, forKey: AnyCodingKey(stringValue: "width")!) ?? 0.085
+                let height = try allKeys.decodeIfPresent(Float.self, forKey: AnyCodingKey(stringValue: "height")!) ?? 0.030
+                self.radius = max(width, height) * 0.5
+            }
+        }
+        
+        private struct AnyCodingKey: CodingKey {
+            var stringValue: String
+            var intValue: Int?
+            
+            init?(stringValue: String) {
+                self.stringValue = stringValue
+            }
+            
+            init?(intValue: Int) {
+                self.intValue = intValue
+                self.stringValue = "\(intValue)"
+            }
         }
     }
 

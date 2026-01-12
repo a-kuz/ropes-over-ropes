@@ -22,6 +22,7 @@ final class RopePhysics {
     
     private var lastRopeStates: [RopeState] = []
     private var lastHookStates: [HookState] = []
+    private var lastLogTime: Double = 0
     
     func logStateIfNeeded(
         time: Double,
@@ -50,8 +51,10 @@ final class RopePhysics {
         
         let ropesChanged = currentRopeStates != lastRopeStates
         let hooksChanged = currentHookStates != lastHookStates
+        let timeSinceLastLog = time - lastLogTime
         
-        if ropesChanged || hooksChanged {
+        if (ropesChanged || hooksChanged) && timeSinceLastLog >= 1.0 {
+            lastLogTime = time
             lastRopeStates = currentRopeStates
             lastHookStates = currentHookStates
             

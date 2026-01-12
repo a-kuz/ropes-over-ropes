@@ -44,8 +44,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         var startHole: Int
         var endHole: Int
         var color: SIMD3<Float>
-        var width: Float
-        var height: Float
+        var radius: Float
     }
 
     var ropes: [RopeEndpoints] = []
@@ -85,6 +84,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         var originalHoleIndex: Int
     }
     var snapAnimationState: SnapAnimationState?
+    
+    struct RopeTensionState {
+        var currentLength: Float
+        var velocity: Float
+    }
+    var ropeTensionStates: [Int: RopeTensionState] = [:]
+    var globalTensionActive: Bool = false
+    var ropeRestLengths: [Int: Float] = [:]
+    var tensionLogCounter: Int = 0
 
     var ropeVB: MTLBuffer?
     var ropeIB: MTLBuffer?
@@ -110,30 +118,30 @@ final class Renderer: NSObject, MTKViewDelegate {
     var ropeRenderDisableBandRepulsion: Bool = true
     var ropeRenderDisableCrossingDeform: Bool = true
     var ropeRenderDisableHoleDeform: Bool = true
-    var ropeRenderDisableDragCrossingPhysics: Bool = true
+    var ropeRenderDisableDragCrossingPhysics: Bool = false
     
-    var hookStepMultiplier: Float = 1.0 {
+    var hookStepMultiplier: Float = 0.0900 {
         didSet { TopologySampler.hookStepMultiplier = hookStepMultiplier }
     }
-    var hookRadiusMultiplier: Float = 1.0 {
+    var hookRadiusMultiplier: Float = 0.920 {
         didSet { TopologySampler.hookRadiusMultiplier = hookRadiusMultiplier }
     }
-    var hookStepLimitMultiplier: Float = 1.0 {
+    var hookStepLimitMultiplier: Float = 2.5000 {
         didSet { TopologySampler.hookStepLimitMultiplier = hookStepLimitMultiplier }
     }
-    var debugSegmentColors: Bool = false {
+    var debugSegmentColors: Bool = true {
         didSet { TopologySampler.debugSegmentColors = debugSegmentColors }
     }
-    var smoothSubdivisions: Int = 6 {
+    var smoothSubdivisions: Int = 4 {
         didSet { TopologySampler.smoothSubdivisions = smoothSubdivisions }
     }
-    var smoothIterations: Int = 6 {
+    var smoothIterations: Int = 0 {
         didSet { TopologySampler.smoothIterations = smoothIterations }
     }
-    var smoothStrength: Float = 0.4 {
+    var smoothStrength: Float = 0.00 {
         didSet { TopologySampler.smoothStrength = smoothStrength }
     }
-    var smoothZone: Float = 1.0 {
+    var smoothZone: Float = 0.001 {
         didSet { TopologySampler.smoothZone = smoothZone }
     }
 
@@ -162,6 +170,15 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         super.init()
         
+        TopologySampler.hookStepMultiplier = hookStepMultiplier
+        TopologySampler.hookRadiusMultiplier = hookRadiusMultiplier
+        TopologySampler.hookStepLimitMultiplier = hookStepLimitMultiplier
+        TopologySampler.debugSegmentColors = debugSegmentColors
+        TopologySampler.smoothSubdivisions = smoothSubdivisions
+        TopologySampler.smoothIterations = smoothIterations
+        TopologySampler.smoothStrength = smoothStrength
+        TopologySampler.smoothZone = smoothZone
+        
         loadLevel(levelId: 1)
     }
     
@@ -180,6 +197,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragOscillationPhase = 0.0
         dragOscillationVelocity = 0.0
         dragOscillationRopeIndex = nil
+        ropeTensionStates = [:]
+        globalTensionActive = false
+        ropeRestLengths = [:]
+        tensionLogCounter = 0
         
         let fallbackLayout = Self.makeHoleLayout()
         let level = LevelLoader.load(levelId: levelId)
@@ -199,22 +220,19 @@ final class Renderer: NSObject, MTKViewDelegate {
                 startHole: 0,
                 endHole: min(14, levelHoles.count - 1),
                 color: .init(redChannel: 0.20, greenChannel: 0.95, blueChannel: 0.35),
-                width: 0.090,
-                height: 0.030
+                radius: 0.045
             ),
             LevelDefinition.Rope(
                 startHole: 3,
                 endHole: min(17, levelHoles.count - 1),
                 color: .init(redChannel: 0.30, greenChannel: 0.55, blueChannel: 0.98),
-                width: 0.088,
-                height: 0.029
+                radius: 0.044
             ),
             LevelDefinition.Rope(
                 startHole: min(6, levelHoles.count - 1),
                 endHole: min(11, levelHoles.count - 1),
                 color: .init(redChannel: 0.96, greenChannel: 0.28, blueChannel: 0.33),
-                width: 0.086,
-                height: 0.028
+                radius: 0.043
             )
         ]
         let candidateRopes = (level != nil && !level!.ropes.isEmpty) ? level!.ropes : defaultRopes
@@ -232,8 +250,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                     startHole: 0,
                     endHole: 1,
                     color: .init(redChannel: 0.85, greenChannel: 0.85, blueChannel: 0.92),
-                    width: 0.090,
-                    height: 0.030
+                    radius: 0.045
                 )
             ]
         }
@@ -247,7 +264,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         holeInstances = Self.makeHoleInstances(device: device, positions: levelHoles, radius: levelHoleRadius)
 
         ropes = validatedRopes.map { rope in
-            RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, width: rope.width, height: rope.height)
+            RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, radius: rope.radius)
         }
 
         let ropeConfigs = ropes.map { rope in
@@ -267,6 +284,7 @@ final class Renderer: NSObject, MTKViewDelegate {
                 pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
                 pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
             )
+            ropeRestLengths[ropeIndex] = simd_length(pinEnd - pinStart)
         }
     }
 

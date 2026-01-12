@@ -43,87 +43,23 @@ struct ContentView: View {
                 if showControls {
                     ScrollView {
                         VStack(spacing: 8) {
-                            HStack {
-                                Text("Step")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.stepMultiplier, in: 0.0001...100.0)
-                                Text(String(format: "%.4f", gameController.stepMultiplier))
-                                    .foregroundColor(.white)
-                                    .frame(width: 60)
-                                    .font(.system(size: 12))
-                            }
-                            
-                            HStack {
-                                Text("R")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.hookRadiusMultiplier, in: 0.001...100.0)
-                                Text(String(format: "%.3f", gameController.hookRadiusMultiplier))
-                                    .foregroundColor(.white)
-                                    .frame(width: 60)
-                                    .font(.system(size: 12))
-                            }
-                            
-                            HStack {
-                                Text("Limit")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.stepLimitMultiplier, in: 0.0001...100.0)
-                                Text(String(format: "%.4f", gameController.stepLimitMultiplier))
-                                    .foregroundColor(.white)
-                                    .frame(width: 60)
-                                    .font(.system(size: 12))
-                            }
+                            ParamRow(label: "Step", value: $gameController.stepMultiplier, range: 0.0001...1000.0, format: "%.4f")
+                            ParamRow(label: "R", value: $gameController.hookRadiusMultiplier, range: 0.001...1000.0, format: "%.3f")
+                            ParamRow(label: "Limit", value: $gameController.stepLimitMultiplier, range: 0.0001...1000.0, format: "%.4f")
                             
                             Toggle("Segments", isOn: $gameController.debugSegmentColors)
                                 .foregroundColor(.white)
                             
                             Divider().background(Color.white.opacity(0.3))
                             
-                            HStack {
-                                Text("Subdiv")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.smoothSubdivisions, in: 1...200, step: 1)
-                                Text("\(Int(gameController.smoothSubdivisions))")
-                                    .foregroundColor(.white)
-                                    .frame(width: 40)
-                            }
-                            
-                            HStack {
-                                Text("Iters")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.smoothIterations, in: 0...200, step: 1)
-                                Text("\(Int(gameController.smoothIterations))")
-                                    .foregroundColor(.white)
-                                    .frame(width: 40)
-                            }
-                            
-                            HStack {
-                                Text("Smooth")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.smoothStrength, in: 0...10.0)
-                                Text(String(format: "%.2f", gameController.smoothStrength))
-                                    .foregroundColor(.white)
-                                    .frame(width: 40)
-                            }
-                            
-                            HStack {
-                                Text("Zone")
-                                    .foregroundColor(.white)
-                                    .frame(width: 55, alignment: .leading)
-                                Slider(value: $gameController.smoothZone, in: 0.01...10.0)
-                                Text(String(format: "%.2f", gameController.smoothZone))
-                                    .foregroundColor(.white)
-                                    .frame(width: 40)
-                            }
+                            ParamRowInt(label: "Subdiv", value: $gameController.smoothSubdivisions, range: 1...500)
+                            ParamRowInt(label: "Iters", value: $gameController.smoothIterations, range: 0...500)
+                            ParamRow(label: "Smooth", value: $gameController.smoothStrength, range: 0...100.0, format: "%.2f")
+                            ParamRow(label: "Zone", value: $gameController.smoothZone, range: 0.001...100.0, format: "%.3f")
                         }
                         .padding()
                     }
-                    .frame(maxHeight: 350)
+                    .frame(maxHeight: 400)
                     .background(Color.black.opacity(0.7))
                     .cornerRadius(12)
                     .padding(.horizontal, 20)
@@ -133,5 +69,92 @@ struct ContentView: View {
                 Spacer()
             }
         }
+    }
+}
+
+struct ParamRow: View {
+    let label: String
+    @Binding var value: Float
+    let range: ClosedRange<Float>
+    let format: String
+    
+    @State private var textValue: String = ""
+    @FocusState private var isEditing: Bool
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.white)
+                .frame(width: 55, alignment: .leading)
+            
+            Slider(value: $value, in: range)
+                .onChange(of: value) { _, newVal in
+                    if !isEditing {
+                        textValue = String(format: format, newVal)
+                    }
+                }
+            
+            TextField("", text: $textValue)
+                .focused($isEditing)
+                .frame(width: 70)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+                .keyboardType(.decimalPad)
+                .onAppear { textValue = String(format: format, value) }
+                .onSubmit { applyText() }
+                .onChange(of: isEditing) { _, editing in
+                    if !editing { applyText() }
+                }
+        }
+    }
+    
+    private func applyText() {
+        if let parsed = Float(textValue.replacingOccurrences(of: ",", with: ".")) {
+            value = min(max(parsed, range.lowerBound), range.upperBound)
+        }
+        textValue = String(format: format, value)
+    }
+}
+
+struct ParamRowInt: View {
+    let label: String
+    @Binding var value: Float
+    let range: ClosedRange<Int>
+    
+    @State private var textValue: String = ""
+    @FocusState private var isEditing: Bool
+    
+    var body: some View {
+        HStack {
+            Text(label)
+                .foregroundColor(.white)
+                .frame(width: 55, alignment: .leading)
+            
+            Slider(value: $value, in: Float(range.lowerBound)...Float(range.upperBound), step: 1)
+                .onChange(of: value) { _, newVal in
+                    if !isEditing {
+                        textValue = "\(Int(newVal))"
+                    }
+                }
+            
+            TextField("", text: $textValue)
+                .focused($isEditing)
+                .frame(width: 50)
+                .textFieldStyle(.roundedBorder)
+                .font(.system(size: 11, design: .monospaced))
+                .keyboardType(.numberPad)
+                .onAppear { textValue = "\(Int(value))" }
+                .onSubmit { applyText() }
+                .onChange(of: isEditing) { _, editing in
+                    if !editing { applyText() }
+                }
+        }
+    }
+    
+    private func applyText() {
+        if let parsed = Int(textValue) {
+            value = Float(min(max(parsed, range.lowerBound), range.upperBound))
+        }
+        textValue = "\(Int(value))"
     }
 }

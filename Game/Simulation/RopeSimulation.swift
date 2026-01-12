@@ -145,6 +145,14 @@ final class RopeSimulation {
         metaValue.count = 0
         metaPtr[ropeIndex] = metaValue
     }
+    
+    func restLength(ropeIndex: Int) -> Float {
+        guard ropeIndex >= 0 && ropeIndex < ropeCount else { return 0 }
+        let metaPtr = ropeMeta.contents().bindMemory(to: RopeMetaGPU.self, capacity: ropeCount)
+        let metaValue = metaPtr[ropeIndex]
+        let segmentRestLength = Float(bitPattern: metaValue.restLengthBits)
+        return segmentRestLength * Float(max(1, particlesPerRope - 1))
+    }
 
     func step(deltaTime: Float) {
         let params = RopeSimParams(

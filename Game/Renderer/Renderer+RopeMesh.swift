@@ -17,54 +17,53 @@ extension Renderer {
         let repulsorsBase = ropeRenderSimpleMode ? [] : makeRepulsorsBase()
         let repulsorsWithTopology = ropeRenderSimpleMode ? [] : makeRepulsorsWithTopology()
 
-        let ropeWidthForIndex: (Int) -> Float = { idx in
-            self.ropes[safe: idx]?.width ?? 0.085
-        }
-        let ropeHeightForIndex: (Int) -> Float = { idx in
-            self.ropes[safe: idx]?.height ?? 0.03
+        let ropeRadiusForIndex: (Int) -> Float = { idx in
+            self.ropes[safe: idx]?.radius ?? 0.0425
         }
         
         var allRopePoints: [[SIMD3<Float>]] = []
         var allSegmentStarts: [[Int]] = []
-        var ropeWidths: [Float] = []
-        var ropeHeights: [Float] = []
+        var ropeRadii: [Float] = []
         
         for ropeIndex in ropes.indices {
             if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 {
                 allRopePoints.append([])
                 allSegmentStarts.append([])
-                ropeWidths.append(0)
-                ropeHeights.append(0)
+                ropeRadii.append(0)
                 continue
             }
             
-            let ropeWidth = ropes[ropeIndex].width
-            let ropeHeight = ropes[ropeIndex].height
-            ropeWidths.append(ropeWidth)
-            ropeHeights.append(ropeHeight)
+            let ropeRadius = ropes[ropeIndex].radius
+            ropeRadii.append(ropeRadius)
             
+            var points: [SIMD3<Float>] = []
+            simulation.withRopePositions(ropeIndex: ropeIndex) { buffer in
+                points = Array(buffer)
+            }
+            
+            if let tensionState = ropeTensionStates[ropeIndex], globalTensionActive {
+                let restLength = ropeRestLengths[ropeIndex] ?? 1.0
+                let sagRatio = (tensionState.currentLength - restLength) / max(0.001, restLength)
+                points = Self.applySagToPoints(points: points, sagRatio: sagRatio, ropeRadius: ropeRadius)
+            }
+            
+            var segmentStarts: [Int] = [0]
             if let topology {
-                let lift = max(ropeHeight * 1.35, 0.02)
+                let lift = max(ropeRadius * 2.7, 0.02)
                 let result = TopologySampler.sampleRopeRender(
                     engine: topology,
                     ropeIndex: ropeIndex,
                     lift: lift,
                     dragLift: dragLift,
-                    ropeWidth: ropeWidth,
-                    ropeWidthForIndex: ropeWidthForIndex,
-                    ropeHeightForIndex: ropeHeightForIndex,
+                    ropeRadius: ropeRadius,
+                    ropeRadiusForIndex: ropeRadiusForIndex,
                     holeRadius: holeRadius
                 )
-                allRopePoints.append(result.points)
-                allSegmentStarts.append(result.segmentStarts)
-            } else {
-                var points: [SIMD3<Float>] = []
-                simulation.withRopePositions(ropeIndex: ropeIndex) { buffer in
-                    points = Array(buffer)
-                }
-                allRopePoints.append(points)
-                allSegmentStarts.append([0])
+                segmentStarts = result.segmentStarts
             }
+            
+            allRopePoints.append(points)
+            allSegmentStarts.append(segmentStarts)
         }
         
         for ropeIndex in ropes.indices {
@@ -72,8 +71,7 @@ extension Renderer {
             if allRopePoints[ropeIndex].isEmpty { continue }
             
             let ropeColor = ropes[ropeIndex].color
-            let ropeWidth = ropes[ropeIndex].width
-            let ropeHeight = ropes[ropeIndex].height
+            let ropeRadius = ropes[ropeIndex].radius
             
             var renderPoints = allRopePoints[ropeIndex]
             
@@ -93,21 +91,23 @@ extension Renderer {
             let oscillation = (dragOscillationRopeIndex == ropeIndex) ? dragOscillationPhase : 0.0
             let segmentStarts = allSegmentStarts[ropeIndex]
             
+            let ropeRestLength = simulation.restLength(ropeIndex: ropeIndex)
+            
             let ropeMesh = renderPoints.withUnsafeBufferPointer { pointsBuffer in
                 let events = Self.makeTwistEvents(topology: topology, ropeIndex: ropeIndex, points: pointsBuffer)
                 let taut = ropeRenderSimpleMode ? 0 : Self.tautness(points: pointsBuffer)
                 let repulsors = ropeRenderSimpleMode ? [] : (topology != nil ? repulsorsWithTopology : repulsorsBase)
                 return RopeMeshBuilder.buildRect(
                     points: pointsBuffer,
-                    width: ropeWidth,
-                    height: ropeHeight,
+                    radius: ropeRadius,
                     color: ropeColor,
                     twistEvents: events,
                     tautness: taut,
                     repulsors: repulsors,
                     stretchRatio: ropeRenderSimpleMode ? 1.0 : stretchRatio,
                     oscillation: ropeRenderSimpleMode ? 0.0 : oscillation,
-                    segmentStarts: TopologySampler.debugSegmentColors ? segmentStarts : []
+                    segmentStarts: TopologySampler.debugSegmentColors ? segmentStarts : [],
+                    restLength: ropeRenderSimpleMode ? 0 : ropeRestLength
                 )
             }
             
@@ -169,8 +169,8 @@ extension Renderer {
         
         guard let topology else { return repulsors }
         
-        let hookCenters = TopologySampler.hookCenters(engine: topology, ropeWidthForIndex: { idx in
-            self.ropes[safe: idx]?.width ?? 0.085
+        let hookCenters = TopologySampler.hookCenters(engine: topology, ropeRadiusForIndex: { idx in
+            self.ropes[safe: idx]?.radius ?? 0.0425
         })
         
         for c in hookCenters {
@@ -255,6 +255,47 @@ extension Renderer {
     private static func smoothstep(edge0: Float, edge1: Float, value: Float) -> Float {
         let normalized = max(0, min(1, (value - edge0) / (edge1 - edge0)))
         return normalized * normalized * (3 - 2 * normalized)
+    }
+    
+    private static func applySagToPoints(points: [SIMD3<Float>], sagRatio: Float, ropeRadius: Float) -> [SIMD3<Float>] {
+        guard points.count >= 2 else { return points }
+        guard sagRatio > 0.001 else { return points }
+        
+        var result = points
+        let count = result.count
+        
+        var cumLen: [Float] = [0]
+        for i in 1..<count {
+            cumLen.append(cumLen[i-1] + simd_length(points[i] - points[i-1]))
+        }
+        let totalLen = cumLen.last ?? 1.0
+        
+        let baseZ = ropeRadius
+        var minPositiveZ: Float = .greatestFiniteMagnitude
+        for p in points where p.z > 0 {
+            minPositiveZ = min(minPositiveZ, p.z)
+        }
+        if minPositiveZ == .greatestFiniteMagnitude {
+            minPositiveZ = baseZ
+        }
+        
+        let maxSagDrop = sagRatio * 0.35
+        
+        for i in 0..<count {
+            let originalZ = points[i].z
+            if originalZ < 0 { continue }
+            
+            let t = cumLen[i] / max(0.001, totalLen)
+            let parabola = 4.0 * t * (1.0 - t)
+            
+            let heightAboveMin = originalZ - minPositiveZ
+            let sagDrop = maxSagDrop * parabola
+            let newMinZ = max(baseZ, minPositiveZ - sagDrop)
+            
+            result[i].z = newMinZ + heightAboveMin
+        }
+        
+        return result
     }
     
     private static func applyHoleBendVisual(
