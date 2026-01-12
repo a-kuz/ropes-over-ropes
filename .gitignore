@@ -106,6 +106,7 @@ Temporary Items
 # Jupyter Notebook
 .ipynb_checkpoints
 */.ipynb_checkpoints/*
-ipynb
 */.ipynb_checkpoints/*
 # *.ipynb
+
+Untitled*

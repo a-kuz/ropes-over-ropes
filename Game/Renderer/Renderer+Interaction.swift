@@ -99,14 +99,14 @@ extension Renderer {
                   let endHolePosition = holePositions[safe: endHoleIndex] else { continue }
 
             let startDistance = simd_length(world - startHolePosition)
-            let startTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 0) ?? true
+            let startTopAllowed = isEndTopForDrag(ropeIndex: ropeIndex, endIndex: 0)
             let startScore = startDistance + (startTopAllowed ? 0 : hitRadius * 0.75)
             if startDistance < hitRadius && (best == nil || startScore < best!.score) {
                 best = DragCandidate(ropeIndex: ropeIndex, endIndex: 0, holeIndex: startHoleIndex, score: startScore)
             }
 
             let endDistance = simd_length(world - endHolePosition)
-            let endTopAllowed = topology?.isEndTop(ropeIndex: ropeIndex, endIndex: 1) ?? true
+            let endTopAllowed = isEndTopForDrag(ropeIndex: ropeIndex, endIndex: 1)
             let endScore = endDistance + (endTopAllowed ? 0 : hitRadius * 0.75)
             if endDistance < hitRadius && (best == nil || endScore < best!.score) {
                 best = DragCandidate(ropeIndex: ropeIndex, endIndex: 1, holeIndex: endHoleIndex, score: endScore)
@@ -126,8 +126,8 @@ extension Renderer {
             lastDragWorld = initial
             dragSagProgress = 0.0
             holeOccupied[best.holeIndex] = false
-            topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, floatingPosition: dragWorldLazy)
-            let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], crossings: [:], nextCrossingId: 1, floatingPositions: [:])
+            topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, position: dragWorldLazy)
+            let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], hooks: [:], nextHookId: 1)
             
             let endpoints = ropes[best.ropeIndex]
             let startHoleIndex = endpoints.startHole
@@ -285,6 +285,16 @@ extension Renderer {
         let worldPoint = camera.center + right * viewX + up * viewY
         
         return SIMD2<Float>(worldPoint.x, worldPoint.y)
+    }
+    
+    private func isEndTopForDrag(ropeIndex: Int, endIndex: Int) -> Bool {
+        guard let topology else { return true }
+        for (_, hook) in topology.hooks {
+            if hook.ropeA == ropeIndex || hook.ropeB == ropeIndex {
+                return topology.isEndTop(ropeIndex: ropeIndex, endIndex: endIndex, hook: hook)
+            }
+        }
+        return true
     }
 }
 

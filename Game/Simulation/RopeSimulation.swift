@@ -124,6 +124,20 @@ final class RopeSimulation {
         metaPtr[ropeIndex] = metaValue
     }
 
+    func setPinsWithSag(ropeIndex: Int, pinStart: SIMD3<Float>, pinEnd: SIMD3<Float>, sagMultiplier: Float) {
+        guard ropeIndex >= 0 && ropeIndex < ropeCount else { return }
+        let metaPtr = ropeMeta.contents().bindMemory(to: RopeMetaGPU.self, capacity: ropeCount)
+        var metaValue = metaPtr[ropeIndex]
+        if metaValue.count == 0 { return }
+        metaValue.pinA = SIMD4<Float>(pinStart.x, pinStart.y, pinStart.z, 1)
+        metaValue.pinB = SIMD4<Float>(pinEnd.x, pinEnd.y, pinEnd.z, 1)
+        let actualLength = simd_length(pinEnd - pinStart)
+        let effectiveLength = actualLength * sagMultiplier
+        let segmentRestLength = effectiveLength / Float(max(1, particlesPerRope - 1))
+        metaValue.restLengthBits = segmentRestLength.bitPattern
+        metaPtr[ropeIndex] = metaValue
+    }
+
     func deactivateRope(ropeIndex: Int) {
         guard ropeIndex >= 0 && ropeIndex < ropeCount else { return }
         let metaPtr = ropeMeta.contents().bindMemory(to: RopeMetaGPU.self, capacity: ropeCount)
