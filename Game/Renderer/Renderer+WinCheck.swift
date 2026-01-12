@@ -14,6 +14,22 @@ extension Renderer {
                 }
             }
         }
+        
+        checkLevelComplete()
+    }
+    
+    private func checkLevelComplete() {
+        guard let topology else { return }
+        let hasNoHooks = topology.hooks.isEmpty
+        if hasNoHooks {
+            let nextLevelId = currentLevelId + 1
+            if LevelLoader.load(levelId: nextLevelId) != nil {
+                Self.logger.info("Level \(self.currentLevelId) completed! No hooks remaining. Loading level \(nextLevelId)...")
+                loadLevel(levelId: nextLevelId)
+            } else {
+                Self.logger.info("Level \(self.currentLevelId) completed! No hooks remaining. No more levels available.")
+            }
+        }
     }
 
     private func deactivateRope(ropeIndex: Int) {
@@ -33,47 +49,15 @@ extension Renderer {
 
     private func isRopeUntangled(ropeIndex: Int) -> Bool {
         guard let topology else { return false }
-        if ropeIndex >= topology.ropes.count { return false }
-        if !topology.ropes[ropeIndex].active { return false }
-        if topology.ropes[ropeIndex].nodes.count < 2 { return false }
+        guard topology.ropes.indices.contains(ropeIndex) else { return false }
+        guard topology.ropes[ropeIndex].active else { return false }
 
-        for crossing in topology.crossings.values {
-            if crossing.ropeA == ropeIndex || crossing.ropeB == ropeIndex {
+        for (_, hook) in topology.hooks {
+            if hook.ropeA == ropeIndex || hook.ropeB == ropeIndex {
                 return false
             }
         }
 
         return true
-    }
-
-    private func segmentsIntersect(
-        segmentAStart: SIMD2<Float>,
-        segmentAEnd: SIMD2<Float>,
-        segmentBStart: SIMD2<Float>,
-        segmentBEnd: SIMD2<Float>
-    ) -> Bool {
-        let orient1 = orient(pointA: segmentAStart, pointB: segmentAEnd, pointC: segmentBStart)
-        let orient2 = orient(pointA: segmentAStart, pointB: segmentAEnd, pointC: segmentBEnd)
-        let orient3 = orient(pointA: segmentBStart, pointB: segmentBEnd, pointC: segmentAStart)
-        let orient4 = orient(pointA: segmentBStart, pointB: segmentBEnd, pointC: segmentAEnd)
-
-        if orient1 == 0 && onSegment(start: segmentAStart, end: segmentAEnd, point: segmentBStart) { return true }
-        if orient2 == 0 && onSegment(start: segmentAStart, end: segmentAEnd, point: segmentBEnd) { return true }
-        if orient3 == 0 && onSegment(start: segmentBStart, end: segmentBEnd, point: segmentAStart) { return true }
-        if orient4 == 0 && onSegment(start: segmentBStart, end: segmentBEnd, point: segmentAEnd) { return true }
-
-        return (orient1 != orient2) && (orient3 != orient4)
-    }
-
-    private func orient(pointA: SIMD2<Float>, pointB: SIMD2<Float>, pointC: SIMD2<Float>) -> Int {
-        let value = (pointB.y - pointA.y) * (pointC.x - pointB.x) - (pointB.x - pointA.x) * (pointC.y - pointB.y)
-        let eps: Float = 1e-6
-        if abs(value) < eps { return 0 }
-        return value > 0 ? 1 : 2
-    }
-
-    private func onSegment(start: SIMD2<Float>, end: SIMD2<Float>, point: SIMD2<Float>) -> Bool {
-        min(start.x, end.x) - 1e-6 <= point.x && point.x <= max(start.x, end.x) + 1e-6 &&
-        min(start.y, end.y) - 1e-6 <= point.y && point.y <= max(start.y, end.y) + 1e-6
     }
 }

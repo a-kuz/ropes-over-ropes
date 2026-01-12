@@ -203,7 +203,7 @@ extension Renderer {
         let isShrinking = targetLength < currentLazyLength
 
         if isStretching {
-            let stretchSpeed: Float = 12.0
+            let stretchSpeed: Float = 18.0
             let toTarget = dragWorldTarget - dragWorldLazy
             let moveAmount = min(simd_length(toTarget), stretchSpeed * deltaTime)
             if moveAmount > 1e-6 {
@@ -212,42 +212,22 @@ extension Renderer {
             }
             dragSagProgress = 0.0
         } else if isShrinking {
-            let sagThreshold: Float = 0.02
-            let lengthDiff = currentLazyLength - targetLength
+            dragWorldLazy = dragWorldTarget
             
-            if lengthDiff > sagThreshold {
-                let sagSpeed: Float = 4.0
+            let lengthDiff = currentLazyLength - targetLength
+            if lengthDiff > 0.01 {
+                let sagSpeed: Float = 4.5
                 dragSagProgress += deltaTime * sagSpeed
                 dragSagProgress = min(1.0, dragSagProgress)
-                
-                let sagFactor = 1.0 - dragSagProgress
-                let sagAmount = lengthDiff * sagFactor * 0.4
-                
-                let toTarget = dragWorldTarget - fixedPos
-                let toTargetLen = simd_length(toTarget)
-                if toTargetLen > 1e-6 {
-                    let targetDir = toTarget / toTargetLen
-                    let saggedLength = targetLength + sagAmount
-                    let targetLazyPos = fixedPos + targetDir * saggedLength
-                    
-                    let pullSpeed: Float = 8.0
-                    dragWorldLazy = dragWorldLazy + (targetLazyPos - dragWorldLazy) * min(1.0, deltaTime * pullSpeed)
-                }
             } else {
-                let shrinkSpeed: Float = 15.0
-                let toTarget = dragWorldTarget - dragWorldLazy
-                let moveAmount = min(simd_length(toTarget), shrinkSpeed * deltaTime)
-                if moveAmount > 1e-6 {
-                    let moveDir = toTarget / simd_length(toTarget)
-                    dragWorldLazy += moveDir * moveAmount
-                }
                 if dragSagProgress > 0.0 {
-                    dragSagProgress = max(0.0, dragSagProgress - deltaTime * 5.0)
+                    dragSagProgress = max(0.0, dragSagProgress - deltaTime * 8.0)
                 }
             }
         } else {
+            dragWorldLazy = dragWorldTarget
             if dragSagProgress > 0.0 {
-                dragSagProgress = max(0.0, dragSagProgress - deltaTime * 5.0)
+                dragSagProgress = max(0.0, dragSagProgress - deltaTime * 8.0)
             }
         }
 
@@ -268,17 +248,21 @@ extension Renderer {
             return
         }
 
+        let sagMultiplier: Float = 1.0 + dragSagProgress * 0.6
+
         if dragState.endIndex == 0 {
-            simulation.setPins(
+            simulation.setPinsWithSag(
                 ropeIndex: ropeIndex,
                 pinStart: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent),
-                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0)
+                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
+                sagMultiplier: sagMultiplier
             )
         } else {
-            simulation.setPins(
+            simulation.setPinsWithSag(
                 ropeIndex: ropeIndex,
                 pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
-                pinEnd: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent)
+                pinEnd: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent),
+                sagMultiplier: sagMultiplier
             )
         }
     }

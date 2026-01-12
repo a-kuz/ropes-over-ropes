@@ -1,32 +1,32 @@
 import simd
 
-struct TopologyCrossing: Hashable {
-    let id: Int
-    let ropeA: Int
-    let ropeB: Int
-    let position: SIMD2<Float>
-    let ropeOver: Int
-    let handedness: Int
-}
-
 enum TopologyNode: Hashable {
     case hole(Int)
-    case crossing(Int)
+    case hook(Int)
     case floating(Int)
 }
 
 struct TopologyRope {
-    var nodes: [TopologyNode]
+    var startHole: Int
+    var endHole: Int
+    var hooks: [Int]
     var color: SIMD3<Float>
     var active: Bool
+    var floatingEnd: Int?
+    var floatingPosition: SIMD2<Float>?
 }
 
-struct HookPair {
-    let crossingIdA: Int
-    let crossingIdB: Int
-    let ropeA: Int
-    let ropeB: Int
-    let ropeAUpperEnd: Int
-    let ropeBUpperEnd: Int
+struct HookSequence {
+    var id: Int
+    var ropeA: Int
+    var ropeB: Int
+    var N: Int
+    var ropeAStartIsOver: Bool
 }
 
+struct HookSequenceGeometry {
+    let centers: [SIMD2<Float>]
+    let R: Float
+    let pathA: [SIMD2<Float>]
+    let pathB: [SIMD2<Float>]
+}

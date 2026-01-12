@@ -12,9 +12,31 @@ enum RopeMeshBuilder {
         let window: Float
     }
 
-    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, width: Float, height: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0) -> RopeMesh {
+    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, width: Float, height: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0, segmentStarts: [Int] = []) -> RopeMesh {
         let pointCount = points.count
         if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
+        
+        let debugColors: [SIMD3<Float>] = [
+            SIMD3<Float>(1.0, 0.3, 0.3),
+            SIMD3<Float>(0.3, 1.0, 0.3),
+            SIMD3<Float>(0.3, 0.3, 1.0),
+            SIMD3<Float>(1.0, 1.0, 0.3),
+            SIMD3<Float>(1.0, 0.3, 1.0),
+            SIMD3<Float>(0.3, 1.0, 1.0),
+        ]
+        
+        func segmentIndex(for pointIndex: Int) -> Int {
+            if segmentStarts.isEmpty { return 0 }
+            var seg = 0
+            for (i, start) in segmentStarts.enumerated() {
+                if pointIndex >= start {
+                    seg = i
+                } else {
+                    break
+                }
+            }
+            return seg
+        }
 
         let bandWidth = max(0.0005, width)
         let bandHeight = max(0.0005, height)
@@ -139,7 +161,14 @@ enum RopeMeshBuilder {
             let scaleH = max(0.72, 1.0 - pinch * 0.12) * stretchScaleH
             
             let lightenAmount = stretchEffect > 0 ? stretchEffect * 0.32 * centerMask : 0.0
-            let adjustedColor = color * (1.0 + lightenAmount) + SIMD3<Float>(lightenAmount * 0.15, lightenAmount * 0.15, lightenAmount * 0.15)
+            let baseColor: SIMD3<Float>
+            if !segmentStarts.isEmpty {
+                let segIdx = segmentIndex(for: pointIndex)
+                baseColor = debugColors[segIdx % debugColors.count]
+            } else {
+                baseColor = color
+            }
+            let adjustedColor = baseColor * (1.0 + lightenAmount) + SIMD3<Float>(lightenAmount * 0.15, lightenAmount * 0.15, lightenAmount * 0.15)
             
             let oscWave = sin(uCoord * Float.pi * 3.0 + oscillation * 6.0)
             let oscAmplitude = abs(oscillation) * 0.12

@@ -436,7 +436,7 @@ vertex ShadowOut holeShadowVertex(const device HoleIn* vertices [[buffer(0)]],
     return o;
 }
 
-constexpr float2 poissonDisk[32] = {
+constant float2 poissonDisk[32] = {
     float2(-0.613392, 0.617481),
     float2(0.170019, -0.040254),
     float2(-0.299417, 0.791925),
@@ -481,7 +481,7 @@ static float findBlocker(depth2d<float> shadowMap, float2 uv, float depthRef, fl
     for (int i = 0; i < sampleCount; i++) {
         float2 offset = poissonDisk[i] * searchRadius;
         float2 suv = uv + offset;
-        float sampleDepth = shadowMap.sample(depthSampler, suv).r;
+        float sampleDepth = shadowMap.sample(depthSampler, suv);
         
         if (sampleDepth < depthRef) {
             blockerSum += sampleDepth;

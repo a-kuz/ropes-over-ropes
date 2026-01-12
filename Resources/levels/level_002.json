@@ -25,10 +25,10 @@
     { "x": 0.83, "y": 0.94 }
   ],
   "ropes": [
-    { "startHole": 1, "endHole": 18, "width": 0.092, "height": 0.031, "color": { "r": 0.95, "g": 0.85, "b": 0.22 } },
-    { "startHole": 2, "endHole": 13, "width": 0.088, "height": 0.029, "color": { "r": 0.62, "g": 0.35, "b": 0.95 } },
-    { "startHole": 7, "endHole": 8, "width": 0.084, "height": 0.028, "color": { "r": 0.20, "g": 0.78, "b": 0.96 } },
-    { "startHole": 16, "endHole": 11, "width": 0.090, "height": 0.030, "color": { "r": 0.95, "g": 0.28, "b": 0.38 } }
+    { "startHole": 1, "endHole": 18, "width": 0.060, "height": 0.060, "color": { "r": 0.95, "g": 0.85, "b": 0.22 } },
+    { "startHole": 2, "endHole": 13, "width": 0.060, "height": 0.060, "color": { "r": 0.62, "g": 0.35, "b": 0.95 } },
+    { "startHole": 7, "endHole": 8, "width": 0.060, "height": 0.060, "color": { "r": 0.20, "g": 0.78, "b": 0.96 } },
+    { "startHole": 16, "endHole": 11, "width": 0.060, "height": 0.060, "color": { "r": 0.95, "g": 0.28, "b": 0.38 } }
   ]
 }
 

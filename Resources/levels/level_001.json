@@ -1,7 +1,7 @@
 {
   "id": 1,
   "holeRadius": 0.105,
-  "particlesPerRope": 64,
+  "particlesPerRope": 164,
   "holes": [
     { "x": -0.82, "y": -0.86 },
     { "x": -0.27, "y": -0.86 },
@@ -25,8 +25,8 @@
     { "x": 0.83, "y": 0.94 }
   ],
   "ropes": [
-    { "startHole": 0, "endHole": 15, "width": 0.090, "height": 0.030, "color": { "r": 0.20, "g": 0.95, "b": 0.35 } },
-    { "startHole": 3, "endHole": 12, "width": 0.088, "height": 0.029, "color": { "r": 0.30, "g": 0.55, "b": 0.98 } }
+    { "startHole": 0, "endHole": 15, "width": 0.10, "height": 0.10, "color": { "r": 0.20, "g": 0.95, "b": 0.35 } },
+    { "startHole": 3, "endHole": 12, "width": 0.050, "height": 0.010, "color": { "r": 0.30, "g": 0.55, "b": 0.98 } }
   ]
 }
 

@@ -29,7 +29,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var time: Float = 0
     var dragVisualEnergy: Float = 0
 
-    var simulation: RopeSimulation
+    var simulation: RopeSimulation!
 
     var frameUniforms: MTLBuffer?
     var holeInstances: MTLBuffer?
@@ -96,6 +96,46 @@ final class Renderer: NSObject, MTKViewDelegate {
     
     var ropePhysicsLogger = RopePhysics()
     var lastPhysicsLogTime: Double = 0
+    
+    struct MeshStats: Equatable {
+        let vertices: Int
+        let indices: Int
+        let ropeCount: Int
+    }
+    var lastMeshStats: MeshStats?
+    
+    var currentLevelId: Int = 1
+    
+    var ropeRenderSimpleMode: Bool = true
+    var ropeRenderDisableBandRepulsion: Bool = true
+    var ropeRenderDisableCrossingDeform: Bool = true
+    var ropeRenderDisableHoleDeform: Bool = true
+    var ropeRenderDisableDragCrossingPhysics: Bool = true
+    
+    var hookStepMultiplier: Float = 1.0 {
+        didSet { TopologySampler.hookStepMultiplier = hookStepMultiplier }
+    }
+    var hookRadiusMultiplier: Float = 1.0 {
+        didSet { TopologySampler.hookRadiusMultiplier = hookRadiusMultiplier }
+    }
+    var hookStepLimitMultiplier: Float = 1.0 {
+        didSet { TopologySampler.hookStepLimitMultiplier = hookStepLimitMultiplier }
+    }
+    var debugSegmentColors: Bool = false {
+        didSet { TopologySampler.debugSegmentColors = debugSegmentColors }
+    }
+    var smoothSubdivisions: Int = 6 {
+        didSet { TopologySampler.smoothSubdivisions = smoothSubdivisions }
+    }
+    var smoothIterations: Int = 6 {
+        didSet { TopologySampler.smoothIterations = smoothIterations }
+    }
+    var smoothStrength: Float = 0.4 {
+        didSet { TopologySampler.smoothStrength = smoothStrength }
+    }
+    var smoothZone: Float = 1.0 {
+        didSet { TopologySampler.smoothZone = smoothZone }
+    }
 
     init(view: MTKView) {
         guard let device = view.device else { fatalError("Metal device is required") }
@@ -104,23 +144,56 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.device = device
         self.commandQueue = commandQueue
 
-        let fallbackLayout = Self.makeHoleLayout()
-        Self.logger.info("Initializing renderer, loading level 1...")
-        Self.logger.info("Fallback layout has \(fallbackLayout.positions.count) holes, radius: \(fallbackLayout.radius)")
+        guard let library = device.makeDefaultLibrary() else {
+            fatalError("Failed to create default Metal library")
+        }
+
+        self.tablePipeline = Self.makeTablePipeline(device: device, view: view, library: library)
+        self.holePipeline = Self.makeHolePipeline(device: device, view: view, library: library)
+        self.ropePipeline = Self.makeRopePipeline(device: device, view: view, library: library)
+        self.postPipeline = Self.makePostPipeline(device: device, view: view, library: library)
+        self.shadowRopePipeline = Self.makeShadowRopePipeline(device: device, library: library)
+        self.shadowHolePipeline = Self.makeShadowHolePipeline(device: device, library: library)
+        (self.bloomThreshold, self.bloomBlurH, self.bloomBlurV) = Self.makeBloomPipelines(device: device, library: library)
+        (self.depthStateScene, self.depthStateBackground, self.depthStateShadow) = Self.makeDepthStates(device: device)
+
+        self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
+        Self.buildHoleMeshBuffers(device: device, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
+
+        super.init()
         
-        let level = LevelLoader.load(levelId: 1)
+        loadLevel(levelId: 1)
+    }
+    
+    func loadLevel(levelId: Int) {
+        currentLevelId = levelId
+        Self.logger.info("Loading level \(levelId)...")
+        
+        dragState = nil
+        snapAnimationState = nil
+        dragWorld = .zero
+        dragWorldLazy = .zero
+        dragWorldTarget = .zero
+        dragSagProgress = 0.0
+        dragLiftCurrent = 0
+        dragStretchRatio = 1.0
+        dragOscillationPhase = 0.0
+        dragOscillationVelocity = 0.0
+        dragOscillationRopeIndex = nil
+        
+        let fallbackLayout = Self.makeHoleLayout()
+        let level = LevelLoader.load(levelId: levelId)
 
         if level == nil {
-            Self.logger.warning("Level 1 failed to load, using fallback")
+            Self.logger.warning("Level \(levelId) failed to load, using fallback")
         } else {
-            Self.logger.info("Level 1 loaded successfully: \(level!.ropes.count) ropes, \(level!.holes.count) holes from JSON")
+            Self.logger.info("Level \(levelId) loaded successfully: \(level!.ropes.count) ropes, \(level!.holes.count) holes from JSON")
         }
 
         let decodedHoles = level?.holes.map { $0.simd }
-        Self.logger.info("Decoded holes count: \(decodedHoles?.count ?? 0)")
         let levelHoles = (decodedHoles?.isEmpty == false) ? (decodedHoles ?? fallbackLayout.positions) : fallbackLayout.positions
         let levelHoleRadius = level?.holeRadius ?? fallbackLayout.radius
-        Self.logger.info("Using \(levelHoles.count) holes with radius \(levelHoleRadius)")
+        
         let defaultRopes: [LevelDefinition.Rope] = [
             LevelDefinition.Rope(
                 startHole: 0,
@@ -145,34 +218,15 @@ final class Renderer: NSObject, MTKViewDelegate {
             )
         ]
         let candidateRopes = (level != nil && !level!.ropes.isEmpty) ? level!.ropes : defaultRopes
-        Self.logger.info("Candidate ropes: \(candidateRopes.count) (level has \(level?.ropes.count ?? 0) ropes, default has \(defaultRopes.count))")
-
-        if level == nil {
-            Self.logger.warning("Level is nil, using default ropes (\(defaultRopes.count) ropes)")
-        } else if level!.ropes.isEmpty {
-            Self.logger.warning("Level has empty ropes array, using default ropes (\(defaultRopes.count) ropes)")
-        } else {
-            Self.logger.info("Using level ropes: \(level!.ropes.count) ropes")
-        }
 
         var validatedRopes = candidateRopes.filter { rope in
-            guard levelHoles.indices.contains(rope.startHole) else {
-                Self.logger.warning("Rope validation failed: startHole \(rope.startHole) out of bounds (0..<\(levelHoles.count))")
-                return false
-            }
-            guard levelHoles.indices.contains(rope.endHole) else {
-                Self.logger.warning("Rope validation failed: endHole \(rope.endHole) out of bounds (0..<\(levelHoles.count))")
-                return false
-            }
-            if rope.startHole == rope.endHole {
-                Self.logger.warning("Rope validation failed: startHole == endHole (\(rope.startHole))")
-                return false
-            }
+            guard levelHoles.indices.contains(rope.startHole) else { return false }
+            guard levelHoles.indices.contains(rope.endHole) else { return false }
+            if rope.startHole == rope.endHole { return false }
             return true
         }
 
         if validatedRopes.isEmpty, levelHoles.count >= 2 {
-            Self.logger.warning("All ropes invalidated, creating fallback rope")
             validatedRopes = [
                 LevelDefinition.Rope(
                     startHole: 0,
@@ -184,39 +238,22 @@ final class Renderer: NSObject, MTKViewDelegate {
             ]
         }
 
-        Self.logger.info("Final rope count: \(validatedRopes.count) (from \(candidateRopes.count) candidate ropes)")
         let particlesPerRope = max(8, level?.particlesPerRope ?? 6400)
+        simulation = RopeSimulation(device: device, ropeCount: max(1, validatedRopes.count), particlesPerRope: particlesPerRope)
 
-        self.simulation = RopeSimulation(device: device, ropeCount: max(1, validatedRopes.count), particlesPerRope: particlesPerRope)
+        holePositions = levelHoles
+        holeRadius = levelHoleRadius
+        holeOccupied = Array(repeating: false, count: levelHoles.count)
+        holeInstances = Self.makeHoleInstances(device: device, positions: levelHoles, radius: levelHoleRadius)
 
-        guard let library = device.makeDefaultLibrary() else {
-            fatalError("Failed to create default Metal library")
-        }
-
-        self.tablePipeline = Self.makeTablePipeline(device: device, view: view, library: library)
-        self.holePipeline = Self.makeHolePipeline(device: device, view: view, library: library)
-        self.ropePipeline = Self.makeRopePipeline(device: device, view: view, library: library)
-        self.postPipeline = Self.makePostPipeline(device: device, view: view, library: library)
-        self.shadowRopePipeline = Self.makeShadowRopePipeline(device: device, library: library)
-        self.shadowHolePipeline = Self.makeShadowHolePipeline(device: device, library: library)
-        (self.bloomThreshold, self.bloomBlurH, self.bloomBlurV) = Self.makeBloomPipelines(device: device, library: library)
-        (self.depthStateScene, self.depthStateBackground, self.depthStateShadow) = Self.makeDepthStates(device: device)
-
-        self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
-        self.holePositions = levelHoles
-        self.holeRadius = levelHoleRadius
-        self.holeOccupied = Array(repeating: false, count: levelHoles.count)
-        self.holeInstances = Self.makeHoleInstances(device: device, positions: levelHoles, radius: levelHoleRadius)
-        Self.buildHoleMeshBuffers(device: device, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
-
-        self.ropes = validatedRopes.map { rope in
+        ropes = validatedRopes.map { rope in
             RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, width: rope.width, height: rope.height)
         }
 
-        let topoRopes = self.ropes.map { rope in
-            TopologyRope(nodes: [.hole(rope.startHole), .hole(rope.endHole)], color: rope.color, active: true)
+        let ropeConfigs = ropes.map { rope in
+            (startHole: rope.startHole, endHole: rope.endHole, color: rope.color)
         }
-        self.topology = TopologyEngine(holePositions: levelHoles, ropes: topoRopes)
+        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs)
 
         for ropeIndex in ropes.indices {
             let startHoleIndex = ropes[ropeIndex].startHole
@@ -231,8 +268,6 @@ final class Renderer: NSObject, MTKViewDelegate {
                 pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
             )
         }
-
-        super.init()
     }
 
     private static func makePipeline(device: MTLDevice, descriptor: MTLRenderPipelineDescriptor) -> MTLRenderPipelineState {
