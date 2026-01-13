@@ -291,11 +291,63 @@ enum TopologySampler {
             return RopeRenderResult(points: simplePoly, segmentStarts: [0])
         }
         
-        let rawPath = isRopeA ? geom.pathA : geom.pathB
+        var rawPath = isRopeA ? geom.pathA : geom.pathB
+        
+        if rawPath.count >= 2 {
+            let distToFirst = simd_length(startAnchor - rawPath[0])
+            let distToLast = simd_length(startAnchor - rawPath[rawPath.count - 1])
+            if distToLast < distToFirst {
+                rawPath.reverse()
+            }
+        }
+        
+        let pathA = geom.pathA
+        let pathB = geom.pathB
+        
+        let logKey = ZLogKey(ropeIndex: ropeIndex, hookId: hook.id)
+        let now = CACurrentMediaTime()
+        let timeSinceLastLog = now - lastZLogTime
+        let shouldLog: Bool
+        if let last = lastZLogParams[logKey] {
+            let eps: Float = 0.001
+            let pathChanged = pathA.count != last.pathA.count ||
+                             pathB.count != last.pathB.count ||
+                             zip(pathA, last.pathA).contains(where: { simd_length_squared($0 - $1) > eps * eps }) ||
+                             zip(pathB, last.pathB).contains(where: { simd_length_squared($0 - $1) > eps * eps })
+            let dataChanged = hook.N != last.N || pathChanged
+            shouldLog = dataChanged && timeSinceLastLog >= 0.5
+            if shouldLog {
+                lastZLogParams[logKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
+                lastZLogTime = now
+            }
+        } else {
+            shouldLog = timeSinceLastLog >= 0.5
+            if shouldLog {
+                lastZLogParams[logKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
+                lastZLogTime = now
+            }
+        }
         
         var fullPath2D: [SIMD2<Float>] = [startAnchor]
         fullPath2D.append(contentsOf: rawPath)
         fullPath2D.append(endAnchor)
+        
+        if shouldLog {
+            let ropeStart = engine.ropeStart(ropeIndex)
+            let ropeEnd = engine.ropeEnd(ropeIndex)
+            logger.info("  fullPath2D (\(fullPath2D.count) pts):")
+            for (i, p) in fullPath2D.enumerated() {
+                logger.info("    [\(i)] = (\(String(format: "%.3f", p.x)), \(String(format: "%.3f", p.y)))")
+            }
+            logger.info("  ropeStart = (\(String(format: "%.3f", ropeStart.x)), \(String(format: "%.3f", ropeStart.y)))")
+            logger.info("  ropeEnd = (\(String(format: "%.3f", ropeEnd.x)), \(String(format: "%.3f", ropeEnd.y)))")
+            logger.info("  startAnchor = (\(String(format: "%.3f", startAnchor.x)), \(String(format: "%.3f", startAnchor.y)))")
+            logger.info("  endAnchor = (\(String(format: "%.3f", endAnchor.x)), \(String(format: "%.3f", endAnchor.y)))")
+            logger.info("  rawPath (\(rawPath.count) pts):")
+            for (i, p) in rawPath.enumerated() {
+                logger.info("    [\(i)] = (\(String(format: "%.3f", p.x)), \(String(format: "%.3f", p.y)))")
+            }
+        }
         
         let smoothResult = smoothPath2D(fullPath2D, ropeRadius: currentRadius)
         let smoothedPoints = smoothResult.points
@@ -311,15 +363,7 @@ enum TopologySampler {
         let underZ: Float = 0
         let overZ = otherRadius * 2 + currentRadius
         
-        let pathA = geom.pathA
-        let pathB = geom.pathB
-        
-        let now = CACurrentMediaTime()
-        let shouldLog = (now - lastZLogTime) > 1.0
-        if shouldLog { lastZLogTime = now }
-        
         if shouldLog {
-            logger.info("═══ Z CALCULATION rope=\(ropeIndex) hook=\(hook.id) N=\(hook.N) ═══")
             logger.info("  isRopeA=\(isRopeA) firstIsOver=\(firstIsOver)")
             logger.info("  currentRadius=\(String(format: "%.4f", currentRadius)) otherRadius=\(String(format: "%.4f", otherRadius))")
             logger.info("  underZ=\(String(format: "%.4f", underZ)) overZ=\(String(format: "%.4f", overZ)) baseZ=\(String(format: "%.4f", baseZ))")
@@ -445,16 +489,6 @@ enum TopologySampler {
             poly.append(SIMD3<Float>(xy.x, xy.y, z))
         }
         
-        if shouldLog {
-            logger.info("  Sample Z values:")
-            let step = max(1, poly.count / 10)
-            for idx in stride(from: 0, to: poly.count, by: step) {
-                let p = poly[idx]
-                logger.info("    [\(idx)] z=\(String(format: "%.4f", p.z)) at dist=\(String(format: "%.3f", smoothedDistances[idx]))")
-            }
-            logger.info("═══════════════════════════════════════")
-        }
-        
         return RopeRenderResult(points: poly, segmentStarts: segmentStarts)
     }
     
@@ -526,8 +560,16 @@ enum TopologySampler {
         return b0 * (mt * mt * mt) + b1 * (3 * mt * mt * t) + b2 * (3 * mt * t * t) + b3 * (t * t * t)
     }
     
-    nonisolated(unsafe) private static var smoothLogCount = 0
-    nonisolated(unsafe) private static var zLogCount = 0
+    private struct ZLogKey: Hashable {
+        let ropeIndex: Int
+        let hookId: Int
+    }
+    private struct ZLogValue {
+        let N: Int
+        let pathA: [SIMD2<Float>]
+        let pathB: [SIMD2<Float>]
+    }
+    nonisolated(unsafe) private static var lastZLogParams: [ZLogKey: ZLogValue] = [:]
     nonisolated(unsafe) private static var lastZLogTime: Double = 0
     
     struct SmoothResult {
@@ -540,46 +582,19 @@ enum TopologySampler {
         let iterations = smoothIterations
         let k = smoothStrength
         
-        smoothLogCount += 1
-        let shouldLog = smoothLogCount <= 5
-        
-        if shouldLog {
-            logger.info("═══ SMOOTH PATH ═══")
-            logger.info("  input: \(path.count) pts, n=\(n), iters=\(iterations), k=\(k)")
-            for (i, p) in path.enumerated() {
-                logger.info("    [\(i)] = (\(String(format: "%.3f", p.x)), \(String(format: "%.3f", p.y)))")
-            }
-        }
-        
         if path.count < 2 {
             return SmoothResult(points: path, segmentStarts: [0])
         }
         
         var dense = subdividePath(path, n: n)
         
-        if shouldLog {
-            logger.info("  after subdivide: \(dense.count) pts")
-        }
-        
         var fixed = Set<Int>()
         for i in 0..<path.count {
             fixed.insert(i * n)
         }
         
-        if shouldLog {
-            logger.info("  fixed indices: \(fixed.sorted())")
-        }
-        
         if iterations > 0 {
             relaxPath(&dense, fixed: fixed, iterations: iterations, k: k)
-            
-            if shouldLog {
-                logger.info("  after relax:")
-                for (i, p) in dense.enumerated() {
-                    let marker = fixed.contains(i) ? " [FIXED]" : ""
-                    logger.info("    [\(i)] = (\(String(format: "%.3f", p.x)), \(String(format: "%.3f", p.y)))\(marker)")
-                }
-            }
         }
         
         if dense.count < 4 {
@@ -606,12 +621,6 @@ enum TopologySampler {
             }
         }
         curve.append(dense[dense.count - 1])
-        
-        if shouldLog {
-            logger.info("  final curve: \(curve.count) pts")
-            logger.info("  segmentStarts: \(segmentStarts)")
-            logger.info("═══════════════════")
-        }
         
         return SmoothResult(points: curve, segmentStarts: segmentStarts)
     }

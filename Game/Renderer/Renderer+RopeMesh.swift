@@ -25,45 +25,117 @@ extension Renderer {
         var allSegmentStarts: [[Int]] = []
         var ropeRadii: [Float] = []
         
+        let deltaTime = lastDeltaTime
+        
         for ropeIndex in ropes.indices {
             if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 {
                 allRopePoints.append([])
                 allSegmentStarts.append([])
                 ropeRadii.append(0)
+                previousRopePoints[ropeIndex] = nil
+                ropePointVelocities[ropeIndex] = nil
                 continue
             }
             
-            let ropeRadius = ropes[ropeIndex].radius
+            let ropeRadius = ropes[ropeIndex].radius    
             ropeRadii.append(ropeRadius)
             
-            var points: [SIMD3<Float>] = []
-            simulation.withRopePositions(ropeIndex: ropeIndex) { buffer in
-                points = Array(buffer)
+            guard let topology else {
+                allRopePoints.append([])
+                allSegmentStarts.append([0])
+                continue
             }
             
+            let lift = max(ropeRadius * 2.7, 0.02)
+            let result = TopologySampler.sampleRopeRender(
+                engine: topology,
+                ropeIndex: ropeIndex,
+                lift: lift,
+                dragLift: dragLift,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: ropeRadiusForIndex,
+                holeRadius: holeRadius
+            )
+            
+            var targetPoints = result.points
             if let tensionState = ropeTensionStates[ropeIndex], globalTensionActive {
                 let restLength = ropeRestLengths[ropeIndex] ?? 1.0
                 let sagRatio = (tensionState.currentLength - restLength) / max(0.001, restLength)
-                points = Self.applySagToPoints(points: points, sagRatio: sagRatio, ropeRadius: ropeRadius)
+                targetPoints = Self.applySagToPoints(points: targetPoints, sagRatio: sagRatio, ropeRadius: ropeRadius)
             }
             
-            var segmentStarts: [Int] = [0]
-            if let topology {
-                let lift = max(ropeRadius * 2.7, 0.02)
-                let result = TopologySampler.sampleRopeRender(
-                    engine: topology,
-                    ropeIndex: ropeIndex,
-                    lift: lift,
-                    dragLift: dragLift,
-                    ropeRadius: ropeRadius,
-                    ropeRadiusForIndex: ropeRadiusForIndex,
-                    holeRadius: holeRadius
-                )
-                segmentStarts = result.segmentStarts
+            var smoothedPoints = targetPoints
+            let isDragged = dragState?.ropeIndex == ropeIndex
+            
+            if let previousPoints = previousRopePoints[ropeIndex], !previousPoints.isEmpty, !targetPoints.isEmpty {
+                var velocities = ropePointVelocities[ropeIndex] ?? Array(repeating: SIMD3<Float>(0, 0, 0), count: targetPoints.count)
+                
+                if previousPoints.count != targetPoints.count {
+                    smoothedPoints = interpolateRopePoints(
+                        from: previousPoints,
+                        to: targetPoints,
+                        deltaTime: deltaTime,
+                        isDragged: isDragged,
+                        velocities: &velocities
+                    )
+                    ropePointVelocities[ropeIndex] = velocities
+                } else {
+                    let dt = min(deltaTime, 1.0 / 30.0)
+                    let pointCount = targetPoints.count
+                    
+                    for i in 0..<pointCount {
+                        let target = targetPoints[i]
+                        let current = previousPoints[i]
+                        let displacement = target - current
+                        let dist = simd_length(displacement)
+                        
+                        let t = Float(i) / Float(max(1, pointCount - 1))
+                        let dragEndT = isDragged ? (dragState?.endIndex == 0 ? 0.0 : 1.0) : -1.0
+                        let distFromDragEnd = isDragged ? abs(Double(t) - dragEndT) : 1.0
+                        
+                        let responsiveness: Float
+                        if isDragged && distFromDragEnd < 0.3 {
+                            responsiveness = 0.98
+                        } else if isDragged {
+                            let falloff = min(1.0, distFromDragEnd * 1.5)
+                            responsiveness = Float(0.98 - falloff * 0.7)
+                        } else {
+                            responsiveness = 0.25
+                        }
+                        
+                        var velocity = velocities.count > i ? velocities[i] : SIMD3<Float>(0, 0, 0)
+                        
+                        let nonlinearK: Float = 150.0
+                        let distFactor = 1.0 + dist * 8.0
+                        let springForce = displacement * nonlinearK * distFactor
+                        
+                        let criticalDamping = 2.0 * sqrt(nonlinearK * distFactor)
+                        let dampingForce = velocity * criticalDamping * 0.9
+                        
+                        let acceleration = springForce - dampingForce
+                        velocity += acceleration * dt
+                        
+                        var newPos = current + velocity * dt
+                        newPos = newPos * (1.0 - responsiveness) + target * responsiveness
+                        
+                        smoothedPoints[i] = newPos
+                        
+                        if velocities.count <= i {
+                            velocities.append(velocity)
+                        } else {
+                            velocities[i] = velocity
+                        }
+                    }
+                    
+                    ropePointVelocities[ropeIndex] = velocities
+                }
+            } else {
+                ropePointVelocities[ropeIndex] = Array(repeating: SIMD3<Float>(0, 0, 0), count: targetPoints.count)
             }
             
-            allRopePoints.append(points)
-            allSegmentStarts.append(segmentStarts)
+            previousRopePoints[ropeIndex] = smoothedPoints
+            allRopePoints.append(smoothedPoints)
+            allSegmentStarts.append(result.segmentStarts)
         }
         
         for ropeIndex in ropes.indices {
@@ -91,7 +163,7 @@ extension Renderer {
             let oscillation = (dragOscillationRopeIndex == ropeIndex) ? dragOscillationPhase : 0.0
             let segmentStarts = allSegmentStarts[ropeIndex]
             
-            let ropeRestLength = simulation.restLength(ropeIndex: ropeIndex)
+            let ropeRestLength = ropeEffectiveRestLengths[ropeIndex] ?? ropeRestLengths[ropeIndex] ?? 0
             
             let ropeMesh = renderPoints.withUnsafeBufferPointer { pointsBuffer in
                 let events = Self.makeTwistEvents(topology: topology, ropeIndex: ropeIndex, points: pointsBuffer)
@@ -296,6 +368,111 @@ extension Renderer {
         }
         
         return result
+    }
+    
+    private func interpolateRopePoints(
+        from: [SIMD3<Float>],
+        to: [SIMD3<Float>],
+        deltaTime: Float,
+        isDragged: Bool,
+        velocities: inout [SIMD3<Float>]
+    ) -> [SIMD3<Float>] {
+        if to.isEmpty {
+            return from
+        }
+        if from.isEmpty {
+            return to
+        }
+        
+        let dt = min(deltaTime, 1.0 / 30.0)
+        var result: [SIMD3<Float>] = []
+        result.reserveCapacity(to.count)
+        
+        let fromLength = cumulativeLength(points: from)
+        let toLength = cumulativeLength(points: to)
+        
+        if fromLength < 1e-6 || toLength < 1e-6 {
+            return to
+        }
+        
+        var newVelocities: [SIMD3<Float>] = []
+        newVelocities.reserveCapacity(to.count)
+        
+        let dragEndT = isDragged ? (dragState?.endIndex == 0 ? 0.0 : 1.0) : -1.0
+        
+        for i in 0..<to.count {
+            let t = Float(i) / Float(max(1, to.count - 1))
+            let targetDist = t * toLength
+            let targetPoint = samplePoint(points: to, targetDist: targetDist, totalLength: toLength)
+            
+            let fromDist = t * fromLength
+            let currentPoint = samplePoint(points: from, targetDist: fromDist, totalLength: fromLength)
+            
+            let distFromDragEnd = isDragged ? abs(Double(t) - dragEndT) : 1.0
+            let responsiveness: Float
+            if isDragged && distFromDragEnd < 0.3 {
+                responsiveness = 0.98
+            } else if isDragged {
+                let falloff = min(1.0, distFromDragEnd * 1.5)
+                responsiveness = Float(0.98 - falloff * 0.7)
+            } else {
+                responsiveness = 0.25
+            }
+            
+            let velocity = velocities.count > i ? velocities[i] : SIMD3<Float>(0, 0, 0)
+            let displacement = targetPoint - currentPoint
+            let dist = simd_length(displacement)
+            
+            let nonlinearK: Float = 150.0
+            let distFactor = 1.0 + dist * 8.0
+            let springForce = displacement * nonlinearK * distFactor
+            
+            let criticalDamping = 2.0 * sqrt(nonlinearK * distFactor)
+            let dampingForce = velocity * criticalDamping * 0.9
+            
+            let acceleration = springForce - dampingForce
+            var newVelocity = velocity + acceleration * dt
+            
+            var newPos = currentPoint + newVelocity * dt
+            newPos = newPos * (1.0 - responsiveness) + targetPoint * responsiveness
+            
+            result.append(newPos)
+            newVelocities.append(newVelocity)
+        }
+        
+        velocities = newVelocities
+        return result
+    }
+    
+    private func cumulativeLength(points: [SIMD3<Float>]) -> Float {
+        guard points.count >= 2 else { return 0 }
+        var total: Float = 0
+        for i in 1..<points.count {
+            total += simd_length(points[i] - points[i-1])
+        }
+        return total
+    }
+    
+    private func samplePoint(points: [SIMD3<Float>], targetDist: Float, totalLength: Float) -> SIMD3<Float> {
+        guard points.count >= 2, totalLength > 1e-6 else {
+            return points.first ?? .zero
+        }
+        
+        var cumDist: Float = 0
+        for i in 1..<points.count {
+            let segLen = simd_length(points[i] - points[i-1])
+            let nextCumDist = cumDist + segLen
+            
+            if targetDist <= nextCumDist || i == points.count - 1 {
+                let t = segLen > 1e-6 ? (targetDist - cumDist) / segLen : 0
+                let clampedT = max(0, min(1, t))
+                return points[i-1] + (points[i] - points[i-1]) * clampedT
+            }
+            
+            cumDist = nextCumDist
+        }
+        
+        return points.last ?? .zero
     }
     
     private static func applyHoleBendVisual(

@@ -28,8 +28,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var cameraDebugTouchStart: CGPoint?
     var time: Float = 0
     var dragVisualEnergy: Float = 0
+    var lastDeltaTime: Float = 1.0 / 60.0
 
-    var simulation: RopeSimulation!
 
     var frameUniforms: MTLBuffer?
     var holeInstances: MTLBuffer?
@@ -92,6 +92,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var ropeTensionStates: [Int: RopeTensionState] = [:]
     var globalTensionActive: Bool = false
     var ropeRestLengths: [Int: Float] = [:]
+    var ropeEffectiveRestLengths: [Int: Float] = [:]
     var tensionLogCounter: Int = 0
 
     var ropeVB: MTLBuffer?
@@ -104,6 +105,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     
     var ropePhysicsLogger = RopePhysics()
     var lastPhysicsLogTime: Double = 0
+    
+    var previousRopePoints: [Int: [SIMD3<Float>]] = [:]
+    var ropePointVelocities: [Int: [SIMD3<Float>]] = [:]
     
     struct MeshStats: Equatable {
         let vertices: Int
@@ -200,7 +204,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         ropeTensionStates = [:]
         globalTensionActive = false
         ropeRestLengths = [:]
+        ropeEffectiveRestLengths = [:]
         tensionLogCounter = 0
+        previousRopePoints = [:]
+        ropePointVelocities = [:]
         
         let fallbackLayout = Self.makeHoleLayout()
         let level = LevelLoader.load(levelId: levelId)
@@ -255,9 +262,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             ]
         }
 
-        let particlesPerRope = max(8, level?.particlesPerRope ?? 6400)
-        simulation = RopeSimulation(device: device, ropeCount: max(1, validatedRopes.count), particlesPerRope: particlesPerRope)
-
         holePositions = levelHoles
         holeRadius = levelHoleRadius
         holeOccupied = Array(repeating: false, count: levelHoles.count)
@@ -279,12 +283,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             guard let pinStart = holePositions[safe: startHoleIndex], let pinEnd = holePositions[safe: endHoleIndex] else { continue }
             holeOccupied[startHoleIndex] = true
             holeOccupied[endHoleIndex] = true
-            simulation.setPins(
-                ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
-                pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
-            )
-            ropeRestLengths[ropeIndex] = simd_length(pinEnd - pinStart)
+            let restLen = simd_length(pinEnd - pinStart)
+            ropeRestLengths[ropeIndex] = restLen
+            ropeEffectiveRestLengths[ropeIndex] = restLen
         }
     }
 

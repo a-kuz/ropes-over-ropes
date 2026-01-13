@@ -43,7 +43,6 @@ extension Renderer {
         }
         ropes[ropeIndex].startHole = -1
         ropes[ropeIndex].endHole = -1
-        simulation.deactivateRope(ropeIndex: ropeIndex)
         topology?.deactivateRope(ropeIndex: ropeIndex)
     }
 
