@@ -476,7 +476,7 @@ extension Renderer {
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
             orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0),
-            timeDrag: SIMD4<Float>(time, dragVisualEnergy, dragLiftCurrent, dragState != nil ? 1 : 0)
+            timeDrag: SIMD4<Float>(time, dragVisualEnergy, dragLiftCurrent, dragState != nil ? 1 : 0), levelSeed: SIMD4<Float>(1)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
     }

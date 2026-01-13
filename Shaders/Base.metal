@@ -15,6 +15,7 @@ struct FrameUniforms {
     float4 orthoHalfSize_shadowBias;
     float4 shadowInvSize_unused;
     float4 timeDrag;
+    float4 levelSeed;
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
@@ -49,44 +50,46 @@ static float fbm2d(float2 p, int octaves) {
     return value;
 }
 
-static float3 woodTexture(float2 uv, float2 worldXY) {
+static float3 woodTexture(float2 uv, float2 worldXY, float seed) {
     float2 p = worldXY * 0.28;
+    float seedOffset = seed * 137.5;
     
-    float angle = atan2(p.y, p.x);
+    float angle = atan2(p.y + seedOffset * 0.01, p.x + seedOffset * 0.007);
     float ringDist = length(p);
     
-    float ringNoise = fbm2d(p * 3.2 + float2(angle * 0.5, 0.0), 4);
+    float ringNoise = fbm2d(p * 3.2 + float2(angle * 0.5 + seedOffset, seedOffset * 0.3), 4);
     float ringWarp = ringNoise * 0.15;
     float warpedDist = ringDist + ringWarp;
     
-    float ringPhase = warpedDist * 10.5 + fbm2d(p * 1.8, 3) * 1.4;
+    float ringPhase = warpedDist * 10.5 + fbm2d(p * 1.8 + seedOffset, 3) * 1.4;
     float rings = sin(ringPhase) * 0.5 + 0.5;
     rings = pow(rings, 2.2);
     
-    float ringVariation = fbm2d(p * 4.5, 3);
+    float ringVariation = fbm2d(p * 4.5 + seedOffset * 0.5, 3);
     rings = mix(rings, rings * 0.7, ringVariation * 0.4);
     
-    float densityNoise = fbm2d(p * 6.0, 4);
+    float densityNoise = fbm2d(p * 6.0 + seedOffset * 0.2, 4);
     float density = mix(0.85, 1.15, densityNoise);
     rings *= density;
     
     float grainDir = angle + ringDist * 0.3;
     float grainScale = 52.0;
-    float grainNoise = fbm2d(float2(p.y * grainScale, p.x * 0.25 + grainDir * 2.0), 5);
+    float grainNoise = fbm2d(float2(p.y * grainScale + seedOffset, p.x * 0.25 + grainDir * 2.0), 5);
     float grainPattern = sin(p.y * grainScale + grainNoise * 4.5) * 0.5 + 0.5;
     grainPattern = pow(grainPattern, 5.5);
     
-    float grainIntensity = mix(0.65, 0.95, fbm2d(p * 8.0, 3));
+    float grainIntensity = mix(0.65, 0.95, fbm2d(p * 8.0 + seedOffset, 3));
     grainPattern = grainPattern * grainIntensity;
     
-    float medullaryRays = sin(angle * 8.0 + ringDist * 3.0) * 0.5 + 0.5;
+    float medullaryRays = sin(angle * 8.0 + ringDist * 3.0 + seedOffset * 0.1) * 0.5 + 0.5;
     medullaryRays = pow(medullaryRays, 12.0) * 0.3;
     medullaryRays *= smoothstep(0.2, 1.5, ringDist);
     
-    float3 heartwoodDark = float3(0.38, 0.24, 0.16);
-    float3 heartwoodMid = float3(0.52, 0.36, 0.24);
-    float3 heartwoodLight = float3(0.68, 0.52, 0.38);
-    float3 sapwoodLight = float3(0.82, 0.70, 0.56);
+    float hueShift = fract(seed * 0.618);
+    float3 heartwoodDark = float3(0.38 + hueShift * 0.08, 0.24 - hueShift * 0.04, 0.16 + hueShift * 0.02);
+    float3 heartwoodMid = float3(0.52 + hueShift * 0.06, 0.36 - hueShift * 0.03, 0.24 + hueShift * 0.03);
+    float3 heartwoodLight = float3(0.68 + hueShift * 0.04, 0.52 - hueShift * 0.02, 0.38 + hueShift * 0.02);
+    float3 sapwoodLight = float3(0.82 + hueShift * 0.02, 0.70 - hueShift * 0.01, 0.56 + hueShift * 0.01);
     
     float ringMask = rings;
     float3 heartwoodColor = mix(heartwoodDark, heartwoodMid, ringMask);
@@ -100,15 +103,296 @@ static float3 woodTexture(float2 uv, float2 worldXY) {
     
     woodColor = mix(woodColor, woodColor * 1.12, medullaryRays);
     
-    float colorVariation = fbm2d(p * 0.95, 4);
+    float colorVariation = fbm2d(p * 0.95 + seedOffset * 0.1, 4);
     woodColor *= mix(0.88, 1.12, colorVariation);
     
-    float textureVariation = fbm2d(p * 2.3, 5);
+    float textureVariation = fbm2d(p * 2.3 + seedOffset * 0.15, 5);
     woodColor *= mix(0.92, 1.08, textureVariation);
     
-    float3 finalColor = saturate(woodColor);
+    return saturate(woodColor);
+}
+
+static float3 marbleTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.35 + seed * 17.3;
     
-    return finalColor;
+    float3 baseWhite = float3(0.94, 0.93, 0.91);
+    float3 veinDark = float3(0.25, 0.28, 0.32);
+    float3 veinMid = float3(0.55, 0.58, 0.62);
+    
+    float veinHue = fract(seed * 0.314);
+    if (veinHue > 0.5) {
+        veinDark = float3(0.35, 0.25, 0.22);
+        veinMid = float3(0.65, 0.55, 0.50);
+        baseWhite = float3(0.95, 0.92, 0.88);
+    }
+    
+    float largeVein = fbm2d(p * 1.2 + float2(seed * 0.8, seed * 0.5), 4);
+    float mediumVein = fbm2d(p * 3.5 + float2(seed * 1.2, seed * 0.7), 5);
+    float fineVein = fbm2d(p * 8.0 + float2(seed * 0.4, seed * 0.9), 4);
+    
+    float veinPattern = largeVein * 0.6 + mediumVein * 0.3 + fineVein * 0.1;
+    veinPattern = pow(abs(sin(veinPattern * 6.0 + p.x * 2.0 + p.y * 1.5)), 3.0);
+    
+    float crystalNoise = fbm2d(p * 25.0 + seed, 3);
+    float sparkle = pow(crystalNoise, 8.0) * 0.15;
+    
+    float3 color = mix(baseWhite, veinMid, veinPattern * 0.6);
+    color = mix(color, veinDark, pow(veinPattern, 2.0) * 0.4);
+    color += float3(sparkle);
+    
+    float variation = fbm2d(p * 0.8 + seed * 2.1, 3);
+    color *= mix(0.95, 1.05, variation);
+    
+    return saturate(color);
+}
+
+static float3 leatherTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.6 + seed * 23.7;
+    
+    float hue = fract(seed * 0.437);
+    float3 baseColor;
+    if (hue < 0.25) {
+        baseColor = float3(0.22, 0.14, 0.10);
+    } else if (hue < 0.5) {
+        baseColor = float3(0.12, 0.08, 0.06);
+    } else if (hue < 0.75) {
+        baseColor = float3(0.28, 0.22, 0.18);
+    } else {
+        baseColor = float3(0.18, 0.10, 0.08);
+    }
+    
+    float grain = fbm2d(p * 18.0 + seed * 3.1, 5);
+    float pores = fbm2d(p * 45.0 + seed * 7.2, 4);
+    pores = pow(pores, 3.0);
+    
+    float creases = fbm2d(p * 2.5 + seed * 1.5, 4);
+    creases = pow(abs(sin(creases * 8.0)), 4.0);
+    
+    float stitchPattern = 0.0;
+    float stitchFreq = 12.0;
+    float stitchY = fract(p.y * stitchFreq);
+    float stitchX = fract(p.x * stitchFreq + floor(p.y * stitchFreq) * 0.5);
+    if (abs(stitchY - 0.5) < 0.05 && abs(stitchX - 0.5) < 0.15) {
+        stitchPattern = 0.08;
+    }
+    
+    float3 color = baseColor;
+    color *= mix(0.85, 1.15, grain);
+    color -= float3(pores * 0.08);
+    color *= mix(0.92, 1.0, 1.0 - creases * 0.3);
+    color += float3(stitchPattern);
+    
+    return saturate(color);
+}
+
+static float3 brushedMetalTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.4 + seed * 31.2;
+    
+    float metalType = fract(seed * 0.529);
+    float3 baseColor;
+    float3 highlightColor;
+    if (metalType < 0.33) {
+        baseColor = float3(0.72, 0.74, 0.78);
+        highlightColor = float3(0.88, 0.90, 0.94);
+    } else if (metalType < 0.66) {
+        baseColor = float3(0.82, 0.68, 0.52);
+        highlightColor = float3(0.95, 0.85, 0.72);
+    } else {
+        baseColor = float3(0.38, 0.42, 0.45);
+        highlightColor = float3(0.55, 0.60, 0.65);
+    }
+    
+    float brushAngle = fract(seed * 0.777) * 3.14159;
+    float2 brushDir = float2(cos(brushAngle), sin(brushAngle));
+    float brushCoord = dot(p, brushDir);
+    
+    float brushStrokes = 0.0;
+    brushStrokes += sin(brushCoord * 120.0 + fbm2d(p * 2.0 + seed, 3) * 8.0) * 0.3;
+    brushStrokes += sin(brushCoord * 280.0 + fbm2d(p * 5.0 + seed * 2.0, 2) * 4.0) * 0.2;
+    brushStrokes += fbm2d(float2(brushCoord * 400.0, p.y * 2.0) + seed, 3) * 0.15;
+    brushStrokes = brushStrokes * 0.5 + 0.5;
+    
+    float scratches = fbm2d(p * 35.0 + seed * 5.3, 4);
+    scratches = pow(scratches, 4.0) * 0.12;
+    
+    float3 color = mix(baseColor, highlightColor, brushStrokes * 0.4);
+    color += float3(scratches);
+    
+    float reflection = fbm2d(p * 0.5 + seed * 0.8, 3);
+    color *= mix(0.92, 1.08, reflection);
+    
+    return saturate(color);
+}
+
+static float3 graniteTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.45 + seed * 19.8;
+    
+    float grainType = fract(seed * 0.381);
+    float3 baseGray, speckDark, speckLight, crystalColor;
+    if (grainType < 0.33) {
+        baseGray = float3(0.45, 0.45, 0.48);
+        speckDark = float3(0.15, 0.15, 0.18);
+        speckLight = float3(0.75, 0.75, 0.72);
+        crystalColor = float3(0.65, 0.60, 0.55);
+    } else if (grainType < 0.66) {
+        baseGray = float3(0.55, 0.50, 0.48);
+        speckDark = float3(0.25, 0.20, 0.18);
+        speckLight = float3(0.85, 0.80, 0.75);
+        crystalColor = float3(0.75, 0.65, 0.60);
+    } else {
+        baseGray = float3(0.38, 0.40, 0.42);
+        speckDark = float3(0.12, 0.14, 0.16);
+        speckLight = float3(0.68, 0.70, 0.72);
+        crystalColor = float3(0.55, 0.58, 0.62);
+    }
+    
+    float largeGrain = fbm2d(p * 3.5 + seed * 2.1, 4);
+    float mediumGrain = fbm2d(p * 12.0 + seed * 4.3, 4);
+    float fineGrain = fbm2d(p * 35.0 + seed * 8.7, 3);
+    
+    float3 color = baseGray;
+    
+    float darkSpeckMask = step(0.65, fineGrain) * step(mediumGrain, 0.45);
+    color = mix(color, speckDark, darkSpeckMask * 0.8);
+    
+    float lightSpeckMask = step(0.7, mediumGrain) * step(0.55, fineGrain);
+    color = mix(color, speckLight, lightSpeckMask * 0.6);
+    
+    float crystalMask = step(0.75, largeGrain) * step(0.6, mediumGrain);
+    color = mix(color, crystalColor, crystalMask * 0.5);
+    
+    float sparkle = pow(fbm2d(p * 80.0 + seed * 12.0, 2), 10.0) * 0.2;
+    color += float3(sparkle);
+    
+    float variation = fbm2d(p * 1.2 + seed * 0.9, 3);
+    color *= mix(0.9, 1.1, variation);
+    
+    return saturate(color);
+}
+
+static float3 fabricTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.5 + seed * 41.3;
+    
+    float colorChoice = fract(seed * 0.617);
+    float3 warpColor, weftColor;
+    if (colorChoice < 0.2) {
+        warpColor = float3(0.15, 0.32, 0.22);
+        weftColor = float3(0.12, 0.28, 0.18);
+    } else if (colorChoice < 0.4) {
+        warpColor = float3(0.35, 0.18, 0.15);
+        weftColor = float3(0.30, 0.14, 0.12);
+    } else if (colorChoice < 0.6) {
+        warpColor = float3(0.18, 0.22, 0.38);
+        weftColor = float3(0.14, 0.18, 0.32);
+    } else if (colorChoice < 0.8) {
+        warpColor = float3(0.28, 0.26, 0.22);
+        weftColor = float3(0.24, 0.22, 0.18);
+    } else {
+        warpColor = float3(0.42, 0.38, 0.32);
+        weftColor = float3(0.38, 0.34, 0.28);
+    }
+    
+    float threadFreq = 60.0;
+    float warp = sin(p.x * threadFreq + fbm2d(p * 5.0 + seed, 2) * 0.8) * 0.5 + 0.5;
+    float weft = sin(p.y * threadFreq + fbm2d(p * 5.0 + seed * 2.0, 2) * 0.8) * 0.5 + 0.5;
+    
+    float weavePattern = warp * (1.0 - weft * 0.3) + weft * 0.3;
+    
+    float3 color = mix(warpColor, weftColor, weavePattern);
+    
+    float fuzz = fbm2d(p * 150.0 + seed * 15.0, 3) * 0.08;
+    color += float3(fuzz);
+    
+    float lint = pow(fbm2d(p * 80.0 + seed * 20.0, 2), 6.0) * 0.1;
+    color += float3(lint);
+    
+    float threadVar = fbm2d(p * 25.0 + seed * 3.0, 3);
+    color *= mix(0.88, 1.12, threadVar);
+    
+    return saturate(color);
+}
+
+static float3 concreteTexture(float2 uv, float2 worldXY, float seed) {
+    float2 p = worldXY * 0.38 + seed * 27.4;
+    
+    float toneChoice = fract(seed * 0.743);
+    float3 baseColor;
+    if (toneChoice < 0.33) {
+        baseColor = float3(0.62, 0.60, 0.58);
+    } else if (toneChoice < 0.66) {
+        baseColor = float3(0.55, 0.54, 0.52);
+    } else {
+        baseColor = float3(0.68, 0.65, 0.62);
+    }
+    
+    float surface = fbm2d(p * 8.0 + seed * 3.2, 5);
+    float pebbles = fbm2d(p * 25.0 + seed * 7.1, 4);
+    float sandGrain = fbm2d(p * 60.0 + seed * 11.3, 3);
+    
+    float cracks = fbm2d(p * 2.0 + seed * 1.5, 4);
+    cracks = pow(abs(sin(cracks * 4.0 + p.x * 0.5)), 8.0) * 0.15;
+    
+    float3 color = baseColor;
+    color *= mix(0.85, 1.15, surface);
+    
+    float pebbleMask = step(0.65, pebbles);
+    float3 pebbleColor = baseColor * mix(0.7, 1.3, fbm2d(p * 40.0 + seed * 5.0, 2));
+    color = mix(color, pebbleColor, pebbleMask * 0.4);
+    
+    color += float3(sandGrain * 0.06 - 0.03);
+    color -= float3(cracks);
+    
+    return saturate(color);
+}
+
+static float3 getTableTexture(float2 uv, float2 worldXY, float seed) {
+    int textureType = int(fract(seed * 0.618 + 0.1) * 7.0);
+    
+    if (textureType == 0) {
+        return woodTexture(uv, worldXY, seed);
+    } else if (textureType == 1) {
+        return marbleTexture(uv, worldXY, seed);
+    } else if (textureType == 2) {
+        return leatherTexture(uv, worldXY, seed);
+    } else if (textureType == 3) {
+        return brushedMetalTexture(uv, worldXY, seed);
+    } else if (textureType == 4) {
+        return graniteTexture(uv, worldXY, seed);
+    } else if (textureType == 5) {
+        return fabricTexture(uv, worldXY, seed);
+    } else {
+        return concreteTexture(uv, worldXY, seed);
+    }
+}
+
+struct LightParams {
+    float3 direction;
+    float intensity;
+    float3 warmTint;
+};
+
+static LightParams getLightParams(float seed) {
+    LightParams params;
+    
+    float angleVariation = fract(seed * 0.823) * 0.6 - 0.3;
+    float heightVariation = fract(seed * 0.567) * 0.3 + 0.2;
+    
+    float baseAngle = -0.92 + angleVariation;
+    float baseHeight = 0.35 + heightVariation;
+    params.direction = normalize(float3(baseAngle, -0.18 + fract(seed * 0.432) * 0.2 - 0.1, baseHeight));
+    
+    params.intensity = 4.5 + fract(seed * 0.291) * 2.0;
+    
+    float warmth = fract(seed * 0.719);
+    if (warmth < 0.33) {
+        params.warmTint = float3(1.0, 0.95, 0.88);
+    } else if (warmth < 0.66) {
+        params.warmTint = float3(0.95, 0.98, 1.0);
+    } else {
+        params.warmTint = float3(1.0, 0.98, 0.92);
+    }
+    
+    return params;
 }
 
 static float3 matteRubber(float3 baseColor, float3 n, float3 l, float3 v, float rough, float fiber) {
@@ -199,7 +483,9 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     float3 worldPos = float3(worldXY.x, worldXY.y, 0.0);
     float3 worldN = float3(0.0, 0.0, 1.0);
     
-    float3 baseColor = woodTexture(uv, worldXY);
+    float seed = frame.levelSeed.x;
+    float3 baseColor = getTableTexture(uv, worldXY, seed);
+    LightParams light = getLightParams(seed);
     
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - worldPos);
@@ -210,7 +496,7 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     
     float wrap = 0.4;
     float wrapTerm = saturate((nl + wrap) / (1.0 + wrap));
-    float3 diff = baseColor * mix(0.25, 0.95, wrapTerm);
+    float3 diff = baseColor * mix(0.25, 0.95, wrapTerm) * light.warmTint;
     
     float fresnel = pow(1.0 - nv, 3.0);
     float roughness = 0.75;
@@ -222,7 +508,7 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     float gl = nl / (nl * (1.0 - k) + k);
     float gv = nv / (nv * (1.0 - k) + k);
     float spec = d * gl * gv;
-    float3 specColor = float3(0.9, 0.85, 0.75) * spec * 0.12 * (0.2 + 0.8 * fresnel);
+    float3 specColor = light.warmTint * spec * 0.12 * (0.2 + 0.8 * fresnel);
     
     float3 c = diff + specColor;
     
@@ -234,7 +520,7 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     c *= mix(0.22, 1.0, shadow);
     
     float ambient = 0.15;
-    c += baseColor * ambient;
+    c += baseColor * ambient * light.warmTint;
     
     return float4(c, 1.0);
 }

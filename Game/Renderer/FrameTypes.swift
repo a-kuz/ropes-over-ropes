@@ -9,6 +9,7 @@ struct FrameUniforms {
     var orthoHalfSizeShadowBias: SIMD4<Float>
     var shadowInvSizeUnused: SIMD4<Float>
     var timeDrag: SIMD4<Float>
+    var levelSeed: SIMD4<Float>
 }
 
 struct HoleInstance {

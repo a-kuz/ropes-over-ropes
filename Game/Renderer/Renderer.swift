@@ -274,7 +274,24 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ropeConfigs = ropes.map { rope in
             (startHole: rope.startHole, endHole: rope.endHole, color: rope.color)
         }
-        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs)
+        
+        var initialHooks: [TopologyEngine.InitialHook]? = nil
+        if let levelHooks = level?.hooks {
+            let validationErrors = level?.validateHooks() ?? []
+            for error in validationErrors {
+                Self.logger.warning("Hook validation: \(error)")
+            }
+            initialHooks = levelHooks.map { hook in
+                TopologyEngine.InitialHook(
+                    ropeA: hook.ropeA,
+                    ropeB: hook.ropeB,
+                    N: hook.N,
+                    ropeAStartIsOver: hook.ropeAStartIsOver
+                )
+            }
+        }
+        
+        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs, initialHooks: initialHooks)
 
         for ropeIndex in ropes.indices {
             let startHoleIndex = ropes[ropeIndex].startHole

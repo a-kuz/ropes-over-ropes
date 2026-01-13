@@ -6,6 +6,8 @@ extension Renderer {
     private static let meshLogger = Logger(subsystem: "com.uzls.four", category: "RopeMesh")
     
     func updateRopeMesh() {
+        topology?.updateHookPositions(deltaTime: lastDeltaTime)
+        
         var allVertices: [RopeVertex] = []
         var allIndices: [UInt32] = []
         allVertices.reserveCapacity(ropes.count * 6400 * 8)

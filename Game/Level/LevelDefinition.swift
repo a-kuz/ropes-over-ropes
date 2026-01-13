@@ -77,11 +77,80 @@ struct LevelDefinition: Codable {
             }
         }
     }
+    
+    struct Hook: Codable {
+        let ropeA: Int
+        let ropeB: Int
+        let N: Int
+        let ropeAStartIsOver: Bool
+    }
 
     let id: Int
     let holeRadius: Float
     let particlesPerRope: Int
     let holes: [Vec2]
     let ropes: [Rope]
+    let hooks: [Hook]?
+    
+    func validateHooks() -> [String] {
+        var errors: [String] = []
+        guard let hooks = hooks else { return errors }
+        
+        let holePositions = holes.map { $0.simd }
+        
+        for (i, hook) in hooks.enumerated() {
+            guard hook.ropeA >= 0 && hook.ropeA < ropes.count else {
+                errors.append("Hook[\(i)]: ropeA=\(hook.ropeA) out of range")
+                continue
+            }
+            guard hook.ropeB >= 0 && hook.ropeB < ropes.count else {
+                errors.append("Hook[\(i)]: ropeB=\(hook.ropeB) out of range")
+                continue
+            }
+            guard hook.ropeA != hook.ropeB else {
+                errors.append("Hook[\(i)]: ropeA == ropeB")
+                continue
+            }
+            guard hook.N >= 1 && hook.N <= 10 else {
+                errors.append("Hook[\(i)]: N=\(hook.N) out of range [1..10]")
+                continue
+            }
+            
+            let ropeA = ropes[hook.ropeA]
+            let ropeB = ropes[hook.ropeB]
+            
+            guard let A1 = holePositions[safe: ropeA.startHole],
+                  let A2 = holePositions[safe: ropeA.endHole],
+                  let B1 = holePositions[safe: ropeB.startHole],
+                  let B2 = holePositions[safe: ropeB.endHole] else {
+                errors.append("Hook[\(i)]: invalid hole indices")
+                continue
+            }
+            
+            let segmentsCross = segmentsIntersect(A1, A2, B1, B2)
+            let shouldCross = (hook.N % 2 == 1)
+            
+            if segmentsCross != shouldCross {
+                if shouldCross {
+                    errors.append("Hook[\(i)]: N=\(hook.N) (odd) requires A1-A2 and B1-B2 to intersect, but they don't")
+                } else {
+                    errors.append("Hook[\(i)]: N=\(hook.N) (even) requires A1-A2 and B1-B2 to NOT intersect, but they do")
+                }
+            }
+        }
+        
+        return errors
+    }
+    
+    private func segmentsIntersect(_ a0: SIMD2<Float>, _ a1: SIMD2<Float>, _ b0: SIMD2<Float>, _ b1: SIMD2<Float>) -> Bool {
+        let d1 = a1 - a0
+        let d2 = b1 - b0
+        let cross = d1.x * d2.y - d1.y * d2.x
+        if abs(cross) < 1e-9 { return false }
+        let d = b0 - a0
+        let t = (d.x * d2.y - d.y * d2.x) / cross
+        let u = (d.x * d1.y - d.y * d1.x) / cross
+        return t >= 0 && t <= 1 && u >= 0 && u <= 1
+    }
 }
 

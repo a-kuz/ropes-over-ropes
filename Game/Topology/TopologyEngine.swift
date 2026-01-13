@@ -16,7 +16,14 @@ final class TopologyEngine {
 
     var holePositions: [SIMD2<Float>]
 
-    init(holePositions: [SIMD2<Float>], ropeConfigs: [(startHole: Int, endHole: Int, color: SIMD3<Float>)]) {
+    struct InitialHook {
+        let ropeA: Int
+        let ropeB: Int
+        let N: Int
+        let ropeAStartIsOver: Bool
+    }
+    
+    init(holePositions: [SIMD2<Float>], ropeConfigs: [(startHole: Int, endHole: Int, color: SIMD3<Float>)], initialHooks: [InitialHook]? = nil) {
         self.holePositions = holePositions
         self.ropes = ropeConfigs.map { config in
             TopologyRope(
@@ -29,7 +36,46 @@ final class TopologyEngine {
                 floatingPosition: nil
             )
         }
-        buildInitialHooks()
+        
+        if let initialHooks = initialHooks, !initialHooks.isEmpty {
+            buildHooksFromDefinition(initialHooks)
+        } else {
+            buildInitialHooks()
+        }
+    }
+    
+    private func buildHooksFromDefinition(_ initialHooks: [InitialHook]) {
+        for hook in initialHooks {
+            guard hook.ropeA >= 0 && hook.ropeA < ropes.count else { continue }
+            guard hook.ropeB >= 0 && hook.ropeB < ropes.count else { continue }
+            guard hook.ropeA != hook.ropeB else { continue }
+            
+            let low = min(hook.ropeA, hook.ropeB)
+            let high = max(hook.ropeA, hook.ropeB)
+            
+            let ropeAStartIsOver: Bool
+            if hook.ropeA == low {
+                ropeAStartIsOver = hook.ropeAStartIsOver
+            } else {
+                ropeAStartIsOver = !hook.ropeAStartIsOver
+            }
+            
+            let hookId = nextHookId
+            nextHookId += 1
+            
+            let newHook = HookSequence(
+                id: hookId,
+                ropeA: low,
+                ropeB: high,
+                N: hook.N,
+                ropeAStartIsOver: ropeAStartIsOver
+            )
+            hooks[hookId] = newHook
+            ropes[low].hooks.append(hookId)
+            ropes[high].hooks.append(hookId)
+            
+            Self.logger.info("📌 Loaded hook[\(hookId)]: ropes \(low)-\(high), N=\(hook.N), ropeAStartIsOver=\(ropeAStartIsOver)")
+        }
     }
 
     func ropeStart(_ ropeIndex: Int) -> SIMD2<Float> {
@@ -48,6 +94,58 @@ final class TopologyEngine {
             return pos
         }
         return holePositions[safe: rope.endHole] ?? .zero
+    }
+    
+    private let hookPhysicsState = HookPhysicsState()
+    
+    func updateHookPositions(deltaTime: Float) {
+        HookPositionSolver.stepPhysics(
+            state: hookPhysicsState,
+            hooks: hooks,
+            ropeStartPos: { [weak self] ropeIndex in
+                self?.ropeStart(ropeIndex) ?? .zero
+            },
+            ropeEndPos: { [weak self] ropeIndex in
+                self?.ropeEnd(ropeIndex) ?? .zero
+            },
+            ropeHookIds: { [weak self] ropeIndex in
+                self?.ropes[safe: ropeIndex]?.hooks ?? []
+            },
+            deltaTime: deltaTime
+        )
+        
+        for (hookId, pos) in hookPhysicsState.positions {
+            hooks[hookId]?.center = pos
+        }
+        
+        for ropeIndex in ropes.indices {
+            ropes[ropeIndex].hooks = orderedHooks(forRope: ropeIndex)
+        }
+    }
+    
+    func resetHookPhysics() {
+        hookPhysicsState.initialized = false
+        hookPhysicsState.positions.removeAll()
+        hookPhysicsState.velocities.removeAll()
+    }
+    
+    func orderedHooks(forRope ropeIndex: Int) -> [Int] {
+        guard ropes.indices.contains(ropeIndex) else { return [] }
+        let hookIds = ropes[ropeIndex].hooks
+        var centers: [Int: SIMD2<Float>] = [:]
+        for hookId in hookIds {
+            centers[hookId] = hooks[hookId]?.center ?? .zero
+        }
+        return HookPositionSolver.orderHooksAlongRope(
+            hookIds: hookIds,
+            centers: centers,
+            ropeStart: ropeStart(ropeIndex),
+            ropeEnd: ropeEnd(ropeIndex)
+        )
+    }
+    
+    func hookCenter(_ hookId: Int) -> SIMD2<Float>? {
+        hooks[hookId]?.center
     }
 
     func snapshot() -> TopologySnapshot {
@@ -164,6 +262,32 @@ final class TopologyEngine {
         lastDragPosition = nil
         dragRopeIndex = nil
         dragEndIndex = nil
+    }
+    
+    func cleanupInvalidHooks() {
+        var hooksToRemove: [Int] = []
+        
+        for (hookId, hook) in hooks {
+            let A1 = ropeStart(hook.ropeA)
+            let A2 = ropeEnd(hook.ropeA)
+            let B1 = ropeStart(hook.ropeB)
+            let B2 = ropeEnd(hook.ropeB)
+            
+            let segmentsCross = segmentIntersection(a0: A1, a1: A2, b0: B1, b1: B2) != nil
+            let shouldCross = (hook.N % 2 == 1)
+            
+            if shouldCross && !segmentsCross {
+                Self.logger.info("🗑️ Hook[\(hookId)] invalid: N=\(hook.N) (odd) but segments don't cross - removing")
+                hooksToRemove.append(hookId)
+            } else if !shouldCross && segmentsCross {
+                Self.logger.info("🗑️ Hook[\(hookId)] invalid: N=\(hook.N) (even) but segments cross - removing")
+                hooksToRemove.append(hookId)
+            }
+        }
+        
+        for hookId in hooksToRemove {
+            removeHook(hookId: hookId)
+        }
     }
 
     func processCanonicalMove(ropeIndex: Int, endIndex: Int, from: SIMD2<Float>, to: SIMD2<Float>) {

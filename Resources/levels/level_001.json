@@ -10,7 +10,7 @@
     { "x": -0.82, "y": -0.41 },
     { "x": -0.27, "y": -0.41 },
     { "x": 0.28, "y": -0.41 },
-    { "x": 0.83, "y": -0.41 },
+    { "x": 0.83, "y": -0.41 }, 
     { "x": -0.82, "y": 0.04 },
     { "x": -0.27, "y": 0.04 },
     { "x": 0.28, "y": 0.04 },
@@ -25,8 +25,22 @@
     { "x": 0.83, "y": 0.94 }
   ],
   "ropes": [
-    { "startHole": 0, "endHole": 15, "radius": 0.04, "color": { "r": 0.20, "g": 0.95, "b": 0.35 } },
-    { "startHole": 3, "endHole": 12, "radius": 0.04, "color": { "r": 0.30, "g": 0.55, "b": 0.98 } }
+    { "startHole": 3, "endHole": 1, "radius": 0.04, "color": { "r": 0.20, "g": 0.95, "b": 0.35 } },
+    { "startHole": 4, "endHole": 12, "radius": 0.04, "color": { "r": 0.30, "g": 0.55, "b": 0.98 } },
+    { "startHole": 10, "endHole": 11, "radius": 0.03, "color": { "r": 0.96, "g": 0.28, "b": 0.33 } }
+  ],
+  "hooks": [
+    {
+      "ropeA": 0,
+      "ropeB": 2,
+      "N": 2,
+      "ropeAStartIsOver": false
+    },
+    {
+      "ropeA": 0,
+      "ropeB": 1,
+      "N": 2,
+      "ropeAStartIsOver": false
+    }
   ]
 }
-

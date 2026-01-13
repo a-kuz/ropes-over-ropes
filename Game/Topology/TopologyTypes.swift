@@ -22,6 +22,7 @@ struct HookSequence {
     var ropeB: Int
     var N: Int
     var ropeAStartIsOver: Bool
+    var center: SIMD2<Float> = .zero
 }
 
 struct HookSequenceGeometry {

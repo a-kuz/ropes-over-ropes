@@ -6,6 +6,8 @@ enum HookGeometryCalculator {
     private static let logger = Logger(subsystem: "com.uzls.four", category: "HookGeometry")
     nonisolated(unsafe) private static var lastLogParams: (A1: SIMD2<Float>, A2: SIMD2<Float>, B1: SIMD2<Float>, B2: SIMD2<Float>, R: Float, N: Int)?
     nonisolated(unsafe) private static var lastLogTime: Double = 0
+    nonisolated(unsafe) private static var lastLogHash: Int = 0
+    private static let minLogInterval: Double = 2.0
     
     static func calculateHookSequenceGeometry(
         A1: SIMD2<Float>,
@@ -84,28 +86,16 @@ enum HookGeometryCalculator {
     ) -> HookSequenceGeometry? {
         let R = R * radiusMultiplier
         let currentParams = (A1, A2, B1, B2, R, crossingCount)
+        let eps: Float = 0.001
+        let currentHash = hashParams(A1: A1, A2: A2, B1: B1, B2: B2, R: R, N: crossingCount, eps: eps)
         let now = CACurrentMediaTime()
         let timeSinceLastLog = now - lastLogTime
-        let shouldLog: Bool
-        if let last = lastLogParams {
-            let eps: Float = 0.001
-            let dataChanged = simd_length_squared(A1 - last.A1) > eps * eps ||
-                       simd_length_squared(A2 - last.A2) > eps * eps ||
-                       simd_length_squared(B1 - last.B1) > eps * eps ||
-                       simd_length_squared(B2 - last.B2) > eps * eps ||
-                       abs(R - last.R) > eps ||
-                       crossingCount != last.N
-            shouldLog = dataChanged && timeSinceLastLog >= 0.5
-            if shouldLog {
-                lastLogParams = currentParams
-                lastLogTime = now
-            }
-        } else {
-            shouldLog = timeSinceLastLog >= 0.5
-            if shouldLog {
-                lastLogParams = currentParams
-                lastLogTime = now
-            }
+        let hashChanged = currentHash != lastLogHash
+        let shouldLog = hashChanged && timeSinceLastLog >= minLogInterval
+        if shouldLog {
+            lastLogParams = currentParams
+            lastLogHash = currentHash
+            lastLogTime = now
         }
         
         if shouldLog {
@@ -405,5 +395,27 @@ enum HookGeometryCalculator {
             return SIMD2<Float>(px, py)
         }
         return nil
+    }
+    
+    private static func hashParams(A1: SIMD2<Float>, A2: SIMD2<Float>, B1: SIMD2<Float>, B2: SIMD2<Float>, R: Float, N: Int, eps: Float) -> Int {
+        let quantize: (SIMD2<Float>) -> (Int, Int) = { p in
+            (Int((p.x / eps).rounded()), Int((p.y / eps).rounded()))
+        }
+        let qA1 = quantize(A1)
+        let qA2 = quantize(A2)
+        let qB1 = quantize(B1)
+        let qB2 = quantize(B2)
+        let qR = Int((R / eps).rounded())
+        var hash = qA1.0
+        hash = hash &* 31 &+ qA1.1
+        hash = hash &* 31 &+ qA2.0
+        hash = hash &* 31 &+ qA2.1
+        hash = hash &* 31 &+ qB1.0
+        hash = hash &* 31 &+ qB1.1
+        hash = hash &* 31 &+ qB2.0
+        hash = hash &* 31 &+ qB2.1
+        hash = hash &* 31 &+ qR
+        hash = hash &* 31 &+ N
+        return hash
     }
 }

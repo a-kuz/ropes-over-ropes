@@ -2,6 +2,8 @@ import simd
 
 extension Renderer {
     func removeUntangledRopes() {
+        topology?.cleanupInvalidHooks()
+        
         var removed = true
         while removed {
             removed = false

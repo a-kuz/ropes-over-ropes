@@ -124,29 +124,17 @@ enum TopologySampler {
         let startIsFloating = rope.floatingEnd == 0
         let endIsFloating = rope.floatingEnd == 1
         
-        let hookId = rope.hooks.first
-        var hookPath: [SIMD2<Float>]? = nil
-        var hook: HookSequence? = nil
+        let orderedHooks = engine.orderedHooks(forRope: ropeIndex)
         
-        if let hId = hookId, let h = engine.hooks[hId] {
-            hook = h
-            let isRopeA = (ropeIndex == h.ropeA)
-            let otherRadius = ropeRadiusForIndex(isRopeA ? h.ropeB : h.ropeA)
-            let R = max(ropeRadius, otherRadius)
-            
-            let A1 = engine.ropeStart(h.ropeA)
-            let A2 = engine.ropeEnd(h.ropeA)
-            let B1 = engine.ropeStart(h.ropeB)
-            let B2 = engine.ropeEnd(h.ropeB)
-            
-            if let geom = HookGeometryCalculator.calculateHookSequenceGeometry(
-                A1: A1, A2: A2, B1: B1, B2: B2, R: R, crossingCount: h.N,
-                stepMultiplier: hookStepMultiplier, radiusMultiplier: hookRadiusMultiplier,
-                stepLimitMultiplier: hookStepLimitMultiplier
-            ) {
-                hookPath = isRopeA ? geom.pathA : geom.pathB
+        var waypoints: [SIMD2<Float>] = []
+        for hookId in orderedHooks {
+            if let center = engine.hookCenter(hookId) {
+                waypoints.append(center)
             }
         }
+        
+        let firstTarget = waypoints.first ?? rawEnd
+        let lastTarget = waypoints.last ?? rawStart
         
         let startAnchor: SIMD2<Float>
         let startZ: Float
@@ -154,17 +142,11 @@ enum TopologySampler {
             startAnchor = rawStart
             startZ = dragLift
         } else {
-            let targetPoint: SIMD2<Float>
-            if let path = hookPath, !path.isEmpty {
-                targetPoint = path[0]
-            } else {
-                targetPoint = rawEnd
-            }
-            let dir = targetPoint - rawStart
-            let dirLen = simd_length(dir)
-            if dirLen > 1e-6 {
+            let dir = firstTarget - rawStart
+                let dirLen = simd_length(dir)
+                if dirLen > 1e-6 {
                 startAnchor = rawStart + (dir / dirLen) * holeInnerRadius
-            } else {
+                } else {
                 startAnchor = rawStart
             }
             startZ = -holeDepth
@@ -176,27 +158,34 @@ enum TopologySampler {
             endAnchor = rawEnd
             endZ = dragLift
         } else {
-            let targetPoint: SIMD2<Float>
-            if let path = hookPath, !path.isEmpty {
-                targetPoint = path[path.count - 1]
-            } else {
-                targetPoint = rawStart
-            }
-            let dir = targetPoint - rawEnd
-            let dirLen = simd_length(dir)
-            if dirLen > 1e-6 {
+            let dir = lastTarget - rawEnd
+                let dirLen = simd_length(dir)
+                if dirLen > 1e-6 {
                 endAnchor = rawEnd + (dir / dirLen) * holeInnerRadius
-            } else {
+                } else {
                 endAnchor = rawEnd
             }
             endZ = -holeDepth
         }
         
-        if let hook = hook {
+        if orderedHooks.isEmpty {
+            let simplePoly = buildSimplePoly(
+                startAnchor: startAnchor,
+                endAnchor: endAnchor,
+                startZ: startZ,
+                endZ: endZ,
+                baseZ: baseZ
+            )
+            return RopeRenderResult(points: simplePoly, segmentStarts: [0])
+        }
+        
+        if orderedHooks.count == 1, let hookId = orderedHooks.first, let hook = engine.hooks[hookId] {
             return buildHookPoly(
                 engine: engine,
                 ropeIndex: ropeIndex,
                 hook: hook,
+                prevNeighborCenter: nil,
+                nextNeighborCenter: nil,
                 startAnchor: startAnchor,
                 endAnchor: endAnchor,
                 startZ: startZ,
@@ -207,14 +196,118 @@ enum TopologySampler {
             )
         }
         
-        let simplePoly = buildSimplePoly(
+        return buildMultiHookPoly(
+            engine: engine,
+            ropeIndex: ropeIndex,
+            orderedHooks: orderedHooks,
             startAnchor: startAnchor,
             endAnchor: endAnchor,
             startZ: startZ,
             endZ: endZ,
-            baseZ: baseZ
+            baseZ: baseZ,
+            ropeRadius: ropeRadius,
+            ropeRadiusForIndex: ropeRadiusForIndex
         )
-        return RopeRenderResult(points: simplePoly, segmentStarts: [0])
+    }
+    
+    private static func buildMultiHookPoly(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        orderedHooks: [Int],
+        startAnchor: SIMD2<Float>,
+        endAnchor: SIMD2<Float>,
+        startZ: Float,
+        endZ: Float,
+        baseZ: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float
+    ) -> RopeRenderResult {
+        var allPoints: [SIMD3<Float>] = []
+        var allSegmentStarts: [Int] = []
+        
+        for (idx, hookId) in orderedHooks.enumerated() {
+            guard let hook = engine.hooks[hookId] else { continue }
+            
+            let prevCenter: SIMD2<Float>?
+            let nextCenter: SIMD2<Float>?
+            
+            if idx > 0 {
+                prevCenter = engine.hookCenter(orderedHooks[idx - 1])
+            } else {
+                prevCenter = nil
+            }
+            
+            if idx < orderedHooks.count - 1 {
+                nextCenter = engine.hookCenter(orderedHooks[idx + 1])
+            } else {
+                nextCenter = nil
+            }
+            
+            let isFirstHook = (idx == 0)
+            let isLastHook = (idx == orderedHooks.count - 1)
+            
+            let segmentStart = isFirstHook ? startAnchor : (prevCenter ?? startAnchor)
+            let segmentEnd = isLastHook ? endAnchor : (nextCenter ?? endAnchor)
+            let segmentStartZ = isFirstHook ? startZ : baseZ
+            let segmentEndZ = isLastHook ? endZ : baseZ
+            
+            let segmentResult = buildHookPoly(
+                engine: engine,
+                ropeIndex: ropeIndex,
+                hook: hook,
+                prevNeighborCenter: prevCenter,
+                nextNeighborCenter: nextCenter,
+                startAnchor: segmentStart,
+                endAnchor: segmentEnd,
+                startZ: segmentStartZ,
+                endZ: segmentEndZ,
+                baseZ: baseZ,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: ropeRadiusForIndex
+            )
+            
+            if isFirstHook {
+                let baseIdx = allPoints.count
+                for segStart in segmentResult.segmentStarts {
+                    allSegmentStarts.append(baseIdx + segStart)
+                }
+                allPoints.append(contentsOf: segmentResult.points)
+            }
+        }
+        
+        if allSegmentStarts.isEmpty {
+            allSegmentStarts = [0]
+        }
+        
+        return RopeRenderResult(points: allPoints, segmentStarts: allSegmentStarts)
+    }
+    
+    private static func findHookNeighborsOnRope(
+        engine: TopologyEngine,
+        hookId: Int,
+        ropeIndex: Int
+    ) -> (prev: SIMD2<Float>, next: SIMD2<Float>) {
+        let orderedHooks = engine.orderedHooks(forRope: ropeIndex)
+        
+        guard let idx = orderedHooks.firstIndex(of: hookId) else {
+            return (engine.ropeStart(ropeIndex), engine.ropeEnd(ropeIndex))
+        }
+        
+        let prev: SIMD2<Float>
+        if idx == 0 {
+            prev = engine.ropeStart(ropeIndex)
+        } else {
+            prev = engine.hookCenter(orderedHooks[idx - 1]) ?? engine.ropeStart(ropeIndex)
+        }
+        
+        let next: SIMD2<Float>
+        if idx == orderedHooks.count - 1 {
+            next = engine.ropeEnd(ropeIndex)
+        } else {
+            next = engine.hookCenter(orderedHooks[idx + 1]) ?? engine.ropeEnd(ropeIndex)
+        }
+        
+        return (prev, next)
     }
     
     private static func buildSimplePoly(
@@ -237,15 +330,15 @@ enum TopologySampler {
                 if t < midT {
                     let localT = t / midT
                     z = startZ + (baseZ - startZ) * smoothstep(localT)
-                } else {
+                        } else {
                     let localT = (t - midT) / (1 - midT)
                     z = baseZ + (endZ - baseZ) * smoothstep(localT)
-                }
+                        }
             } else if startZ < 0 {
                 z = startZ + (baseZ - startZ) * smoothstep(min(1, t * 4))
             } else if endZ < 0 {
                 z = baseZ + (endZ - baseZ) * smoothstep(max(0, (t - 0.75) * 4))
-            } else {
+                    } else {
                 z = baseZ
             }
             poly.append(SIMD3<Float>(xy.x, xy.y, z))
@@ -257,6 +350,8 @@ enum TopologySampler {
         engine: TopologyEngine,
         ropeIndex: Int,
         hook: HookSequence,
+        prevNeighborCenter: SIMD2<Float>?,
+        nextNeighborCenter: SIMD2<Float>?,
         startAnchor: SIMD2<Float>,
         endAnchor: SIMD2<Float>,
         startZ: Float,
@@ -270,10 +365,25 @@ enum TopologySampler {
         let otherRadius = ropeRadiusForIndex(otherRopeIndex)
         let currentRadius = ropeRadius
         
-        let A1 = engine.ropeStart(hook.ropeA)
-        let A2 = engine.ropeEnd(hook.ropeA)
-        let B1 = engine.ropeStart(hook.ropeB)
-        let B2 = engine.ropeEnd(hook.ropeB)
+        let otherNeighbors = findHookNeighborsOnRope(engine: engine, hookId: hook.id, ropeIndex: otherRopeIndex)
+        
+        let A1: SIMD2<Float>
+        let A2: SIMD2<Float>
+        let B1: SIMD2<Float>
+        let B2: SIMD2<Float>
+        
+        if isRopeA {
+            A1 = prevNeighborCenter ?? engine.ropeStart(hook.ropeA)
+            A2 = nextNeighborCenter ?? engine.ropeEnd(hook.ropeA)
+            B1 = otherNeighbors.prev
+            B2 = otherNeighbors.next
+        } else {
+            A1 = otherNeighbors.prev
+            A2 = otherNeighbors.next
+            B1 = prevNeighborCenter ?? engine.ropeStart(hook.ropeB)
+            B2 = nextNeighborCenter ?? engine.ropeEnd(hook.ropeB)
+        }
+        
         let R = max(ropeRadius, otherRadius)
         
         guard let geom = HookGeometryCalculator.calculateHookSequenceGeometry(
@@ -305,23 +415,23 @@ enum TopologySampler {
         let pathB = geom.pathB
         
         let logKey = ZLogKey(ropeIndex: ropeIndex, hookId: hook.id)
+        let eps: Float = 0.001
         let now = CACurrentMediaTime()
         let timeSinceLastLog = now - lastZLogTime
         let shouldLog: Bool
         if let last = lastZLogParams[logKey] {
-            let eps: Float = 0.001
             let pathChanged = pathA.count != last.pathA.count ||
                              pathB.count != last.pathB.count ||
                              zip(pathA, last.pathA).contains(where: { simd_length_squared($0 - $1) > eps * eps }) ||
                              zip(pathB, last.pathB).contains(where: { simd_length_squared($0 - $1) > eps * eps })
             let dataChanged = hook.N != last.N || pathChanged
-            shouldLog = dataChanged && timeSinceLastLog >= 0.5
+            shouldLog = dataChanged && timeSinceLastLog >= minZLogInterval
             if shouldLog {
                 lastZLogParams[logKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
                 lastZLogTime = now
             }
         } else {
-            shouldLog = timeSinceLastLog >= 0.5
+            shouldLog = timeSinceLastLog >= minZLogInterval
             if shouldLog {
                 lastZLogParams[logKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
                 lastZLogTime = now
@@ -329,7 +439,17 @@ enum TopologySampler {
         }
         
         var fullPath2D: [SIMD2<Float>] = [startAnchor]
-        fullPath2D.append(contentsOf: rawPath)
+        
+        let dupThreshold: Float = 0.05
+        var trimmedPath = rawPath
+        if let first = trimmedPath.first, simd_length(first - startAnchor) < dupThreshold {
+            trimmedPath.removeFirst()
+        }
+        if let last = trimmedPath.last, simd_length(last - endAnchor) < dupThreshold {
+            trimmedPath.removeLast()
+        }
+        
+        fullPath2D.append(contentsOf: trimmedPath)
         fullPath2D.append(endAnchor)
         
         if shouldLog {
@@ -354,9 +474,9 @@ enum TopologySampler {
         let segmentStarts = smoothResult.segmentStarts
         
         let firstIsOver: Bool
-        if isRopeA {
+                    if isRopeA {
             firstIsOver = hook.ropeAStartIsOver
-        } else {
+                    } else {
             firstIsOver = !hook.ropeAStartIsOver
         }
         
@@ -571,6 +691,7 @@ enum TopologySampler {
     }
     nonisolated(unsafe) private static var lastZLogParams: [ZLogKey: ZLogValue] = [:]
     nonisolated(unsafe) private static var lastZLogTime: Double = 0
+    private static let minZLogInterval: Double = 2.0
     
     struct SmoothResult {
         let points: [SIMD2<Float>]
@@ -624,7 +745,7 @@ enum TopologySampler {
         
         return SmoothResult(points: curve, segmentStarts: segmentStarts)
     }
-    
+
     private static func cumulativeLengths(poly: [SIMD3<Float>]) -> [Float] {
         if poly.count < 2 { return [0] }
         var cum: [Float] = [0]

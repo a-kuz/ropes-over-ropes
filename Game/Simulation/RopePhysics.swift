@@ -53,7 +53,7 @@ final class RopePhysics {
         let hooksChanged = currentHookStates != lastHookStates
         let timeSinceLastLog = time - lastLogTime
         
-        if (ropesChanged || hooksChanged) && timeSinceLastLog >= 1.0 {
+        if (ropesChanged || hooksChanged) && timeSinceLastLog >= 2.0 {
             lastLogTime = time
             lastRopeStates = currentRopeStates
             lastHookStates = currentHookStates
