@@ -11,6 +11,7 @@ extension Renderer {
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let deltaTime = 1.0 / Float(max(1, view.preferredFramesPerSecond))
+        lastDeltaTime = deltaTime
         time += deltaTime
 
         if dragState != nil {
@@ -63,10 +64,8 @@ extension Renderer {
         updateSnapAnimation(deltaTime: deltaTime)
         updateLazyDrag(deltaTime: deltaTime)
         updateTension(deltaTime: deltaTime)
-        updateSimulationTargets(deltaTime: deltaTime)
-        applyDragPinsIfNeeded()
-
-        simulation.step(deltaTime: deltaTime)
+        updateDragLift(deltaTime: deltaTime)
+        updateDragEffectiveLength()
         updateRopeMesh()
 
         if hdrTex == nil {
@@ -87,46 +86,17 @@ extension Renderer {
         commandBuffer.commit()
     }
 
-    private func updateSimulationTargets(deltaTime: Float) {
-        guard let topology else {
-            simulation.simulationEnabled = true
-            return
-        }
-
+    private func updateDragLift(deltaTime: Float) {
         let targetLift = (dragState != nil || snapAnimationState != nil) ? dragHeight : 0
         dragLiftCurrent += (targetLift - dragLiftCurrent) * min(1, deltaTime * 18)
-
-        let dragLift: Float = dragLiftCurrent
-        let ropeCount = min(simulation.ropeCount, topology.ropes.count)
-        let animatingRopeIndex = snapAnimationState?.ropeIndex
-        if ropeCount > 0 {
-            for ropeIndex in 0..<ropeCount {
-                if ropeIndex == animatingRopeIndex { continue }
-                let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
-                let lift = max(ropeRadius * 2.7, 0.02)
-                let targets = TopologySampler.sampleRope(
-                    engine: topology,
-                    ropeIndex: ropeIndex,
-                    count: simulation.particlesPerRope,
-                    lift: lift,
-                    dragLift: dragLift,
-                    ropeRadius: ropeRadius,
-                    ropeRadiusForIndex: { idx in
-                        self.ropes[safe: idx]?.radius ?? 0.0425
-                    },
-                    holeRadius: holeRadius
-                )
-                simulation.updateTargets(ropeIndex: ropeIndex, positions: targets)
-            }
-        }
-
-        if globalTensionActive {
-            simulation.projectAlpha = 0.92
-        } else {
-            simulation.projectAlpha = 0.65
-        }
-        simulation.collisionsEnabled = true
-        simulation.simulationEnabled = true
+    }
+    
+    private func updateDragEffectiveLength() {
+        guard let dragState else { return }
+        let ropeIndex = dragState.ropeIndex
+        let restLength = ropeRestLengths[ropeIndex] ?? 1.0
+        let sagMultiplier: Float = 1.0 + dragSagProgress * 0.6
+        ropeEffectiveRestLengths[ropeIndex] = restLength * sagMultiplier
     }
 
     private func updateSnapAnimation(deltaTime: Float) {
@@ -143,27 +113,11 @@ extension Renderer {
         let t = snapState.progress
         let easeOut = 1.0 - pow(1.0 - t, 3.0)
         let currentPos = snapState.startPosition + (snapState.targetPosition - snapState.startPosition) * easeOut
-        let currentZ = snapState.startZ * (1.0 - easeOut)
 
         let endpoints = ropes[snapState.ropeIndex]
-        let fixedHoleIndex = (snapState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
-        guard let fixedPos = holePositions[safe: fixedHoleIndex] else {
+        guard holePositions[safe: (snapState.endIndex == 0) ? endpoints.endHole : endpoints.startHole] != nil else {
             snapAnimationState = nil
             return
-        }
-
-        if snapState.endIndex == 0 {
-            simulation.setPins(
-                ropeIndex: snapState.ropeIndex,
-                pinStart: SIMD3<Float>(currentPos.x, currentPos.y, currentZ),
-                pinEnd: SIMD3<Float>(fixedPos.x, fixedPos.y, 0)
-            )
-        } else {
-            simulation.setPins(
-                ropeIndex: snapState.ropeIndex,
-                pinStart: SIMD3<Float>(fixedPos.x, fixedPos.y, 0),
-                pinEnd: SIMD3<Float>(currentPos.x, currentPos.y, currentZ)
-            )
         }
 
         topology?.setFloating(ropeIndex: snapState.ropeIndex, position: currentPos)
@@ -173,13 +127,10 @@ extension Renderer {
             
             if let pinStart = holePositions[safe: endpoints.startHole],
                let pinEnd = holePositions[safe: endpoints.endHole] {
-                simulation.setPins(
-                    ropeIndex: snapState.ropeIndex,
-                    pinStart: SIMD3<Float>(pinStart.x, pinStart.y, 0),
-                    pinEnd: SIMD3<Float>(pinEnd.x, pinEnd.y, 0)
-                )
+                let restLen = simd_length(pinEnd - pinStart)
+                ropeRestLengths[snapState.ropeIndex] = restLen
+                ropeEffectiveRestLengths[snapState.ropeIndex] = restLen
             } else {
-                simulation.deactivateRope(ropeIndex: snapState.ropeIndex)
                 topology?.deactivateRope(ropeIndex: snapState.ropeIndex)
             }
 
@@ -249,7 +200,7 @@ extension Renderer {
         
         var anyActive = false
         self.tensionLogCounter += 1
-        let shouldLog = self.tensionLogCounter % 60 == 0
+        let shouldLogPeriodic = self.tensionLogCounter % 120 == 0
         
         for ropeIndex in ropes.indices {
             guard var state = ropeTensionStates[ropeIndex] else { continue }
@@ -298,7 +249,7 @@ extension Renderer {
             if !event.isEmpty {
                 let sag = state.currentLength / max(0.001, restLength)
                 Self.logger.info("\(event) T[\(ropeIndex)] len:\(String(format: "%.3f", prevLength))→\(String(format: "%.3f", state.currentLength)) vel:\(String(format: "%.3f", prevVel))→\(String(format: "%.3f", state.velocity)) acc:\(String(format: "%.2f", acceleration)) sag:\(String(format: "%.3f", sag))")
-            } else if shouldLog {
+            } else if shouldLogPeriodic {
                 let sag = state.currentLength / max(0.001, restLength)
                 Self.logger.info("🔧 T[\(ropeIndex)] len:\(String(format: "%.3f", state.currentLength)) tgt:\(String(format: "%.3f", targetLength)) vel:\(String(format: "%.3f", state.velocity)) sag:\(String(format: "%.3f", sag))")
             }
@@ -313,18 +264,7 @@ extension Renderer {
                 anyActive = true
             }
             
-            let endpoints = ropes[ropeIndex]
-            guard let startPin = holePositions[safe: endpoints.startHole],
-                  let endPin = holePositions[safe: endpoints.endHole] else { continue }
-            
-            let sagMultiplier = state.currentLength / max(0.001, restLength)
-            
-            simulation.setPinsWithSag(
-                ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
-                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
-                sagMultiplier: sagMultiplier
-            )
+            ropeEffectiveRestLengths[ropeIndex] = state.currentLength
         }
         
         if !anyActive {
@@ -361,54 +301,11 @@ extension Renderer {
                 velocity: initialVelocity
             )
             
-            guard let startPin = holePositions[safe: endpoints.startHole],
-                  let endPin = holePositions[safe: endpoints.endHole] else { continue }
-            
-            let sagMultiplier = initialLength / max(0.001, restLength)
-            
-            simulation.setPinsWithSag(
-                ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
-                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
-                sagMultiplier: sagMultiplier
-            )
+            ropeEffectiveRestLengths[ropeIndex] = initialLength
         }
         
         globalTensionActive = true
         Self.logger.info("🚀 TENSION STARTED for \(self.ropeTensionStates.count) ropes")
-    }
-
-    private func applyDragPinsIfNeeded() {
-        guard let dragState, ropes.indices.contains(dragState.ropeIndex) else { return }
-
-        let ropeIndex = dragState.ropeIndex
-        let endpoints = ropes[ropeIndex]
-
-        guard let startPin = holePositions[safe: endpoints.startHole],
-              let endPin = holePositions[safe: endpoints.endHole] else {
-            self.dragState = nil
-            simulation.deactivateRope(ropeIndex: ropeIndex)
-            topology?.deactivateRope(ropeIndex: ropeIndex)
-            return
-        }
-
-        let sagMultiplier: Float = 1.0 + dragSagProgress * 0.6
-
-        if dragState.endIndex == 0 {
-            simulation.setPinsWithSag(
-                ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent),
-                pinEnd: SIMD3<Float>(endPin.x, endPin.y, 0),
-                sagMultiplier: sagMultiplier
-            )
-        } else {
-            simulation.setPinsWithSag(
-                ropeIndex: ropeIndex,
-                pinStart: SIMD3<Float>(startPin.x, startPin.y, 0),
-                pinEnd: SIMD3<Float>(dragWorldLazy.x, dragWorldLazy.y, dragLiftCurrent),
-                sagMultiplier: sagMultiplier
-            )
-        }
     }
 
     private func encodeHDRPass(commandBuffer: MTLCommandBuffer, hdrTexture: MTLTexture, depthTexture: MTLTexture) {

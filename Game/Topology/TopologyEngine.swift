@@ -1,5 +1,6 @@
 import simd
 import os.log
+import QuartzCore
 
 struct TopologySnapshot {
     var ropes: [TopologyRope]
@@ -98,6 +99,72 @@ final class TopologyEngine {
         guard ropes.indices.contains(ropeIndex) else { return }
         ropes[ropeIndex].floatingPosition = position
     }
+    
+    private var lastDragPosition: SIMD2<Float>?
+    private var dragRopeIndex: Int?
+    private var dragEndIndex: Int?
+    
+    func updateDragPosition(ropeIndex: Int, endIndex: Int, position: SIMD2<Float>) {
+        guard ropes.indices.contains(ropeIndex) else { return }
+        
+        let prevPosition = lastDragPosition ?? position
+        lastDragPosition = position
+        dragRopeIndex = ropeIndex
+        dragEndIndex = endIndex
+        
+        ropes[ropeIndex].floatingPosition = position
+        
+        let moveDist = simd_length(position - prevPosition)
+        if moveDist < 0.001 { return }
+        
+        for hookId in ropes[ropeIndex].hooks {
+            guard var hook = hooks[hookId] else { continue }
+            
+            let otherRopeIndex = (ropeIndex == hook.ropeA) ? hook.ropeB : hook.ropeA
+            let otherStart = ropeStart(otherRopeIndex)
+            let otherEnd = ropeEnd(otherRopeIndex)
+            
+            guard let _ = segmentIntersection(a0: prevPosition, a1: position, b0: otherStart, b1: otherEnd) else {
+                continue
+            }
+            
+            let isTop = isEndTop(ropeIndex: ropeIndex, endIndex: endIndex, hook: hook)
+            
+            Self.logger.info("🔀 DRAG CROSSED ROPE: hook[\(hookId)] isTop=\(isTop) N=\(hook.N)")
+            
+            if isTop {
+                hook.N -= 1
+                Self.logger.info("  ⬇️ Top end crossed out: N → \(hook.N)")
+                if hook.N <= 0 {
+                    Self.logger.info("  ⚠️ N=0 during drag")
+                } else {
+                    if endIndex == 0 {
+                        hook.ropeAStartIsOver = (ropeIndex != hook.ropeA)
+                    }
+                    hooks[hookId] = hook
+                }
+            } else {
+                hook.N += 1
+                if endIndex == 0 {
+                    hook.ropeAStartIsOver = (ropeIndex == hook.ropeA)
+                }
+                hooks[hookId] = hook
+                Self.logger.info("  ⬆️ Bottom end crossed in: N → \(hook.N)")
+            }
+        }
+    }
+    
+    func beginDragTracking() {
+        lastDragPosition = nil
+        dragRopeIndex = nil
+        dragEndIndex = nil
+    }
+    
+    func endDragTracking() {
+        lastDragPosition = nil
+        dragRopeIndex = nil
+        dragEndIndex = nil
+    }
 
     func processCanonicalMove(ropeIndex: Int, endIndex: Int, from: SIMD2<Float>, to: SIMD2<Float>) {
         let dir = to - from
@@ -122,7 +189,14 @@ final class TopologyEngine {
             
             if let existingHookId = findHook(ropeA: low, ropeB: high) {
                 var hook = hooks[existingHookId]!
+                
+                Self.logger.info("  📊 HOOK STATE BEFORE:")
+                Self.logger.info("    N=\(hook.N), ropeAStartIsOver=\(hook.ropeAStartIsOver)")
+                Self.logger.info("    ropeA=\(hook.ropeA), ropeB=\(hook.ropeB)")
+                logAllEndStates(hook: hook)
+                
                 let isTop = isEndTop(ropeIndex: ropeIndex, endIndex: endIndex, hook: hook)
+                Self.logger.info("  🎯 Dragging rope\(ropeIndex) end\(endIndex) → isTop=\(isTop)")
                 
                 if isTop {
                     hook.N -= 1
@@ -132,14 +206,24 @@ final class TopologyEngine {
                         removeHook(hookId: existingHookId)
                         Self.logger.info("  ❌ Hook removed (N=0)")
                     } else {
-                        hook.ropeAStartIsOver.toggle()
+                        if endIndex == 0 {
+                            hook.ropeAStartIsOver = (ropeIndex != hook.ropeA)
+                        }
                         hooks[existingHookId] = hook
                     }
                 } else {
                     hook.N += 1
-                    hook.ropeAStartIsOver.toggle()
+                    if endIndex == 0 {
+                        hook.ropeAStartIsOver = (ropeIndex == hook.ropeA)
+                    }
                     hooks[existingHookId] = hook
                     Self.logger.info("  ⬆️ BOTTOM end crossed: N=\(hook.N - 1) → \(hook.N)")
+                }
+                
+                if let updatedHook = hooks[existingHookId] {
+                    Self.logger.info("  📊 HOOK STATE AFTER:")
+                    Self.logger.info("    N=\(updatedHook.N), ropeAStartIsOver=\(updatedHook.ropeAStartIsOver)")
+                    logAllEndStates(hook: updatedHook)
                 }
             } else {
                 let hookId = nextHookId
@@ -188,23 +272,20 @@ final class TopologyEngine {
 
     func isEndTop(ropeIndex: Int, endIndex: Int, hook: HookSequence) -> Bool {
         let isRopeA = (ropeIndex == hook.ropeA)
-        let ropeStartIsOver: Bool
+        let side1RopeAIsOver = hook.ropeAStartIsOver
         
-        if isRopeA {
-            ropeStartIsOver = hook.ropeAStartIsOver
-        } else {
-            ropeStartIsOver = !hook.ropeAStartIsOver
-        }
-        
+        let sideRopeAIsOver: Bool
         if endIndex == 0 {
-            return ropeStartIsOver
+            sideRopeAIsOver = side1RopeAIsOver
         } else {
             if hook.N % 2 == 1 {
-                return ropeStartIsOver
+                sideRopeAIsOver = side1RopeAIsOver
             } else {
-                return !ropeStartIsOver
+                sideRopeAIsOver = !side1RopeAIsOver
             }
         }
+        
+        return isRopeA ? sideRopeAIsOver : !sideRopeAIsOver
     }
 
     private func removeHook(hookId: Int) {
@@ -274,5 +355,14 @@ final class TopologyEngine {
             let floating = rope.floatingEnd != nil ? " [floating end \(rope.floatingEnd!)]" : ""
             Self.logger.info("  Rope[\(ropeIndex)]: hole\(rope.startHole) → hole\(rope.endHole) hooks=[\(hookList)]\(floating)")
         }
+    }
+    
+    private func logAllEndStates(hook: HookSequence) {
+        let aEnd0 = isEndTop(ropeIndex: hook.ropeA, endIndex: 0, hook: hook)
+        let aEnd1 = isEndTop(ropeIndex: hook.ropeA, endIndex: 1, hook: hook)
+        let bEnd0 = isEndTop(ropeIndex: hook.ropeB, endIndex: 0, hook: hook)
+        let bEnd1 = isEndTop(ropeIndex: hook.ropeB, endIndex: 1, hook: hook)
+        Self.logger.info("    rope\(hook.ropeA) end0=\(aEnd0 ? "TOP" : "BOT") end1=\(aEnd1 ? "TOP" : "BOT")")
+        Self.logger.info("    rope\(hook.ropeB) end0=\(bEnd0 ? "TOP" : "BOT") end1=\(bEnd1 ? "TOP" : "BOT")")
     }
 }

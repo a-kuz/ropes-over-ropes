@@ -127,6 +127,7 @@ extension Renderer {
             dragSagProgress = 0.0
             holeOccupied[best.holeIndex] = false
             topology?.beginDrag(ropeIndex: best.ropeIndex, endIndex: best.endIndex, position: dragWorldLazy)
+            topology?.beginDragTracking()
             let snapshot = topology?.snapshot() ?? TopologySnapshot(ropes: [], hooks: [:], nextHookId: 1)
             
             let endpoints = ropes[best.ropeIndex]
@@ -153,6 +154,8 @@ extension Renderer {
         
         dragWorldTarget = world
         dragWorld = world
+        
+        topology?.updateDragPosition(ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex, position: world)
         
         let endpoints = ropes[dragState.ropeIndex]
         let fixedHoleIndex = (dragState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
@@ -203,6 +206,7 @@ extension Renderer {
             return
         }
 
+        topology?.endDragTracking()
         topology?.restore(dragState.topologySnapshot)
         
         guard let fromPos = holePositions[safe: dragState.originalHoleIndex] else {

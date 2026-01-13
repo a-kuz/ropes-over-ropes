@@ -168,7 +168,7 @@ enum RopeMeshBuilder {
             
             let latexThinning = 1.0 / sqrt(max(1.0, 1.0 + totalTension * 1.5 * centerMaskStrong))
             let relaxThickening = 1.0 + stretchRelax * 0.15
-            let scale = max(0.45, baseLatexScale * latexThinning * relaxThickening)
+            let scale = latexThinning * relaxThickening
             
             let lightenAmount = totalTension * centerMaskStrong * 0.35
             let baseColor: SIMD3<Float>

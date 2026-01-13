@@ -7,7 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */; };
 		0BFCB97BE05C11AA504AF80A /* Renderer+MTKViewDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1198646DB4FE9E0D90C7A571 /* Renderer+MTKViewDelegate.swift */; };
 		1369491A41BD9ECEE99E72E4 /* RopePhysics.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8FEB483D450E4831A8CC4850 /* RopePhysics.swift */; };
 		16BB647DCC46849DA718F8DA /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19B0BFBA0DA3848A126EB434 /* GameView.swift */; };
@@ -20,7 +19,6 @@
 		71D9F96C6F4FDDC7AED37618 /* Renderer+WinCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = AF6F2ECD6D6F29B3AD1472C9 /* Renderer+WinCheck.swift */; };
 		71F88EED711DDE8DFC0AEED0 /* FrameTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = A3FEF7E3377F1E96AC8466B1 /* FrameTypes.swift */; };
 		799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */ = {isa = PBXBuildFile; fileRef = 404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */; };
-		805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */ = {isa = PBXBuildFile; fileRef = EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */; };
 		8883100995DA40185E925B68 /* Array+Safe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5C82451EEE2B4B0C6A03DC23 /* Array+Safe.swift */; };
 		8EDE8DD2CC65E6EE108B7FA0 /* Renderer+Bloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */; };
 		A3945957757B30539F65F76A /* TopologyTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18CD006271F5BB97CC853822 /* TopologyTypes.swift */; };
@@ -44,7 +42,6 @@
 		3132F4598038FB7CD0DB7ABC /* HookGeometryCalculator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HookGeometryCalculator.swift; sourceTree = "<group>"; };
 		404F95719E1B0F22C3206E77 /* SegmentIntersection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SegmentIntersection.swift; sourceTree = "<group>"; };
 		4B12E7FCD84630A87A47BAAB /* TopologyEngine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TopologyEngine.swift; sourceTree = "<group>"; };
-		55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeSimulation.swift; sourceTree = "<group>"; };
 		5C82451EEE2B4B0C6A03DC23 /* Array+Safe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Array+Safe.swift"; sourceTree = "<group>"; };
 		7018E1B69CE11AB4624A9C0E /* LevelDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDefinition.swift; sourceTree = "<group>"; };
 		74E252B280719416D53D4F90 /* HoleMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoleMeshBuilder.swift; sourceTree = "<group>"; };
@@ -62,7 +59,6 @@
 		D3305169FC67A8756CF19791 /* Camera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Camera.swift; sourceTree = "<group>"; };
 		D7D7E804648F39B3DEF407AE /* Renderer+RopeMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+RopeMesh.swift"; sourceTree = "<group>"; };
 		E6663864E2CD1FBEE57B6F14 /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
-		EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Sim.metal; sourceTree = "<group>"; };
 		F143F6B90622F4C48BCD1229 /* Renderer+Bloom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Bloom.swift"; sourceTree = "<group>"; };
 		F1CB472A4725395DD246579F /* GameMTKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameMTKView.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
@@ -107,7 +103,6 @@
 			isa = PBXGroup;
 			children = (
 				8D0446086F75BECFEAFA5AEA /* Base.metal */,
-				EEB8F69FD3A1EC0E1E11AB80 /* Sim.metal */,
 			);
 			path = Shaders;
 			sourceTree = "<group>";
@@ -116,7 +111,6 @@
 			isa = PBXGroup;
 			children = (
 				8FEB483D450E4831A8CC4850 /* RopePhysics.swift */,
-				55FEBCD60F64276616A2B6E9 /* RopeSimulation.swift */,
 			);
 			path = Simulation;
 			sourceTree = "<group>";
@@ -271,9 +265,7 @@
 				BB74C06B5A16C10C78820B47 /* Renderer.swift in Sources */,
 				F027DB0E87B0147C8BF30B68 /* RopeMeshBuilder.swift in Sources */,
 				1369491A41BD9ECEE99E72E4 /* RopePhysics.swift in Sources */,
-				00EF90140B4B7FDB239B9BC6 /* RopeSimulation.swift in Sources */,
 				799DF2C9AD0BCCF5B07678E7 /* SegmentIntersection.swift in Sources */,
-				805F8094CA33FEC2EC277F26 /* Sim.metal in Sources */,
 				434AD9CF0B995B6BF311CC00 /* TopologyEngine.swift in Sources */,
 				250A297F236F415557B72231 /* TopologySampler.swift in Sources */,
 				A3945957757B30539F65F76A /* TopologyTypes.swift in Sources */,
