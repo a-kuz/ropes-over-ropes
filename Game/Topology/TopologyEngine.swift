@@ -270,6 +270,29 @@ final class TopologyEngine {
         return nil
     }
 
+    func orderedHooks(ropeIndex: Int) -> [(hookId: Int, hook: HookSequence, t: Float)] {
+        guard ropes.indices.contains(ropeIndex) else { return [] }
+        let rope = ropes[ropeIndex]
+        let start = ropeStart(ropeIndex)
+        let end = ropeEnd(ropeIndex)
+        let ropeDir = end - start
+        let ropeLenSq = simd_length_squared(ropeDir)
+        guard ropeLenSq > 1e-12 else { return [] }
+
+        var items: [(hookId: Int, hook: HookSequence, t: Float)] = []
+        for hookId in rope.hooks {
+            guard let hook = hooks[hookId] else { continue }
+            let otherRope = (ropeIndex == hook.ropeA) ? hook.ropeB : hook.ropeA
+            let otherStart = ropeStart(otherRope)
+            let otherEnd = ropeEnd(otherRope)
+            let hookCenter = (otherStart + otherEnd) * 0.5
+            let t = simd_dot(hookCenter - start, ropeDir) / ropeLenSq
+            items.append((hookId: hookId, hook: hook, t: t))
+        }
+        items.sort { $0.t < $1.t }
+        return items
+    }
+
     func isEndTop(ropeIndex: Int, endIndex: Int, hook: HookSequence) -> Bool {
         let isRopeA = (ropeIndex == hook.ropeA)
         let side1RopeAIsOver = hook.ropeAStartIsOver
