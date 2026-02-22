@@ -110,4 +110,7 @@ Temporary Items
 # *.ipynb
 
 Untitled*
-UzlsFour.xcodeproj/project.xcworkspace/xcuserdata/alexsandrkuznetsov.xcuserdatad/UserInterfaceState.xcuserstate
+
+# XcodeGen generated files
+UzlsFour.xcodeproj/project.pbxproj
+UzlsFour.xcodeproj/project.xcworkspace/contents.xcworkspacedata
