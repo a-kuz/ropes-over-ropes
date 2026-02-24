@@ -16,7 +16,14 @@ final class TopologyEngine {
 
     var holePositions: [SIMD2<Float>]
 
-    init(holePositions: [SIMD2<Float>], ropeConfigs: [(startHole: Int, endHole: Int, color: SIMD3<Float>)]) {
+    struct HookDefinition {
+        let ropeA: Int
+        let ropeB: Int
+        let N: Int
+        let ropeAStartIsOver: Bool
+    }
+
+    init(holePositions: [SIMD2<Float>], ropeConfigs: [(startHole: Int, endHole: Int, color: SIMD3<Float>)], hookDefinitions: [HookDefinition]? = nil) {
         self.holePositions = holePositions
         self.ropes = ropeConfigs.map { config in
             TopologyRope(
@@ -29,7 +36,11 @@ final class TopologyEngine {
                 floatingPosition: nil
             )
         }
-        buildInitialHooks()
+        if let defs = hookDefinitions {
+            loadHookDefinitions(defs)
+        } else {
+            buildInitialHooks()
+        }
     }
 
     func ropeStart(_ ropeIndex: Int) -> SIMD2<Float> {
@@ -317,6 +328,37 @@ final class TopologyEngine {
         ropes[hook.ropeA].hooks.removeAll { $0 == hookId }
         ropes[hook.ropeB].hooks.removeAll { $0 == hookId }
         hooks[hookId] = nil
+    }
+
+    private func loadHookDefinitions(_ defs: [HookDefinition]) {
+        for def in defs {
+            guard ropes.indices.contains(def.ropeA), ropes.indices.contains(def.ropeB) else {
+                Self.logger.warning("Hook definition references invalid rope indices: ropeA=\(def.ropeA) ropeB=\(def.ropeB)")
+                continue
+            }
+            let hookId = nextHookId
+            nextHookId += 1
+
+            let low = min(def.ropeA, def.ropeB)
+            let high = max(def.ropeA, def.ropeB)
+            let swapped = def.ropeA > def.ropeB
+            // Internally HookSequence.ropeA is always the lower index.
+            // If we swapped, the JSON's ropeA became HookSequence.ropeB, so invert.
+            let adjusted = swapped ? !def.ropeAStartIsOver : def.ropeAStartIsOver
+
+            let newHook = HookSequence(
+                id: hookId,
+                ropeA: low,
+                ropeB: high,
+                N: def.N,
+                ropeAStartIsOver: adjusted
+            )
+            hooks[hookId] = newHook
+            ropes[low].hooks.append(hookId)
+            ropes[high].hooks.append(hookId)
+
+            Self.logger.info("Loaded hook[\(hookId)]: ropeA=\(low) ropeB=\(high) N=\(def.N) ropeAStartIsOver=\(adjusted) (json ropeA=\(def.ropeA) ropeB=\(def.ropeB) swapped=\(swapped))")
+        }
     }
 
     private func buildInitialHooks() {

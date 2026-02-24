@@ -78,10 +78,24 @@ struct LevelDefinition: Codable {
         }
     }
 
+    struct HookRopeRef: Codable {
+        let fromType: String   // "hole" or "hook"
+        let index: Int         // rope index (for "hole") or hook index (for "hook")
+        let hookIndex: Int?    // which side of the referenced hook (0=ropeA, 1=ropeB)
+    }
+
+    struct Hook: Codable {
+        let ropeA: HookRopeRef
+        let ropeB: HookRopeRef
+        let N: Int
+        let ropeAStartIsOver: Bool
+    }
+
     let id: Int
     let holeRadius: Float
     let particlesPerRope: Int
     let holes: [Vec2]
     let ropes: [Rope]
+    let hooks: [Hook]?
 }
 

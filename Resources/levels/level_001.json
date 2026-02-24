@@ -31,16 +31,16 @@
   ],
   "hooks": [
     {
-      "ropeA": 0,
-      "ropeB": 1,
+      "ropeA": { "fromType": "hole", "index": 0 },
+      "ropeB": { "fromType": "hole", "index": 1 },
       "N": 2,
       "ropeAStartIsOver": true
     },
     {
-      "ropeA": 0,
-      "ropeB": 2,
+      "ropeA": { "fromType": "hook", "index": 0, "hookIndex": 0 },
+      "ropeB": { "fromType": "hole", "index": 2 },
       "N": 2,
-      "ropeAStartIsOver": true
+      "ropeAStartIsOver": false
     }
   ]
 }

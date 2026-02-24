@@ -148,6 +148,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var smoothZone: Float = 0.001 {
         didSet { TopologySampler.smoothZone = smoothZone }
     }
+    var maturityDistance: Float = 0.08 {
+        didSet { TopologySampler.maturityDistance = maturityDistance }
+    }
 
     init(view: MTKView) {
         guard let device = view.device else { fatalError("Metal device is required") }
@@ -182,6 +185,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         TopologySampler.smoothIterations = smoothIterations
         TopologySampler.smoothStrength = smoothStrength
         TopologySampler.smoothZone = smoothZone
+        TopologySampler.maturityDistance = maturityDistance
         
         loadLevel(levelId: 1)
     }
@@ -274,7 +278,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ropeConfigs = ropes.map { rope in
             (startHole: rope.startHole, endHole: rope.endHole, color: rope.color)
         }
-        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs)
+        let hookDefs: [TopologyEngine.HookDefinition]? = level?.hooks.flatMap { jsonHooks in
+            jsonHooks.compactMap { hook -> TopologyEngine.HookDefinition? in
+                guard let ropeAIdx = Self.resolveRopeRef(hook.ropeA, hooks: jsonHooks),
+                      let ropeBIdx = Self.resolveRopeRef(hook.ropeB, hooks: jsonHooks) else {
+                    Self.logger.warning("Failed to resolve hook rope references")
+                    return nil
+                }
+                return TopologyEngine.HookDefinition(
+                    ropeA: ropeAIdx,
+                    ropeB: ropeBIdx,
+                    N: hook.N,
+                    ropeAStartIsOver: hook.ropeAStartIsOver
+                )
+            }
+        }
+        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs, hookDefinitions: hookDefs)
 
         for ropeIndex in ropes.indices {
             let startHoleIndex = ropes[ropeIndex].startHole
@@ -447,6 +466,32 @@ final class Renderer: NSObject, MTKViewDelegate {
         indexCount = mesh.indices.count
         vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
         indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])
+    }
+
+    /// Resolves a HookRopeRef to a rope index.
+    /// - "hole": index is the rope index directly
+    /// - "hook": follows the chain through referenced hook's ropeA (hookIndex=0) or ropeB (hookIndex=1)
+    private static func resolveRopeRef(_ ref: LevelDefinition.HookRopeRef, hooks: [LevelDefinition.Hook], depth: Int = 0) -> Int? {
+        guard depth < 16 else {
+            logger.error("resolveRopeRef: recursion depth exceeded")
+            return nil
+        }
+        switch ref.fromType {
+        case "hole":
+            return ref.index
+        case "hook":
+            guard hooks.indices.contains(ref.index) else {
+                logger.error("resolveRopeRef: hook index \(ref.index) out of range")
+                return nil
+            }
+            let refHook = hooks[ref.index]
+            let side = ref.hookIndex ?? 0
+            let sideRef = (side == 0) ? refHook.ropeA : refHook.ropeB
+            return resolveRopeRef(sideRef, hooks: hooks, depth: depth + 1)
+        default:
+            logger.error("resolveRopeRef: unknown fromType '\(ref.fromType)'")
+            return nil
+        }
     }
 
 }

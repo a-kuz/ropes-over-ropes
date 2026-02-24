@@ -13,7 +13,8 @@ enum TopologySampler {
     nonisolated(unsafe) static var smoothIterations: Int = 0
     nonisolated(unsafe) static var smoothStrength: Float = 0.00
     nonisolated(unsafe) static var smoothZone: Float = 0.001
-    
+    nonisolated(unsafe) static var maturityDistance: Float = 0.08
+
     static func sampleRope(
         engine: TopologyEngine,
         ropeIndex: Int,
