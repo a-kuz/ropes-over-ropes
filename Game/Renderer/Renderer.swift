@@ -49,6 +49,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var ropes: [RopeEndpoints] = []
     var topology: TopologyEngine?
+    var simulator: VerletSimulator?
     var lastDragWorld: SIMD2<Float> = .zero
     var dragStartWorld: SIMD2<Float> = .zero
 
@@ -56,44 +57,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         var ropeIndex: Int
         var endIndex: Int
         var originalHoleIndex: Int
-        var topologySnapshot: TopologySnapshot
-        var restLength: Float
     }
 
     var dragState: DragState?
     var dragWorld: SIMD2<Float> = .zero
-    var dragWorldLazy: SIMD2<Float> = .zero
-    var dragWorldTarget: SIMD2<Float> = .zero
-    var dragSagProgress: Float = 0.0
     var dragHeight: Float = 0.35
-    var dragLiftCurrent: Float = 0
-    var dragStretchRatio: Float = 1.0
-    var dragOscillationPhase: Float = 0.0
-    var dragOscillationVelocity: Float = 0.0
-    var dragOscillationRopeIndex: Int? = nil
-
-    struct SnapAnimationState {
-        var ropeIndex: Int
-        var endIndex: Int
-        var targetHoleIndex: Int
-        var startPosition: SIMD2<Float>
-        var targetPosition: SIMD2<Float>
-        var startZ: Float
-        var progress: Float
-        var topologySnapshot: TopologySnapshot
-        var originalHoleIndex: Int
-    }
-    var snapAnimationState: SnapAnimationState?
-    
-    struct RopeTensionState {
-        var currentLength: Float
-        var velocity: Float
-    }
-    var ropeTensionStates: [Int: RopeTensionState] = [:]
-    var globalTensionActive: Bool = false
-    var ropeRestLengths: [Int: Float] = [:]
-    var ropeEffectiveRestLengths: [Int: Float] = [:]
-    var tensionLogCounter: Int = 0
 
     var ropeVB: MTLBuffer?
     var ropeIB: MTLBuffer?
@@ -105,10 +73,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     
     var ropePhysicsLogger = RopePhysics()
     var lastPhysicsLogTime: Double = 0
-    
-    var previousRopePoints: [Int: [SIMD3<Float>]] = [:]
-    var ropePointVelocities: [Int: [SIMD3<Float>]] = [:]
-    
+
     struct MeshStats: Equatable {
         let vertices: Int
         let indices: Int
@@ -118,38 +83,18 @@ final class Renderer: NSObject, MTKViewDelegate {
     
     var currentLevelId: Int = 1
     
-    var ropeRenderSimpleMode: Bool = true
-    var ropeRenderDisableBandRepulsion: Bool = true
-    var ropeRenderDisableCrossingDeform: Bool = true
-    var ropeRenderDisableHoleDeform: Bool = true
-    var ropeRenderDisableDragCrossingPhysics: Bool = false
-    
-    var hookStepMultiplier: Float = 0.0900 {
-        didSet { TopologySampler.hookStepMultiplier = hookStepMultiplier }
+    // Physics parameters (forwarded to simulator)
+    var physicsGravity: Float = -5.0 {
+        didSet { simulator?.gravity = physicsGravity }
     }
-    var hookRadiusMultiplier: Float = 0.920 {
-        didSet { TopologySampler.hookRadiusMultiplier = hookRadiusMultiplier }
+    var physicsDamping: Float = 0.97 {
+        didSet { simulator?.damping = physicsDamping }
     }
-    var hookStepLimitMultiplier: Float = 2.5000 {
-        didSet { TopologySampler.hookStepLimitMultiplier = hookStepLimitMultiplier }
+    var physicsConstraintIterations: Int = 20 {
+        didSet { simulator?.constraintIterations = physicsConstraintIterations }
     }
-    var debugSegmentColors: Bool = true {
-        didSet { TopologySampler.debugSegmentColors = debugSegmentColors }
-    }
-    var smoothSubdivisions: Int = 4 {
-        didSet { TopologySampler.smoothSubdivisions = smoothSubdivisions }
-    }
-    var smoothIterations: Int = 0 {
-        didSet { TopologySampler.smoothIterations = smoothIterations }
-    }
-    var smoothStrength: Float = 0.00 {
-        didSet { TopologySampler.smoothStrength = smoothStrength }
-    }
-    var smoothZone: Float = 0.001 {
-        didSet { TopologySampler.smoothZone = smoothZone }
-    }
-    var maturityDistance: Float = 0.08 {
-        didSet { TopologySampler.maturityDistance = maturityDistance }
+    var physicsParticleCount: Int = 60 {
+        didSet { simulator?.particleCount = physicsParticleCount }
     }
 
     init(view: MTKView) {
@@ -176,17 +121,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         Self.buildHoleMeshBuffers(device: device, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
 
         super.init()
-        
-        TopologySampler.hookStepMultiplier = hookStepMultiplier
-        TopologySampler.hookRadiusMultiplier = hookRadiusMultiplier
-        TopologySampler.hookStepLimitMultiplier = hookStepLimitMultiplier
-        TopologySampler.debugSegmentColors = debugSegmentColors
-        TopologySampler.smoothSubdivisions = smoothSubdivisions
-        TopologySampler.smoothIterations = smoothIterations
-        TopologySampler.smoothStrength = smoothStrength
-        TopologySampler.smoothZone = smoothZone
-        TopologySampler.maturityDistance = maturityDistance
-        
+
         loadLevel(levelId: 1)
     }
     
@@ -195,23 +130,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         Self.logger.info("Loading level \(levelId)...")
         
         dragState = nil
-        snapAnimationState = nil
         dragWorld = .zero
-        dragWorldLazy = .zero
-        dragWorldTarget = .zero
-        dragSagProgress = 0.0
-        dragLiftCurrent = 0
-        dragStretchRatio = 1.0
-        dragOscillationPhase = 0.0
-        dragOscillationVelocity = 0.0
-        dragOscillationRopeIndex = nil
-        ropeTensionStates = [:]
-        globalTensionActive = false
-        ropeRestLengths = [:]
-        ropeEffectiveRestLengths = [:]
-        tensionLogCounter = 0
-        previousRopePoints = [:]
-        ropePointVelocities = [:]
+        simulator = nil
         
         let fallbackLayout = Self.makeHoleLayout()
         let level = LevelLoader.load(levelId: levelId)
@@ -295,16 +215,45 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs, hookDefinitions: hookDefs)
 
+        // Initialize Verlet simulator
+        let sim = VerletSimulator(holePositions: levelHoles, holeRadius: levelHoleRadius)
+        sim.gravity = physicsGravity
+        sim.damping = physicsDamping
+        sim.constraintIterations = physicsConstraintIterations
+        sim.particleCount = physicsParticleCount
+        sim.liftHeight = dragHeight
+
+        let simRopeConfigs = ropes.map { rope in
+            VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius)
+        }
+
+        let simActions: [VerletSimulator.LevelAction] = level?.actions?.compactMap { action in
+            guard let actionType = VerletSimulator.LevelAction.ActionType(rawValue: action.type) else { return nil }
+            return VerletSimulator.LevelAction(type: actionType, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
+        } ?? []
+
+        sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
+        self.simulator = sim
+
+        // Sync rope endpoints and holeOccupied with simulator's actual positions
+        // (decompose may place ropes at different holes than JSON specifies)
+        for ropeIndex in ropes.indices {
+            guard sim.bands.indices.contains(ropeIndex) else { continue }
+            let band = sim.bands[ropeIndex]
+            if let pinStart = band.pinStart {
+                ropes[ropeIndex].startHole = pinStart
+            }
+            if let pinEnd = band.pinEnd {
+                ropes[ropeIndex].endHole = pinEnd
+            }
+        }
+
         for ropeIndex in ropes.indices {
             let startHoleIndex = ropes[ropeIndex].startHole
             let endHoleIndex = ropes[ropeIndex].endHole
             guard holeOccupied.indices.contains(startHoleIndex), holeOccupied.indices.contains(endHoleIndex) else { continue }
-            guard let pinStart = holePositions[safe: startHoleIndex], let pinEnd = holePositions[safe: endHoleIndex] else { continue }
             holeOccupied[startHoleIndex] = true
             holeOccupied[endHoleIndex] = true
-            let restLen = simd_length(pinEnd - pinStart)
-            ropeRestLengths[ropeIndex] = restLen
-            ropeEffectiveRestLengths[ropeIndex] = restLen
         }
     }
 

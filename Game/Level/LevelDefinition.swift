@@ -91,11 +91,19 @@ struct LevelDefinition: Codable {
         let ropeAStartIsOver: Bool
     }
 
+    struct Action: Codable {
+        let type: String       // "pin" or "drag"
+        let ropeIndex: Int
+        let endIndex: Int      // 0 = start, 1 = end
+        let holeIndex: Int
+    }
+
     let id: Int
     let holeRadius: Float
     let particlesPerRope: Int
     let holes: [Vec2]
     let ropes: [Rope]
     let hooks: [Hook]?
+    let actions: [Action]?
 }
 

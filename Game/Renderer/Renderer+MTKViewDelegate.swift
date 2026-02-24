@@ -14,58 +14,11 @@ extension Renderer {
         lastDeltaTime = deltaTime
         time += deltaTime
 
-        if dragState != nil {
-            let v = (dragWorldTarget - lastDragWorld) / max(1e-4, deltaTime)
-            lastDragWorld = dragWorldTarget
-            let speed = simd_length(v)
-            let target = min(1, speed * 0.025)
-            dragVisualEnergy += (target - dragVisualEnergy) * min(1, deltaTime * 18)
-            dragVisualEnergy *= pow(0.5, deltaTime * 1.4)
-            
-            if dragOscillationRopeIndex != nil {
-                let damping: Float = 0.88
-                let spring: Float = 14.0
-                let oldPhase = dragOscillationPhase
-                dragOscillationPhase += dragOscillationVelocity * deltaTime
-                dragOscillationVelocity -= dragOscillationPhase * spring * deltaTime
-                dragOscillationVelocity *= damping
-                dragOscillationPhase *= damping
-                
-                if Int(time * 10) % 10 == 0 {
-                    Self.logger.info("🌊 Oscillation during drag: phase=\(String(format: "%.4f", self.dragOscillationPhase)) velocity=\(String(format: "%.4f", self.dragOscillationVelocity))")
-                }
-                
-                if abs(dragOscillationPhase) < 0.0005 && abs(dragOscillationVelocity) < 0.0005 {
-                    dragOscillationPhase = 0.0
-                    dragOscillationVelocity = 0.0
-                }
-            }
-        } else {
-            dragVisualEnergy *= pow(0.5, deltaTime * 6.0)
-            lastDragWorld = dragWorld
-            
-            if dragOscillationRopeIndex != nil {
-                let damping: Float = 0.92
-                let spring: Float = 12.0
-                dragOscillationPhase += dragOscillationVelocity * deltaTime
-                dragOscillationVelocity -= dragOscillationPhase * spring * deltaTime
-                dragOscillationVelocity *= damping
-                dragOscillationPhase *= damping
-                
-                if abs(dragOscillationPhase) < 0.001 && abs(dragOscillationVelocity) < 0.001 {
-                    dragOscillationPhase = 0.0
-                    dragOscillationVelocity = 0.0
-                    dragOscillationRopeIndex = nil
-                }
-            }
-        }
-
         updateFrameUniforms(view: view)
-        updateSnapAnimation(deltaTime: deltaTime)
-        updateLazyDrag(deltaTime: deltaTime)
-        updateTension(deltaTime: deltaTime)
-        updateDragLift(deltaTime: deltaTime)
-        updateDragEffectiveLength()
+
+        // Physics step — fixed timestep accumulator handles variable frame rate
+        simulator?.update(deltaTime: deltaTime)
+
         updateRopeMesh()
 
         if hdrTex == nil {
@@ -84,228 +37,6 @@ extension Renderer {
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
-    }
-
-    private func updateDragLift(deltaTime: Float) {
-        let targetLift = (dragState != nil || snapAnimationState != nil) ? dragHeight : 0
-        dragLiftCurrent += (targetLift - dragLiftCurrent) * min(1, deltaTime * 18)
-    }
-    
-    private func updateDragEffectiveLength() {
-        guard let dragState else { return }
-        let ropeIndex = dragState.ropeIndex
-        let restLength = ropeRestLengths[ropeIndex] ?? 1.0
-        let sagMultiplier: Float = 1.0 + dragSagProgress * 0.6
-        ropeEffectiveRestLengths[ropeIndex] = restLength * sagMultiplier
-    }
-
-    private func updateSnapAnimation(deltaTime: Float) {
-        guard var snapState = snapAnimationState else { return }
-        guard ropes.indices.contains(snapState.ropeIndex) else {
-            snapAnimationState = nil
-            return
-        }
-
-        let animationSpeed: Float = 8.0
-        snapState.progress += deltaTime * animationSpeed
-        snapState.progress = min(1.0, snapState.progress)
-
-        let t = snapState.progress
-        let easeOut = 1.0 - pow(1.0 - t, 3.0)
-        let currentPos = snapState.startPosition + (snapState.targetPosition - snapState.startPosition) * easeOut
-
-        let endpoints = ropes[snapState.ropeIndex]
-        guard holePositions[safe: (snapState.endIndex == 0) ? endpoints.endHole : endpoints.startHole] != nil else {
-            snapAnimationState = nil
-            return
-        }
-
-        topology?.setFloating(ropeIndex: snapState.ropeIndex, position: currentPos)
-
-        if snapState.progress >= 1.0 {
-            topology?.endDrag(ropeIndex: snapState.ropeIndex, endIndex: snapState.endIndex, holeIndex: snapState.targetHoleIndex)
-            
-            if let pinStart = holePositions[safe: endpoints.startHole],
-               let pinEnd = holePositions[safe: endpoints.endHole] {
-                let restLen = simd_length(pinEnd - pinStart)
-                ropeRestLengths[snapState.ropeIndex] = restLen
-                ropeEffectiveRestLengths[snapState.ropeIndex] = restLen
-            } else {
-                topology?.deactivateRope(ropeIndex: snapState.ropeIndex)
-            }
-
-            removeUntangledRopes()
-            Self.logger.info("📍 SNAP ANIMATION COMPLETED - starting tension")
-            startTensionForAllRopes()
-            snapAnimationState = nil
-        } else {
-            snapAnimationState = snapState
-        }
-    }
-
-    private func updateLazyDrag(deltaTime: Float) {
-        guard let dragState, ropes.indices.contains(dragState.ropeIndex) else { return }
-
-        let endpoints = ropes[dragState.ropeIndex]
-        let fixedHoleIndex = (dragState.endIndex == 0) ? endpoints.endHole : endpoints.startHole
-        guard let fixedPos = holePositions[safe: fixedHoleIndex] else { return }
-
-        let targetLength = simd_length(dragWorldTarget - fixedPos)
-        let currentLazyLength = simd_length(dragWorldLazy - fixedPos)
-        let restLength = dragState.restLength
-
-        let isStretching = targetLength > currentLazyLength
-        let isShrinking = targetLength < currentLazyLength
-
-        if isStretching {
-            let stretchSpeed: Float = 18.0
-            let toTarget = dragWorldTarget - dragWorldLazy
-            let moveAmount = min(simd_length(toTarget), stretchSpeed * deltaTime)
-            if moveAmount > 1e-6 {
-                let moveDir = toTarget / simd_length(toTarget)
-                dragWorldLazy += moveDir * moveAmount
-            }
-            dragSagProgress = 0.0
-        } else if isShrinking {
-            dragWorldLazy = dragWorldTarget
-            
-            let lengthDiff = currentLazyLength - targetLength
-            if lengthDiff > 0.01 {
-                let sagSpeed: Float = 4.5
-                dragSagProgress += deltaTime * sagSpeed
-                dragSagProgress = min(1.0, dragSagProgress)
-            } else {
-                if dragSagProgress > 0.0 {
-                    dragSagProgress = max(0.0, dragSagProgress - deltaTime * 8.0)
-                }
-            }
-        } else {
-            dragWorldLazy = dragWorldTarget
-            if dragSagProgress > 0.0 {
-                dragSagProgress = max(0.0, dragSagProgress - deltaTime * 8.0)
-            }
-        }
-
-        topology?.setFloating(ropeIndex: dragState.ropeIndex, position: dragWorldLazy)
-    }
-    
-    private func updateTension(deltaTime: Float) {
-        guard globalTensionActive else { return }
-        guard dragState == nil && snapAnimationState == nil else { return }
-        guard let topology else { return }
-        
-        let springK: Float = 25.0
-        let damping: Float = 6.0
-        let dt = min(deltaTime, 1.0 / 30.0)
-        
-        var anyActive = false
-        self.tensionLogCounter += 1
-        let shouldLogPeriodic = self.tensionLogCounter % 120 == 0
-        
-        for ropeIndex in ropes.indices {
-            guard var state = ropeTensionStates[ropeIndex] else { continue }
-            
-            let restLength = ropeRestLengths[ropeIndex] ?? 1.0
-            let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
-            
-            let minPathLength = TopologySampler.ropePathLength(
-                engine: topology,
-                ropeIndex: ropeIndex,
-                ropeRadius: ropeRadius,
-                ropeRadiusForIndex: { self.ropes[safe: $0]?.radius ?? 0.0425 },
-                holeRadius: holeRadius
-            )
-            
-            let targetLength = max(restLength, minPathLength)
-            let prevLength = state.currentLength
-            let prevVel = state.velocity
-            
-            let displacement = state.currentLength - targetLength
-            let springForce = -springK * displacement
-            let dampingForce = -damping * state.velocity
-            let acceleration = springForce + dampingForce
-            
-            state.velocity += acceleration * dt
-            state.currentLength += state.velocity * dt
-            
-            var event = ""
-            if state.currentLength < targetLength {
-                state.currentLength = targetLength
-                if state.velocity < 0 {
-                    state.velocity = -state.velocity * 0.25
-                    event = "⚡BOUNCE"
-                }
-            }
-            
-            if prevVel * state.velocity < 0 && abs(prevVel) > 0.01 {
-                event += event.isEmpty ? "🔄REVERSE" : "+REV"
-            }
-            
-            let accelJump = abs(acceleration) > 5.0
-            if accelJump {
-                event += event.isEmpty ? "⚠️BIGACC" : "+BIGACC"
-            }
-            
-            if !event.isEmpty {
-                let sag = state.currentLength / max(0.001, restLength)
-                Self.logger.info("\(event) T[\(ropeIndex)] len:\(String(format: "%.3f", prevLength))→\(String(format: "%.3f", state.currentLength)) vel:\(String(format: "%.3f", prevVel))→\(String(format: "%.3f", state.velocity)) acc:\(String(format: "%.2f", acceleration)) sag:\(String(format: "%.3f", sag))")
-            } else if shouldLogPeriodic {
-                let sag = state.currentLength / max(0.001, restLength)
-                Self.logger.info("🔧 T[\(ropeIndex)] len:\(String(format: "%.3f", state.currentLength)) tgt:\(String(format: "%.3f", targetLength)) vel:\(String(format: "%.3f", state.velocity)) sag:\(String(format: "%.3f", sag))")
-            }
-            
-            if abs(state.currentLength - targetLength) < 0.002 && abs(state.velocity) < 0.005 {
-                state.currentLength = targetLength
-                state.velocity = 0
-                ropeTensionStates.removeValue(forKey: ropeIndex)
-                Self.logger.info("✅ TENSION DONE rope[\(ropeIndex)]")
-            } else {
-                ropeTensionStates[ropeIndex] = state
-                anyActive = true
-            }
-            
-            ropeEffectiveRestLengths[ropeIndex] = state.currentLength
-        }
-        
-        if !anyActive {
-            globalTensionActive = false
-        }
-    }
-    
-    private func startTensionForAllRopes() {
-        guard let topology else { return }
-        
-        let stretchFactor: Float = 1.12
-        let initialVelocity: Float = -0.8
-        
-        for ropeIndex in ropes.indices {
-            let endpoints = ropes[ropeIndex]
-            guard holePositions[safe: endpoints.startHole] != nil,
-                  holePositions[safe: endpoints.endHole] != nil else { continue }
-            
-            let restLength = ropeRestLengths[ropeIndex] ?? 1.0
-            let ropeRadius = ropes[safe: ropeIndex]?.radius ?? 0.0425
-            
-            let currentPathLength = TopologySampler.ropePathLength(
-                engine: topology,
-                ropeIndex: ropeIndex,
-                ropeRadius: ropeRadius,
-                ropeRadiusForIndex: { self.ropes[safe: $0]?.radius ?? 0.0425 },
-                holeRadius: holeRadius
-            )
-            
-            let initialLength = max(currentPathLength * stretchFactor, restLength * stretchFactor)
-            
-            ropeTensionStates[ropeIndex] = RopeTensionState(
-                currentLength: initialLength,
-                velocity: initialVelocity
-            )
-            
-            ropeEffectiveRestLengths[ropeIndex] = initialLength
-        }
-        
-        globalTensionActive = true
-        Self.logger.info("🚀 TENSION STARTED for \(self.ropeTensionStates.count) ropes")
     }
 
     private func encodeHDRPass(commandBuffer: MTLCommandBuffer, hdrTexture: MTLTexture, depthTexture: MTLTexture) {
@@ -476,7 +207,7 @@ extension Renderer {
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
             orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0),
-            timeDrag: SIMD4<Float>(time, dragVisualEnergy, dragLiftCurrent, dragState != nil ? 1 : 0)
+            timeDrag: SIMD4<Float>(time, 0, 0, dragState != nil ? 1 : 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
     }
@@ -493,4 +224,3 @@ extension Renderer {
         return proj * view
     }
 }
-

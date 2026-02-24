@@ -3,7 +3,6 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var gameController = GameController()
     @State private var showControls = false
-    @State private var selectedTab = 0
 
     var body: some View {
         ZStack {
@@ -43,14 +42,11 @@ struct ContentView: View {
 
                 if showControls {
                     VStack(spacing: 4) {
-                        HStack(spacing: 8) {
-                            Picker("", selection: $selectedTab) {
-                                Text("Hook").tag(0)
-                                Text("Smooth").tag(1)
-                                Text("Render").tag(2)
-                            }
-                            .pickerStyle(.segmented)
-
+                        HStack {
+                            Text("Physics")
+                                .font(.system(size: 14, weight: .semibold))
+                                .foregroundColor(.white)
+                            Spacer()
                             Button(action: { gameController.resetToDefaults() }) {
                                 Image(systemName: "arrow.uturn.backward")
                                     .font(.system(size: 13, weight: .bold))
@@ -65,18 +61,17 @@ struct ContentView: View {
 
                         ScrollView {
                             VStack(spacing: 3) {
-                                switch selectedTab {
-                                case 0: hookTab
-                                case 1: smoothTab
-                                case 2: renderTab
-                                default: EmptyView()
-                                }
+                                ParamRowInt(label: "Particles", value: $gameController.particleCount, range: 20...200)
+                                ParamRow(label: "Gravity", value: $gameController.gravity, range: -20.0...0.0, format: "%.1f")
+                                ParamRow(label: "Damping", value: $gameController.damping, range: 0.8...1.0, format: "%.3f")
+                                ParamRowInt(label: "Constr", value: $gameController.constraintIterations, range: 1...60)
+                                ParamRow(label: "Drag H", value: $gameController.dragHeight, range: 0.05...1.5, format: "%.3f")
                             }
                             .padding(.horizontal, 10)
                             .padding(.vertical, 6)
                         }
                     }
-                    .frame(maxHeight: 260)
+                    .frame(maxHeight: 220)
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(14)
                     .padding(.horizontal, 12)
@@ -86,44 +81,6 @@ struct ContentView: View {
                 Spacer()
             }
         }
-    }
-
-    @ViewBuilder
-    private var hookTab: some View {
-        ParamRow(label: "Step", value: $gameController.stepMultiplier, range: 0.001...1.0, format: "%.4f")
-        ParamRow(label: "Radius", value: $gameController.hookRadiusMultiplier, range: 0.01...5.0, format: "%.3f")
-        ParamRow(label: "Limit", value: $gameController.stepLimitMultiplier, range: 0.01...10.0, format: "%.3f")
-        ParamRow(label: "Maturity", value: $gameController.maturityDistance, range: 0.001...1.0, format: "%.3f")
-    }
-
-    @ViewBuilder
-    private var smoothTab: some View {
-        ParamRowInt(label: "Subdiv", value: $gameController.smoothSubdivisions, range: 1...32)
-        ParamRowInt(label: "Iters", value: $gameController.smoothIterations, range: 0...50)
-        ParamRow(label: "Strength", value: $gameController.smoothStrength, range: 0...10.0, format: "%.2f")
-    }
-
-    @ViewBuilder
-    private var renderTab: some View {
-        ParamRow(label: "Drag H", value: $gameController.dragHeight, range: 0.05...1.5, format: "%.3f")
-        CompactToggle(label: "Debug Colors", isOn: $gameController.debugSegmentColors)
-        CompactToggle(label: "Simple Mode", isOn: $gameController.simpleMode)
-        CompactToggle(label: "Hole Deform", isOn: Binding(
-            get: { !gameController.disableHoleDeform },
-            set: { gameController.disableHoleDeform = !$0 }
-        ))
-    }
-}
-
-private struct CompactToggle: View {
-    let label: String
-    @Binding var isOn: Bool
-
-    var body: some View {
-        Toggle(label, isOn: $isOn)
-            .font(.system(size: 13))
-            .foregroundColor(.white)
-            .tint(.blue)
     }
 }
 

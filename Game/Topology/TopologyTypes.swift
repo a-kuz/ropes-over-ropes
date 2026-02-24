@@ -24,9 +24,3 @@ struct HookSequence {
     var ropeAStartIsOver: Bool
 }
 
-struct HookSequenceGeometry {
-    let centers: [SIMD2<Float>]
-    let R: Float
-    let pathA: [SIMD2<Float>]
-    let pathB: [SIMD2<Float>]
-}
