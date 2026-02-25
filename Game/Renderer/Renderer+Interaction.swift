@@ -131,6 +131,7 @@ extension Renderer {
 
             // Physics: begin drag (lift endpoint)
             simulator?.beginDrag(bandIndex: best.ropeIndex, endIndex: best.endIndex, worldPosition: dragWorld)
+            Haptics.light()
         }
     }
 
@@ -168,6 +169,7 @@ extension Renderer {
 
         // Physics: end drag (lower into hole + settle)
         simulator?.endDrag(targetHoleIndex: snappedHoleIndex)
+        Haptics.medium()
 
         // Update rope endpoints
         if let _ = bestIndex {
@@ -185,7 +187,8 @@ extension Renderer {
             }
         }
 
-        removeUntangledRopes()
+        // Delay win check so rope has time to settle after drag
+        settleCheckTimer = settleCheckDelay
         self.dragState = nil
     }
 

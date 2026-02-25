@@ -29,6 +29,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var time: Float = 0
     var dragVisualEnergy: Float = 0
     var lastDeltaTime: Float = 1.0 / 60.0
+    var lastDrawTime: Double = 0
+    var currentFPS: Float = 0
 
 
     var frameUniforms: MTLBuffer?
@@ -80,8 +82,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ropeCount: Int
     }
     var lastMeshStats: MeshStats?
-    
+
     var currentLevelId: Int = 1
+    var onLevelComplete: (() -> Void)?
+
+    /// Timer for delayed win check after drag ends.
+    /// Rope needs time to settle before we check crossings.
+    var settleCheckTimer: Float? = nil
+    let settleCheckDelay: Float = 0.5
+    var nextLevelTimer: Float? = nil
     
     // Physics parameters (forwarded to simulator)
     var physicsGravity: Float = -5.0 {
@@ -90,11 +99,20 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsDamping: Float = 0.97 {
         didSet { simulator?.damping = physicsDamping }
     }
-    var physicsConstraintIterations: Int = 20 {
+    var physicsConstraintIterations: Int = 8 {
         didSet { simulator?.constraintIterations = physicsConstraintIterations }
     }
     var physicsParticleCount: Int = 60 {
         didSet { simulator?.particleCount = physicsParticleCount }
+    }
+    var physicsSettleSteps: Int = 5 {
+        didSet { simulator?.settleSteps = physicsSettleSteps }
+    }
+    var physicsLiftHeight: Float = 0.30 {
+        didSet { simulator?.liftHeight = physicsLiftHeight }
+    }
+    var physicsRopeTension: Float = 0.98 {
+        didSet { simulator?.ropeTension = physicsRopeTension }
     }
 
     init(view: MTKView) {
@@ -133,57 +151,23 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragWorld = .zero
         simulator = nil
         
-        let fallbackLayout = Self.makeHoleLayout()
-        let level = LevelLoader.load(levelId: levelId)
-
-        if level == nil {
-            Self.logger.warning("Level \(levelId) failed to load, using fallback")
+        // Try JSON first, fallback to procedural generation
+        let level: LevelDefinition
+        if let jsonLevel = LevelLoader.load(levelId: levelId) {
+            Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
+            level = jsonLevel
         } else {
-            Self.logger.info("Level \(levelId) loaded successfully: \(level!.ropes.count) ropes, \(level!.holes.count) holes from JSON")
+            Self.logger.info("Level \(levelId) generated procedurally")
+            level = LevelGenerator.generate(levelId: levelId)
         }
 
-        let decodedHoles = level?.holes.map { $0.simd }
-        let levelHoles = (decodedHoles?.isEmpty == false) ? (decodedHoles ?? fallbackLayout.positions) : fallbackLayout.positions
-        let levelHoleRadius = level?.holeRadius ?? fallbackLayout.radius
-        
-        let defaultRopes: [LevelDefinition.Rope] = [
-            LevelDefinition.Rope(
-                startHole: 0,
-                endHole: min(14, levelHoles.count - 1),
-                color: .init(redChannel: 0.20, greenChannel: 0.95, blueChannel: 0.35),
-                radius: 0.045
-            ),
-            LevelDefinition.Rope(
-                startHole: 3,
-                endHole: min(17, levelHoles.count - 1),
-                color: .init(redChannel: 0.30, greenChannel: 0.55, blueChannel: 0.98),
-                radius: 0.044
-            ),
-            LevelDefinition.Rope(
-                startHole: min(6, levelHoles.count - 1),
-                endHole: min(11, levelHoles.count - 1),
-                color: .init(redChannel: 0.96, greenChannel: 0.28, blueChannel: 0.33),
-                radius: 0.043
-            )
-        ]
-        let candidateRopes = (level != nil && !level!.ropes.isEmpty) ? level!.ropes : defaultRopes
+        let levelHoles = level.holes.map { $0.simd }
+        let levelHoleRadius = level.holeRadius
 
-        var validatedRopes = candidateRopes.filter { rope in
+        let validatedRopes = level.ropes.filter { rope in
             guard levelHoles.indices.contains(rope.startHole) else { return false }
             guard levelHoles.indices.contains(rope.endHole) else { return false }
-            if rope.startHole == rope.endHole { return false }
-            return true
-        }
-
-        if validatedRopes.isEmpty, levelHoles.count >= 2 {
-            validatedRopes = [
-                LevelDefinition.Rope(
-                    startHole: 0,
-                    endHole: 1,
-                    color: .init(redChannel: 0.85, greenChannel: 0.85, blueChannel: 0.92),
-                    radius: 0.045
-                )
-            ]
+            return rope.startHole != rope.endHole
         }
 
         holePositions = levelHoles
@@ -198,7 +182,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         let ropeConfigs = ropes.map { rope in
             (startHole: rope.startHole, endHole: rope.endHole, color: rope.color)
         }
-        let hookDefs: [TopologyEngine.HookDefinition]? = level?.hooks.flatMap { jsonHooks in
+        let hookDefs: [TopologyEngine.HookDefinition]? = level.hooks.flatMap { jsonHooks in
             jsonHooks.compactMap { hook -> TopologyEngine.HookDefinition? in
                 guard let ropeAIdx = Self.resolveRopeRef(hook.ropeA, hooks: jsonHooks),
                       let ropeBIdx = Self.resolveRopeRef(hook.ropeB, hooks: jsonHooks) else {
@@ -221,13 +205,15 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.damping = physicsDamping
         sim.constraintIterations = physicsConstraintIterations
         sim.particleCount = physicsParticleCount
-        sim.liftHeight = dragHeight
+        sim.settleSteps = physicsSettleSteps
+        sim.liftHeight = physicsLiftHeight
+        sim.ropeTension = physicsRopeTension
 
         let simRopeConfigs = ropes.map { rope in
             VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius)
         }
 
-        let simActions: [VerletSimulator.LevelAction] = level?.actions?.compactMap { action in
+        let simActions: [VerletSimulator.LevelAction] = level.actions?.compactMap { action in
             guard let actionType = VerletSimulator.LevelAction.ActionType(rawValue: action.type) else { return nil }
             return VerletSimulator.LevelAction(type: actionType, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
         } ?? []

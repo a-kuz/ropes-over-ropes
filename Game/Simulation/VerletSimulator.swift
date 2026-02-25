@@ -1,5 +1,6 @@
 import simd
 import os.log
+import QuartzCore
 
 final class VerletSimulator {
     private static let logger = Logger(subsystem: "com.uzls.four", category: "VerletSim")
@@ -7,13 +8,15 @@ final class VerletSimulator {
     // MARK: - Band (rope) state
 
     struct Band {
-        var positions: [SIMD3<Float>]
-        var previousPositions: [SIMD3<Float>]
+        var positions: ContiguousArray<SIMD3<Float>>
+        var previousPositions: ContiguousArray<SIMD3<Float>>
         var segmentLength: Float
         var radius: Float
         var pinStart: Int?
         var pinEnd: Int?
         var active: Bool
+        var fadeOut: Float = 0          // 0 = normal, >0 = fading out (0→1)
+        static let fadeOutDuration: Float = 0.4
     }
 
     // MARK: - Drag state
@@ -34,18 +37,49 @@ final class VerletSimulator {
     // Physics parameters (tuneable)
     var gravity: Float = -5.0
     var damping: Float = 0.97
-    var constraintIterations: Int = 8
+    var constraintIterations: Int = 8 {
+        didSet { constraintIterations = max(constraintIterations, 8) }
+    }
     var settleSteps: Int = 5
     var liftHeight: Float = 0.30
-    var collisionMultiplier: Float = 1.2
+    /// Rope tension: multiplier on rest length. < 1 = taut (shorter rope), 1 = natural length.
+    /// 0.95 = rope is 5% shorter than span → pulled tight. Don't go below ~0.85.
+    var ropeTension: Float = 0.98
+    private var currentTension: Float = 1.0
+    private let tensionSpeed: Float = 0.5  // per second — slow tightening after drag
     var particleCount: Int = 6
 
-    private let dt: Float = 1.0 / 60.0
+    private let dt: Float = 1.0 / 120.0  // fixed dt, supports ProMotion 120fps
     private var accumulator: Float = 0
+    private var resampleCounter: Int = 0
+    private let resampleInterval: Int = 30  // resample every N substeps to avoid fighting solver
     private var dragTargetPos: SIMD3<Float>?
     private var dragStartPos: SIMD3<Float>?
+    private var logTimer: Float = 0
+    private var logEvery: Float = 1.0  // log every N seconds
+    private var tensionLogTimer: Float = -1  // -1 = inactive, >= 0 = countdown
+    private let tensionLogDuration: Float = 3.0
+    private let tensionLogInterval: Float = 0.25  // 4 fps max — compact logs
+    private var tensionLogCooldown: Float = 0
+
+    /// Linking number snapshot from previous tension log — tracks (bandI, bandJ, linkingNumber)
+    private var prevLinking: [(Int, Int, Int)] = []
+    private let ropePhysics = RopePhysics()
 
     var dragInfo: DragInfo?
+
+    // MARK: - Post-drag lower animation
+
+    struct LowerAnimation {
+        let bandIndex: Int
+        let endIndex: Int
+        let targetHole: Int
+        let startPos: SIMD3<Float>
+        var timer: Float = 0
+        static let duration: Float = 0.3
+    }
+
+    var lowerAnimation: LowerAnimation?
 
     // MARK: - Init
 
@@ -61,8 +95,8 @@ final class VerletSimulator {
     func addBand(radius: Float, particleCount: Int? = nil) -> Int {
         let n = particleCount ?? self.particleCount
         let band = Band(
-            positions: Array(repeating: .zero, count: n),
-            previousPositions: Array(repeating: .zero, count: n),
+            positions: ContiguousArray(repeating: .zero, count: n),
+            previousPositions: ContiguousArray(repeating: .zero, count: n),
             segmentLength: 0,
             radius: radius,
             pinStart: nil,
@@ -113,180 +147,548 @@ final class VerletSimulator {
     /// During drag, the dragged endpoint is interpolated across substeps
     /// to prevent tunneling through other ropes.
     func update(deltaTime: Float) {
-        // Cap accumulated time to prevent spiral of death at very low FPS
-        accumulator += min(deltaTime, 1.0 / 15.0)
+        let clampedDt = min(deltaTime, 1.0 / 15.0)  // spiral-of-death protection
 
+        // Advance fade-out animations
+        for i in bands.indices where bands[i].fadeOut > 0 && bands[i].active {
+            bands[i].fadeOut += clampedDt / Band.fadeOutDuration
+            if bands[i].fadeOut >= 1 {
+                bands[i].fadeOut = 1
+                bands[i].active = false
+                bands[i].pinStart = nil
+                bands[i].pinEnd = nil
+            }
+        }
+
+        accumulator += clampedDt
         let stepsNeeded = Int(accumulator / dt)
-        guard stepsNeeded > 0 else { return }
+        accumulator -= Float(stepsNeeded) * dt
+        let n = max(stepsNeeded, 0)
+        guard n > 0 else { return }
+
+        // Smooth tension transition
+        let targetTension = dragInfo != nil ? 1.0 : ropeTension
+        if currentTension != targetTension {
+            let diff = targetTension - currentTension
+            let step = tensionSpeed * clampedDt
+            if abs(diff) <= step {
+                currentTension = targetTension
+            } else {
+                currentTension += diff > 0 ? step : -step
+            }
+        }
+
+        logTimer += deltaTime
+        let shouldLog = logTimer >= logEvery
+        if shouldLog { logTimer = 0 }
+
+        if shouldLog {
+            Self.logger.info("""
+                [FRAME] dt=\(deltaTime, format: .fixed(precision: 4)) \
+                substeps=\(n) fixedDt=\(self.dt, format: .fixed(precision: 5)) \
+                drag=\(self.dragInfo != nil) particles=\(self.bands.first?.positions.count ?? 0) \
+                bands=\(self.bands.filter { $0.active }.count) constIter=\(self.constraintIterations)
+                """)
+        }
 
         if let drag = dragInfo, let target = dragTargetPos {
             let idx = drag.endIndex == 0 ? 0 : bands[drag.bandIndex].positions.count - 1
             let startPos = dragStartPos ?? bands[drag.bandIndex].positions[idx]
 
-            for s in 1...stepsNeeded {
-                let t = Float(s) / Float(stepsNeeded)
+            for s in 1...n {
+                let t = Float(s) / Float(n)
                 let interpPos = startPos + (target - startPos) * t
                 bands[drag.bandIndex].positions[idx] = interpPos
                 bands[drag.bandIndex].previousPositions[idx] = interpPos
-                verletStep(collide: true)
+                verletStep(collide: true, dt: dt)
             }
-            // Next frame interpolates from where we ended up
             dragStartPos = target
         } else {
-            for _ in 0..<stepsNeeded {
-                verletStep(collide: true)
+            for _ in 0..<n {
+                verletStep(collide: true, dt: dt)
             }
         }
 
-        accumulator -= Float(stepsNeeded) * dt
+        // Post-drag lower animation
+        updateLowerAnimation(deltaTime: clampedDt)
+
+        // logCrossingState disabled — costs 8% CPU (O(n²) per band pair)
     }
+
+    private func updateLowerAnimation(deltaTime: Float) {
+        guard var anim = lowerAnimation else { return }
+        anim.timer += deltaTime
+
+        let bi = anim.bandIndex
+        let idx = anim.endIndex == 0 ? 0 : bands[bi].positions.count - 1
+        let holePos = holePosition3D(anim.targetHole)
+
+        let t = min(anim.timer / LowerAnimation.duration, 1.0)
+        let eased = 1.0 - (1.0 - t) * (1.0 - t)  // ease-out
+        let pos = anim.startPos + (holePos - anim.startPos) * eased
+        bands[bi].positions[idx] = pos
+        bands[bi].previousPositions[idx] = pos
+
+        if t >= 1.0 {
+            // Pin it
+            if anim.endIndex == 0 {
+                bands[bi].pinStart = anim.targetHole
+            } else {
+                bands[bi].pinEnd = anim.targetHole
+            }
+            bands[bi].positions[idx] = holePos
+            bands[bi].previousPositions[idx] = holePos
+            lowerAnimation = nil
+            return
+        }
+
+        lowerAnimation = anim
+    }
+
+    /// Log min distances between band pairs and crossing Z info
+    private func logCrossingState() {
+        let activeBands = bands.indices.filter { bands[$0].active }
+        for i in 0..<activeBands.count {
+            let bi = activeBands[i]
+            let bandI = bands[bi]
+            // Log segment lengths vs rest length
+            var maxStretch: Float = 0
+            var avgStretch: Float = 0
+            let n = bandI.positions.count
+            for k in 0..<(n - 1) {
+                let d = simd_length(bandI.positions[k + 1] - bandI.positions[k])
+                let ratio = d / max(bandI.segmentLength, 1e-6)
+                maxStretch = max(maxStretch, ratio)
+                avgStretch += ratio
+            }
+            avgStretch /= Float(max(1, n - 1))
+            Self.logger.info("""
+                [BAND \(bi)] segs=\(n - 1) segLen=\(bandI.segmentLength, format: .fixed(precision: 4)) \
+                radius=\(bandI.radius, format: .fixed(precision: 4)) \
+                stretch avg=\(avgStretch, format: .fixed(precision: 2)) max=\(maxStretch, format: .fixed(precision: 2)) \
+                zRange=[\(bandI.positions.map(\.z).min() ?? 0, format: .fixed(precision: 3))...\(bandI.positions.map(\.z).max() ?? 0, format: .fixed(precision: 3))]
+                """)
+
+            for j in (i + 1)..<activeBands.count {
+                let bj = activeBands[j]
+                let bandJ = bands[bj]
+                // Find min distance between any two segments
+                var minDist: Float = .greatestFiniteMagnitude
+                var minI = 0, minJ = 0
+                var crossings = 0
+                let segsI = bandI.positions.count - 1
+                let segsJ = bandJ.positions.count - 1
+                let threshold = bandI.radius + bandJ.radius
+
+                for si in 0..<segsI {
+                    let a0 = SIMD2<Float>(bandI.positions[si].x, bandI.positions[si].y)
+                    let a1 = SIMD2<Float>(bandI.positions[si + 1].x, bandI.positions[si + 1].y)
+                    for sj in 0..<segsJ {
+                        let b0 = SIMD2<Float>(bandJ.positions[sj].x, bandJ.positions[sj].y)
+                        let b1 = SIMD2<Float>(bandJ.positions[sj + 1].x, bandJ.positions[sj + 1].y)
+                        // 2D segment intersection check
+                        let d1 = a1 - a0
+                        let d2 = b1 - b0
+                        let cross = d1.x * d2.y - d1.y * d2.x
+                        if abs(cross) > 1e-9 {
+                            let d = b0 - a0
+                            let tA = (d.x * d2.y - d.y * d2.x) / cross
+                            let tB = (d.x * d1.y - d.y * d1.x) / cross
+                            if tA > 0.01 && tA < 0.99 && tB > 0.01 && tB < 0.99 {
+                                let zA = bandI.positions[si].z * (1 - tA) + bandI.positions[si + 1].z * tA
+                                let zB = bandJ.positions[sj].z * (1 - tB) + bandJ.positions[sj + 1].z * tB
+                                crossings += 1
+                                Self.logger.info("""
+                                    [CROSS] band\(bi)seg\(si) x band\(bj)seg\(sj): \
+                                    zA=\(zA, format: .fixed(precision: 4)) zB=\(zB, format: .fixed(precision: 4)) \
+                                    diff=\(zA - zB, format: .fixed(precision: 4)) \
+                                    (\(zA > zB ? "A over" : "B over"))
+                                    """)
+                            }
+                        }
+                        // 3D distance
+                        let diff3 = bandI.positions[si] - bandJ.positions[sj]
+                        let d3 = simd_length(diff3)
+                        if d3 < minDist { minDist = d3; minI = si; minJ = sj }
+                    }
+                }
+                Self.logger.info("""
+                    [PAIR \(bi)-\(bj)] minDist=\(minDist, format: .fixed(precision: 4)) \
+                    threshold=\(threshold, format: .fixed(precision: 4)) \
+                    at seg(\(minI),\(minJ)) crossings=\(crossings)
+                    """)
+            }
+        }
+    }
+
+    private let initDt: Float = 1.0 / 60.0
 
     func doSteps(_ n: Int, collide: Bool) {
         for _ in 0..<n {
-            verletStep(collide: collide)
+            verletStep(collide: collide, dt: initDt)
         }
     }
 
-    private func verletStep(collide: Bool) {
-        let dt2 = dt * dt
+    private var perfAccum: (verlet: Double, constr: Double, postCol: Double, count: Int, logTime: Double, pairs: Int) = (0,0,0,0,0,0)
 
-        // 1. Verlet position update
+    private func verletStep(collide: Bool, dt: Float) {
+        let dt2 = dt * dt
+        let t0 = CACurrentMediaTime()
+
+        // 1. Verlet position update + velocity limiting
+        let gravVec = SIMD3<Float>(0, 0, gravity * dt2)
         for bi in bands.indices {
-            guard bands[bi].active else { continue }
+            guard bands[bi].active && bands[bi].fadeOut == 0 else { continue }
             let n = bands[bi].positions.count
-            for i in 1..<(n - 1) {  // skip pinned endpoints
+            let maxMove = bands[bi].radius * 2.0
+            for i in 1..<(n - 1) {
                 let pos = bands[bi].positions[i]
                 let old = bands[bi].previousPositions[i]
-                let vel = (pos - old) * damping
+                var vel = (pos - old) * damping
+                let velLen = simd_length(vel)
+                if velLen > maxMove { vel = vel * (maxMove / velLen) }
                 bands[bi].previousPositions[i] = pos
-                bands[bi].positions[i] = pos + vel + SIMD3<Float>(0, 0, gravity * dt2)
+                bands[bi].positions[i] = pos + vel + gravVec
+            }
+        }
+        let t1 = CACurrentMediaTime()
+
+        // 2. Constraint + collision iterations (interleaved for robust PBD)
+        let active = collide ? bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 }) : []
+
+        // Tension diagnostic logging: active for 3s after endDrag, max 10/sec
+        var shouldLogStep = false
+        if tensionLogTimer >= 0 {
+            tensionLogTimer += dt
+            tensionLogCooldown -= dt
+            if tensionLogCooldown <= 0 {
+                shouldLogStep = true
+                tensionLogCooldown = tensionLogInterval
+            }
+            if tensionLogTimer > tensionLogDuration {
+                tensionLogTimer = -1
+                Self.logger.warning("[TENSION-END] logging stopped")
             }
         }
 
-        // 2. Constraint iterations
-        for _ in 0..<constraintIterations {
+        // Scale iterations inversely with tension — stronger tension needs more solver work
+        let effectiveIters = max(constraintIterations, Int(Float(constraintIterations) / max(currentTension, 0.3)))
+
+        // Build collision pair list once per substep (broadphase)
+        let collisionPairs = collide ? buildCollisionPairs(active) : []
+
+        for _ in 0..<effectiveIters {
             for bi in bands.indices {
                 guard bands[bi].active else { continue }
                 bandConstraints(bi)
             }
             if collide {
-                let active = bands.indices.filter { bands[$0].active }
-                for i in 0..<active.count {
-                    for j in (i + 1)..<active.count {
-                        collideStep(active[i], active[j])
+                resolveCollisionPairs(collisionPairs)
+            }
+        }
+
+        let t2Start = CACurrentMediaTime()
+        // Post-solve: collision-only passes until converged
+        if collide {
+            for _ in 0..<3 {
+                let hadCollision = resolveCollisionPairs(collisionPairs, injectVelocity: true)
+                // Re-apply pin + board constraints
+                for bi in active {
+                    let n = bands[bi].positions.count
+                    if let startHole = bands[bi].pinStart {
+                        let hp = holePosition3D(startHole)
+                        bands[bi].positions[0] = hp
+                        bands[bi].previousPositions[0] = hp
+                    }
+                    if let endHole = bands[bi].pinEnd {
+                        let hp = holePosition3D(endHole)
+                        bands[bi].positions[n - 1] = hp
+                        bands[bi].previousPositions[n - 1] = hp
+                    }
+                    for i in 1..<(n - 1) {
+                        if bands[bi].positions[i].z < bands[bi].radius {
+                            bands[bi].positions[i].z = bands[bi].radius
+                        }
+                    }
+                }
+                if !hadCollision { break }
+            }
+        }
+
+        let t3 = CACurrentMediaTime()
+        perfAccum.verlet += t1 - t0
+        perfAccum.constr += t2Start - t1
+        perfAccum.postCol += t3 - t2Start
+        perfAccum.count += 1
+        perfAccum.pairs = collisionPairs.count
+        let now = CACurrentMediaTime()
+        if now - perfAccum.logTime >= 2.0 {
+            let c = Double(max(perfAccum.count, 1))
+            let vUs = perfAccum.verlet / c * 1e6
+            let cUs = perfAccum.constr / c * 1e6
+            let pUs = perfAccum.postCol / c * 1e6
+            let tUs = vUs + cUs + pUs
+            let pc = bands.first?.positions.count ?? 0
+            let cp = perfAccum.pairs
+            Self.logger.warning("[PERF] steps=\(Int(c)) verlet=\(vUs, format: .fixed(precision: 0))µs constr=\(cUs, format: .fixed(precision: 0))µs postCol=\(pUs, format: .fixed(precision: 0))µs total=\(tUs, format: .fixed(precision: 0))µs effIter=\(effectiveIters) particles=\(pc) pairs=\(cp)")
+            perfAccum = (0, 0, 0, 0, now, 0)
+        }
+
+        if shouldLogStep && active.count >= 2 {
+            var currentLinking: [(Int, Int, Int)] = []
+            var summary: [String] = []
+
+            for i in 0..<active.count {
+                let bi = active[i]
+                for j in (i + 1)..<active.count {
+                    let bj = active[j]
+                    let lk = ropePhysics.linkingNumber(bands[bi].positions, bands[bj].positions)
+                    currentLinking.append((bi, bj, lk))
+                    let prev = prevLinking.first(where: { $0.0 == bi && $0.1 == bj })?.2
+                    if let prev, lk != prev {
+                        summary.append("\(bi)-\(bj):\(prev)→\(lk)PASSTHROUGH")
+                    } else {
+                        summary.append("\(bi)-\(bj):\(lk)")
                     }
                 }
             }
+
+            Self.logger.warning("[T] ten=\(self.currentTension, format: .fixed(precision: 3)) \(summary.joined(separator: " "))")
+            prevLinking = currentLinking
+        }
+
+    }
+
+
+
+    /// Redistribute particles by curvature: dense at bends, sparse on straight segments.
+    /// Uses curvature-weighted arc-length so particles concentrate where the rope curves.
+    private func resampleBand(_ bi: Int) {
+        let n = bands[bi].positions.count
+        guard n >= 4 else { return }
+
+        let pos = bands[bi].positions
+        let prev = bands[bi].previousPositions
+
+        // 1. Compute per-vertex curvature (angle between adjacent segments)
+        //    Endpoints get 0 curvature.
+        var curvature = [Float](repeating: 0, count: n)
+        for i in 1..<(n - 1) {
+            let d0 = pos[i] - pos[i - 1]
+            let d1 = pos[i + 1] - pos[i]
+            let len0 = simd_length(d0)
+            let len1 = simd_length(d1)
+            if len0 > 1e-9 && len1 > 1e-9 {
+                let cosA = simd_dot(d0, d1) / (len0 * len1)
+                // curvature ~ angle; acos is expensive, use 1-cos as proxy (0=straight, 2=hairpin)
+                curvature[i] = max(1.0 - cosA, 0)
+            }
+        }
+
+        // 2. Compute weighted cumulative arc length.
+        //    Weight = 1 + curvatureScale * avgCurvature(segment)
+        //    Higher weight = more particles allocated to that segment.
+        let curvatureScale: Float = 8.0
+        var wArcLen = [Float](repeating: 0, count: n)
+        for i in 1..<n {
+            let segLen = simd_length(pos[i] - pos[i - 1])
+            let avgCurv = (curvature[i - 1] + curvature[i]) * 0.5
+            let weight = 1.0 + curvatureScale * avgCurv
+            wArcLen[i] = wArcLen[i - 1] + segLen * weight
+        }
+        let totalW = wArcLen[n - 1]
+        guard totalW > 1e-6 else { return }
+
+        // 3. Also compute plain arc length for interpolation
+        var arcLen = [Float](repeating: 0, count: n)
+        for i in 1..<n {
+            arcLen[i] = arcLen[i - 1] + simd_length(pos[i] - pos[i - 1])
+        }
+
+        // 4. Check if resampling needed
+        var maxSeg: Float = 0, minSeg: Float = Float.greatestFiniteMagnitude
+        for i in 0..<(n - 1) {
+            let s = arcLen[i + 1] - arcLen[i]
+            maxSeg = max(maxSeg, s)
+            if s > 1e-9 { minSeg = min(minSeg, s) }
+        }
+        guard minSeg < 1e-9 || maxSeg / max(minSeg, 1e-9) > 1.5 else { return }
+
+        // 5. Place particles at uniform weighted-arc-length intervals
+        let idealW = totalW / Float(n - 1)
+        var seg = 0
+        for i in 1..<(n - 1) {
+            let targetW = idealW * Float(i)
+            while seg < n - 2 && wArcLen[seg + 1] < targetW {
+                seg += 1
+            }
+            let wStart = wArcLen[seg]
+            let wLen = wArcLen[seg + 1] - wStart
+            let t = wLen > 1e-9 ? (targetW - wStart) / wLen : 0
+
+            bands[bi].positions[i] = pos[seg] + (pos[seg + 1] - pos[seg]) * t
+            bands[bi].previousPositions[i] = prev[seg] + (prev[seg + 1] - prev[seg]) * t
         }
     }
 
     private func bandConstraints(_ bi: Int) {
         let n = bands[bi].positions.count
-        let segLen = bands[bi].segmentLength
+        let segLen = bands[bi].segmentLength * currentTension
         let R = bands[bi].radius
+        let pinS = bands[bi].pinStart
+        let pinE = bands[bi].pinEnd
+        let holeS = pinS.map { holePosition3D($0) }
+        let holeE = pinE.map { holePosition3D($0) }
 
-        // Even-odd (red-black) distance constraints
-        for offset in 0...1 {
-            var idx = offset
-            while idx < n - 1 {
-                let diff = bands[bi].positions[idx + 1] - bands[bi].positions[idx]
-                let dist = simd_length(diff) + 1e-12
-                let corr = diff * ((dist - segLen) / dist * 0.5)
-                if idx > 0 {
-                    bands[bi].positions[idx] += corr
+        bands[bi].positions.withUnsafeMutableBufferPointer { pos in
+            // Even-odd (red-black) distance constraints
+            for offset in 0...1 {
+                var idx = offset
+                while idx < n - 1 {
+                    let diff = pos[idx + 1] - pos[idx]
+                    let dist2 = simd_dot(diff, diff)
+                    if dist2 > 1e-12 {
+                        let dist = sqrtf(dist2)
+                        let corr = diff * ((dist - segLen) / dist * 0.5)
+                        if idx > 0 { pos[idx] += corr }
+                        if idx + 1 < n - 1 { pos[idx + 1] -= corr }
+                    }
+                    idx += 2
                 }
-                if idx + 1 < n - 1 {
-                    bands[bi].positions[idx + 1] -= corr
-                }
-                idx += 2
             }
-        }
 
-        // Pin constraints (hard)
-        if let startHole = bands[bi].pinStart {
-            bands[bi].positions[0] = holePosition3D(startHole)
-        }
-        if let endHole = bands[bi].pinEnd {
-            bands[bi].positions[n - 1] = holePosition3D(endHole)
-        }
+            // Pin constraints
+            if let hp = holeS { pos[0] = hp }
+            if let hp = holeE { pos[n - 1] = hp }
 
-        // Board: z >= R (rope rests on surface)
-        for i in 1..<(n - 1) {
-            if bands[bi].positions[i].z < R {
-                bands[bi].positions[i].z = R
+            // Board: z >= R
+            for i in 1..<(n - 1) {
+                if pos[i].z < R { pos[i].z = R }
             }
         }
     }
 
-    /// Capsule-capsule collision: checks closest point between every pair
-    /// of segments from two bands, pushes apart if closer than minDist.
-    private func collideStep(_ bi: Int, _ bj: Int) {
-        let minDist = (bands[bi].radius + bands[bj].radius) * collisionMultiplier
-        let minDist2 = minDist * minDist
-        let segsI = bands[bi].positions.count - 1
-        let segsJ = bands[bj].positions.count - 1
+    // MARK: - Collision
 
-        for i in 0..<segsI {
-            let a0 = bands[bi].positions[i]
-            let a1 = bands[bi].positions[i + 1]
-            let d1 = a1 - a0
-            let lenA2 = simd_dot(d1, d1)
+    private struct CollisionPair {
+        let bandA: UInt16
+        let segA: UInt16
+        let bandB: UInt16
+        let segB: UInt16
+    }
 
-            for j in 0..<segsJ {
-                let b0 = bands[bj].positions[j]
-                let b1 = bands[bj].positions[j + 1]
-                let d2 = b1 - b0
-                let lenB2 = simd_dot(d2, d2)
-                let r = a0 - b0
+    /// Broadphase: AABB sweep between band pairs, returns collision pair list.
+    private func buildCollisionPairs(_ activeBands: [Int]) -> [CollisionPair] {
+        guard activeBands.count >= 2 else { return [] }
+        var pairs: [CollisionPair] = []
+        pairs.reserveCapacity(512)
 
-                let a = lenA2
-                let e = lenB2
-                let f = simd_dot(d2, r)
-                let c = simd_dot(d1, r)
-                let b = simd_dot(d1, d2)
+        for ai in 0..<activeBands.count {
+            let bi = activeBands[ai]
+            let posI = bands[bi].positions
+            let segsI = posI.count - 1
+            let ri = bands[bi].radius
 
-                let denom = a * e - b * b
-                var s: Float = 0
-                var t: Float
+            for aj in (ai + 1)..<activeBands.count {
+                let bj = activeBands[aj]
+                let posJ = bands[bj].positions
+                let segsJ = posJ.count - 1
+                let minDist = ri + bands[bj].radius
 
-                if denom > 1e-12 {
-                    s = min(max((b * f - c * e) / denom, 0), 1)
-                }
-                t = (b * s + f) / max(e, 1e-12)
+                for si in 0..<segsI {
+                    let a0 = posI[si]
+                    let a1 = posI[si + 1]
+                    let aMinX = min(a0.x, a1.x) - minDist
+                    let aMaxX = max(a0.x, a1.x) + minDist
+                    let aMinY = min(a0.y, a1.y) - minDist
+                    let aMaxY = max(a0.y, a1.y) + minDist
 
-                if t < 0 {
-                    t = 0
-                    s = min(max(-c / max(a, 1e-12), 0), 1)
-                } else if t > 1 {
-                    t = 1
-                    s = min(max((b - c) / max(a, 1e-12), 0), 1)
-                }
-
-                let closestA = a0 + d1 * s
-                let closestB = b0 + d2 * t
-                let diff = closestA - closestB
-                let dist2 = simd_dot(diff, diff)
-
-                if dist2 < minDist2 && dist2 > 1e-12 {
-                    let dist = sqrtf(dist2)
-                    let overlap = minDist - dist
-                    let normal = diff / dist
-                    let corr = normal * (overlap * 0.5)
-
-                    // Distribute correction to segment endpoints by parameter
-                    let wA0 = 1 - s
-                    let wA1 = s
-                    let wB0 = 1 - t
-                    let wB1 = t
-
-                    // Skip pinned endpoints (index 0 and last)
-                    if i > 0 { bands[bi].positions[i] += corr * wA0 }
-                    if i + 1 < bands[bi].positions.count - 1 { bands[bi].positions[i + 1] += corr * wA1 }
-                    if j > 0 { bands[bj].positions[j] -= corr * wB0 }
-                    if j + 1 < bands[bj].positions.count - 1 { bands[bj].positions[j + 1] -= corr * wB1 }
+                    for sj in 0..<segsJ {
+                        let b0 = posJ[sj]
+                        let b1 = posJ[sj + 1]
+                        if max(b0.x, b1.x) < aMinX || min(b0.x, b1.x) > aMaxX { continue }
+                        if max(b0.y, b1.y) < aMinY || min(b0.y, b1.y) > aMaxY { continue }
+                        pairs.append(CollisionPair(bandA: UInt16(bi), segA: UInt16(si), bandB: UInt16(bj), segB: UInt16(sj)))
+                    }
                 }
             }
         }
+        return pairs
+    }
+
+    @discardableResult
+    private func resolveCollisionPairs(_ pairs: [CollisionPair], injectVelocity: Bool = false) -> Bool {
+        var found = false
+        for p in pairs {
+            if collideSegments(Int(p.bandA), Int(p.segA), Int(p.bandB), Int(p.segB), injectVelocity: injectVelocity) {
+                found = true
+            }
+        }
+        return found
+    }
+
+    /// Collide two specific segments from different bands
+    @inline(__always)
+    private func collideSegments(_ bi: Int, _ si: Int, _ bj: Int, _ sj: Int, injectVelocity: Bool) -> Bool {
+        let minDist = bands[bi].radius + bands[bj].radius
+        let minDist2 = minDist * minDist
+
+        let a0 = bands[bi].positions[si]
+        let a1 = bands[bi].positions[si + 1]
+        let b0 = bands[bj].positions[sj]
+        let b1 = bands[bj].positions[sj + 1]
+
+        let d1 = a1 - a0
+        let d2 = b1 - b0
+        let r = a0 - b0
+        let a = simd_dot(d1, d1)
+        let e = simd_dot(d2, d2)
+        let f = simd_dot(d2, r)
+        let c = simd_dot(d1, r)
+        let b = simd_dot(d1, d2)
+
+        let denom = a * e - b * b
+        var s: Float = 0
+        var t: Float
+
+        if denom > 1e-12 {
+            s = min(max((b * f - c * e) / denom, 0), 1)
+        }
+        t = (b * s + f) / max(e, 1e-12)
+
+        if t < 0 {
+            t = 0
+            s = min(max(-c / max(a, 1e-12), 0), 1)
+        } else if t > 1 {
+            t = 1
+            s = min(max((b - c) / max(a, 1e-12), 0), 1)
+        }
+
+        let closestA = a0 + d1 * s
+        let closestB = b0 + d2 * t
+        let diff = closestA - closestB
+        let dist2 = simd_dot(diff, diff)
+
+        guard dist2 < minDist2 && dist2 > 1e-12 else { return false }
+
+        let dist = sqrtf(dist2)
+        let overlap = minDist - dist
+        let normal = diff / dist
+        let corr = normal * (overlap * 0.5)
+
+        bands[bi].positions[si] += corr * (1 - s)
+        bands[bi].positions[si + 1] += corr * s
+        bands[bj].positions[sj] -= corr * (1 - t)
+        bands[bj].positions[sj + 1] -= corr * t
+
+        if injectVelocity {
+            let velCorr = corr * 0.5
+            bands[bi].previousPositions[si] -= velCorr * (1 - s)
+            bands[bi].previousPositions[si + 1] -= velCorr * s
+            bands[bj].previousPositions[sj] += velCorr * (1 - t)
+            bands[bj].previousPositions[sj + 1] += velCorr * t
+        }
+        return true
     }
 
     // MARK: - Drag
@@ -302,6 +704,9 @@ final class VerletSimulator {
             bands[bandIndex].pinEnd = nil
         }
         dragInfo = DragInfo(bandIndex: bandIndex, endIndex: endIndex, originalHoleIndex: originalHole)
+
+        // Cancel any running lower animation
+        lowerAnimation = nil
 
         // Set the dragged endpoint to lift height
         let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
@@ -323,21 +728,35 @@ final class VerletSimulator {
     func endDrag(targetHoleIndex: Int) {
         guard let drag = dragInfo else { return }
 
-        // Re-pin at target hole
-        if drag.endIndex == 0 {
-            bands[drag.bandIndex].pinStart = targetHoleIndex
-        } else {
-            bands[drag.bandIndex].pinEnd = targetHoleIndex
-        }
-
-        // Set endpoint to hole position — rope will settle naturally via update()
         let idx = drag.endIndex == 0 ? 0 : bands[drag.bandIndex].positions.count - 1
-        bands[drag.bandIndex].positions[idx] = holePosition3D(targetHoleIndex)
-        bands[drag.bandIndex].previousPositions[idx] = bands[drag.bandIndex].positions[idx]
+        let currentPos = bands[drag.bandIndex].positions[idx]
+
+        // Start lower animation: slowly bring endpoint into hole
+        lowerAnimation = LowerAnimation(
+            bandIndex: drag.bandIndex,
+            endIndex: drag.endIndex,
+            targetHole: targetHoleIndex,
+            startPos: currentPos
+        )
 
         dragInfo = nil
         dragStartPos = nil
         dragTargetPos = nil
+
+        // Start tension diagnostic logging for 3 seconds
+        tensionLogTimer = 0
+        tensionLogCooldown = 0
+        // Snapshot linking numbers as baseline
+        prevLinking.removeAll()
+        let activeBands = bands.indices.filter { bands[$0].active }
+        for i in 0..<activeBands.count {
+            for j in (i + 1)..<activeBands.count {
+                let lk = ropePhysics.linkingNumber(bands[activeBands[i]].positions, bands[activeBands[j]].positions)
+                prevLinking.append((activeBands[i], activeBands[j], lk))
+            }
+        }
+        let s = prevLinking.map { "\($0.0)-\($0.1):\($0.2)" }.joined(separator: " ")
+        Self.logger.warning("[T-START] \(s)")
     }
 
     /// For `isEndTopForDrag` — compare z at endpoints
@@ -367,13 +786,13 @@ final class VerletSimulator {
     /// Actions are pin + drag sequences that reproduce the crossing topology.
     func initializeLevel(ropeConfigs: [RopeConfig], actions: [LevelAction]) {
         bands.removeAll()
+        currentTension = ropeTension
 
         for config in ropeConfigs {
             addBand(radius: config.radius, particleCount: particleCount)
         }
 
         if actions.isEmpty {
-            // No actions — just pin all ropes at their final positions sequentially
             for (i, config) in ropeConfigs.enumerated() {
                 pin(bandIndex: i, startHole: config.startHole, endHole: config.endHole)
             }
@@ -441,30 +860,30 @@ final class VerletSimulator {
         let liftFrom = SIMD3<Float>(fromPos.x, fromPos.y, liftHeight)
         let liftTo = SIMD3<Float>(toPos.x, toPos.y, liftHeight)
 
-        let dragSteps = 8
+        let dragSteps = 4
 
-        for s in 1...5 {
-            let t = Float(s) / 5.0
-            let wp = fromPos + (liftFrom - fromPos) * t
-            bands[bandIndex].positions[idx] = wp
-            bands[bandIndex].previousPositions[idx] = wp
+        // Lift
+        for s in 1...3 {
+            let t = Float(s) / 3.0
+            bands[bandIndex].positions[idx] = fromPos + (liftFrom - fromPos) * t
+            bands[bandIndex].previousPositions[idx] = bands[bandIndex].positions[idx]
             doSteps(dragSteps, collide: true)
         }
 
-        let traverseSteps = 30
+        // Traverse
+        let traverseSteps = 12
         for s in 1...traverseSteps {
             let t = Float(s) / Float(traverseSteps)
-            let wp = liftFrom + (liftTo - liftFrom) * t
-            bands[bandIndex].positions[idx] = wp
-            bands[bandIndex].previousPositions[idx] = wp
+            bands[bandIndex].positions[idx] = liftFrom + (liftTo - liftFrom) * t
+            bands[bandIndex].previousPositions[idx] = bands[bandIndex].positions[idx]
             doSteps(dragSteps, collide: true)
         }
 
-        for s in 1...5 {
-            let t = Float(s) / 5.0
-            let wp = liftTo + (toPos - liftTo) * t
-            bands[bandIndex].positions[idx] = wp
-            bands[bandIndex].previousPositions[idx] = wp
+        // Lower
+        for s in 1...3 {
+            let t = Float(s) / 3.0
+            bands[bandIndex].positions[idx] = liftTo + (toPos - liftTo) * t
+            bands[bandIndex].previousPositions[idx] = bands[bandIndex].positions[idx]
             doSteps(dragSteps, collide: true)
         }
 

@@ -12,15 +12,16 @@ extension Renderer {
         allIndices.reserveCapacity(ropes.count * 6399 * 24)
 
         var baseVertex: UInt32 = 0
-        var allRopePoints: [[SIMD3<Float>]] = []
+        var allRopePoints: [ContiguousArray<SIMD3<Float>>] = []
 
         for ropeIndex in ropes.indices {
-            if ropes[ropeIndex].startHole < 0 || ropes[ropeIndex].endHole < 0 {
+            guard let sim = simulator, sim.bands.indices.contains(ropeIndex), sim.bands[ropeIndex].active else {
                 allRopePoints.append([])
                 continue
             }
 
-            guard let sim = simulator, sim.bands.indices.contains(ropeIndex), sim.bands[ropeIndex].active else {
+            // Skip non-fading ropes that have been removed (startHole == -1)
+            if ropes[ropeIndex].startHole < 0 && sim.bands[ropeIndex].fadeOut == 0 {
                 allRopePoints.append([])
                 continue
             }
@@ -29,7 +30,11 @@ extension Renderer {
             allRopePoints.append(points)
 
             let ropeColor = ropes[ropeIndex].color
-            let ropeRadius = ropes[ropeIndex].radius
+            let fadeOut = sim.bands[ropeIndex].fadeOut
+            let ropeRadius = ropes[ropeIndex].radius * (1 - fadeOut)
+
+            let band = sim.bands[ropeIndex]
+            let restLength = band.segmentLength * Float(points.count - 1)
 
             let ropeMesh = points.withUnsafeBufferPointer { pointsBuffer in
                 RopeMeshBuilder.buildRect(
@@ -42,7 +47,7 @@ extension Renderer {
                     stretchRatio: 1.0,
                     oscillation: 0.0,
                     segmentStarts: [],
-                    restLength: 0
+                    restLength: restLength
                 )
             }
 
@@ -68,16 +73,16 @@ extension Renderer {
             ropeIB?.contents().copyMemory(from: allIndices, byteCount: indexBytes)
         }
 
-        if let topology {
-            var loggableRopes: [(index: Int, points: [SIMD3<Float>])] = []
+        if let sim = simulator {
+            var loggableRopes: [(index: Int, points: ContiguousArray<SIMD3<Float>>)] = []
             for ropeIndex in ropes.indices {
                 if allRopePoints[ropeIndex].isEmpty { continue }
+                if !sim.bands[ropeIndex].active { continue }
                 loggableRopes.append((index: ropeIndex, points: allRopePoints[ropeIndex]))
             }
             ropePhysicsLogger.logStateIfNeeded(
                 time: Double(time),
-                ropes: loggableRopes,
-                hooks: topology.hooks
+                ropes: loggableRopes
             )
         }
 

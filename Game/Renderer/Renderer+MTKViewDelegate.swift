@@ -10,14 +10,45 @@ extension Renderer {
         guard let drawable = view.currentDrawable else { return }
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
-        let deltaTime = 1.0 / Float(max(1, view.preferredFramesPerSecond))
+        let now = CACurrentMediaTime()
+        let realDt = lastDrawTime > 0 ? Float(now - lastDrawTime) : 1.0 / Float(max(1, view.preferredFramesPerSecond))
+        lastDrawTime = now
+        let deltaTime = min(realDt, 1.0 / 15.0)
         lastDeltaTime = deltaTime
         time += deltaTime
+
+        // Exponential moving average FPS
+        let instantFPS = 1.0 / max(realDt, 0.0001)
+        currentFPS = currentFPS == 0 ? instantFPS : currentFPS * 0.95 + instantFPS * 0.05
 
         updateFrameUniforms(view: view)
 
         // Physics step — fixed timestep accumulator handles variable frame rate
         simulator?.update(deltaTime: deltaTime)
+
+        // Delayed next level load after victory
+        if let timer = nextLevelTimer {
+            let remaining = timer - deltaTime
+            if remaining <= 0 {
+                nextLevelTimer = nil
+                let nextId = currentLevelId + 1
+                Self.logger.info("Level \(self.currentLevelId) completed! Loading level \(nextId)...")
+                loadLevel(levelId: nextId)
+            } else {
+                nextLevelTimer = remaining
+            }
+        }
+
+        // Delayed win check after drag settles
+        if let timer = settleCheckTimer {
+            let remaining = timer - deltaTime
+            if remaining <= 0 {
+                settleCheckTimer = nil
+                removeUntangledRopes()
+            } else {
+                settleCheckTimer = remaining
+            }
+        }
 
         updateRopeMesh()
 
