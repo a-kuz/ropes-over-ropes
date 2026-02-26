@@ -2,6 +2,54 @@ import simd
 import os.log
 import QuartzCore
 
+enum CrossSection {
+    case circular(radius: Float)
+    case rectangular(width: Float, height: Float)
+
+    var collisionRadius: Float {
+        switch self {
+        case .circular(let r): return r
+        case .rectangular(let w, let h): return max(w, h) * 0.5
+        }
+    }
+
+    var halfWidth: Float {
+        switch self {
+        case .circular(let r): return r
+        case .rectangular(let w, _): return w * 0.5
+        }
+    }
+
+    var halfHeight: Float {
+        switch self {
+        case .circular(let r): return r
+        case .rectangular(_, let h): return h * 0.5
+        }
+    }
+
+    var isRectangular: Bool {
+        if case .rectangular = self { return true }
+        return false
+    }
+
+    func effectiveRadius(normal: SIMD3<Float>, d1: SIMD3<Float>, d2: SIMD3<Float>) -> Float {
+        switch self {
+        case .circular(let r):
+            return r
+        case .rectangular(let w, let h):
+            let hw = w * 0.5
+            let hh = h * 0.5
+            return abs(simd_dot(normal, d1)) * hw + abs(simd_dot(normal, d2)) * hh
+        }
+    }
+}
+
+struct MaterialFrame {
+    var tangent: SIMD3<Float>
+    var d1: SIMD3<Float>
+    var d2: SIMD3<Float>
+}
+
 final class VerletSimulator {
     private static let logger = Logger(subsystem: "com.uzls.four", category: "VerletSim")
 
@@ -10,13 +58,19 @@ final class VerletSimulator {
     struct Band {
         var positions: ContiguousArray<SIMD3<Float>>
         var previousPositions: ContiguousArray<SIMD3<Float>>
+        var twistAngles: ContiguousArray<Float>
+        var previousTwistAngles: ContiguousArray<Float>
         var segmentLength: Float
         var radius: Float
+        var crossSection: CrossSection
         var pinStart: Int?
         var pinEnd: Int?
         var active: Bool
         var fadeOut: Float = 0          // 0 = normal, >0 = fading out (0→1)
-        static let fadeOutDuration: Float = 0.4
+        var suckHole: Int?              // hole index to suck into during fade-out
+        var suckFromEnd: Int = 1        // 0 = consume from start, 1 = consume from end
+        var suckConsumed: Float = 0     // how many particles consumed so far (fractional)
+        static let fadeOutSpeed: Float = 45.0
     }
 
     // MARK: - Drag state
@@ -47,7 +101,13 @@ final class VerletSimulator {
     var ropeTension: Float = 0.98
     private var currentTension: Float = 1.0
     private let tensionSpeed: Float = 0.5  // per second — slow tightening after drag
+    /// Rubber friction coefficient for rope-rope collisions (Coulomb model).
+    /// Real rubber μ ≈ 1.0–2.0; we use a moderate value to keep PBD stable.
+    var frictionCoefficient: Float = 0.8
     var particleCount: Int = 6
+    var twistStiffness: Float = 0.08
+    var twistDamping: Float = 0.75
+    var gravityTorqueStrength: Float = 0.8
 
     private let dt: Float = 1.0 / 120.0  // fixed dt, supports ProMotion 120fps
     private var accumulator: Float = 0
@@ -67,6 +127,97 @@ final class VerletSimulator {
     private let ropePhysics = RopePhysics()
 
     var dragInfo: DragInfo?
+
+    // MARK: - Friction sound feedback
+
+    struct FrictionEvent {
+        var intensity: Float
+        var relativeSpeed: Float
+        var position: SIMD3<Float>
+    }
+
+    private var frictionAccumulator: Float = 0
+    private var frictionSpeedAccumulator: Float = 0
+    private var frictionPositionAccumulator: SIMD3<Float> = .zero
+    private var frictionSampleCount: Int = 0
+
+    func consumeAndResetFriction() -> (intensity: Float, speed: Float, position: SIMD3<Float>)? {
+        guard frictionSampleCount > 0 else { return nil }
+        let n = Float(frictionSampleCount)
+        let result = (
+            intensity: frictionAccumulator / n,
+            speed: frictionSpeedAccumulator / n,
+            position: frictionPositionAccumulator / n
+        )
+        frictionAccumulator = 0
+        frictionSpeedAccumulator = 0
+        frictionPositionAccumulator = .zero
+        frictionSampleCount = 0
+        return result
+    }
+
+    // MARK: - Undo snapshots
+
+    struct BandSnapshot {
+        var positions: ContiguousArray<SIMD3<Float>>
+        var previousPositions: ContiguousArray<SIMD3<Float>>
+        var twistAngles: ContiguousArray<Float>
+        var previousTwistAngles: ContiguousArray<Float>
+        var segmentLength: Float
+        var pinStart: Int?
+        var pinEnd: Int?
+        var active: Bool
+        var fadeOut: Float
+        var suckHole: Int?
+        var suckFromEnd: Int
+        var suckConsumed: Float
+    }
+
+    struct Snapshot {
+        var bands: [BandSnapshot]
+    }
+
+    func takeSnapshot() -> Snapshot {
+        Snapshot(bands: bands.map { b in
+            BandSnapshot(
+                positions: b.positions,
+                previousPositions: b.previousPositions,
+                twistAngles: b.twistAngles,
+                previousTwistAngles: b.previousTwistAngles,
+                segmentLength: b.segmentLength,
+                pinStart: b.pinStart,
+                pinEnd: b.pinEnd,
+                active: b.active,
+                fadeOut: b.fadeOut,
+                suckHole: b.suckHole,
+                suckFromEnd: b.suckFromEnd,
+                suckConsumed: b.suckConsumed
+            )
+        })
+    }
+
+    func restoreSnapshot(_ snapshot: Snapshot) {
+        for i in bands.indices where i < snapshot.bands.count {
+            let s = snapshot.bands[i]
+            bands[i].positions = s.positions
+            bands[i].previousPositions = s.previousPositions
+            bands[i].twistAngles = s.twistAngles
+            bands[i].previousTwistAngles = s.previousTwistAngles
+            bands[i].segmentLength = s.segmentLength
+            bands[i].pinStart = s.pinStart
+            bands[i].pinEnd = s.pinEnd
+            bands[i].active = s.active
+            bands[i].fadeOut = s.fadeOut
+            bands[i].suckHole = s.suckHole
+            bands[i].suckFromEnd = s.suckFromEnd
+            bands[i].suckConsumed = s.suckConsumed
+        }
+        dragInfo = nil
+        dragStartPos = nil
+        dragTargetPos = nil
+        lowerAnimation = nil
+        currentTension = ropeTension
+    }
 
     // MARK: - Post-drag lower animation
 
@@ -92,13 +243,17 @@ final class VerletSimulator {
     // MARK: - Band management
 
     @discardableResult
-    func addBand(radius: Float, particleCount: Int? = nil) -> Int {
+    func addBand(radius: Float, crossSection: CrossSection? = nil, particleCount: Int? = nil) -> Int {
         let n = particleCount ?? self.particleCount
+        let cs = crossSection ?? .circular(radius: radius)
         let band = Band(
             positions: ContiguousArray(repeating: .zero, count: n),
             previousPositions: ContiguousArray(repeating: .zero, count: n),
+            twistAngles: ContiguousArray(repeating: 0, count: n),
+            previousTwistAngles: ContiguousArray(repeating: 0, count: n),
             segmentLength: 0,
             radius: radius,
+            crossSection: cs,
             pinStart: nil,
             pinEnd: nil,
             active: false
@@ -149,14 +304,71 @@ final class VerletSimulator {
     func update(deltaTime: Float) {
         let clampedDt = min(deltaTime, 1.0 / 15.0)  // spiral-of-death protection
 
-        // Advance fade-out animations
+        // Advance suck-into-hole animations: pull rope through hole like a string being pulled under a table
         for i in bands.indices where bands[i].fadeOut > 0 && bands[i].active {
-            bands[i].fadeOut += clampedDt / Band.fadeOutDuration
-            if bands[i].fadeOut >= 1 {
+            guard let hole = bands[i].suckHole else { continue }
+            let n = bands[i].positions.count
+            let holeXY = holePositions[hole]
+            let holeBelow = SIMD3<Float>(holeXY.x, holeXY.y, -holeDepth)
+
+            let pullSpeed = Band.fadeOutSpeed * bands[i].segmentLength
+            bands[i].suckConsumed += pullSpeed * clampedDt
+
+            let fromEnd = bands[i].suckFromEnd
+            let headIdx = fromEnd == 1 ? 0 : n - 1
+            let step = fromEnd == 1 ? 1 : -1
+
+            bands[i].positions[headIdx] = holeBelow - SIMD3<Float>(0, 0, bands[i].suckConsumed)
+            bands[i].previousPositions[headIdx] = bands[i].positions[headIdx]
+
+            let segLen = bands[i].segmentLength
+            let R = bands[i].radius
+            let holeR2 = holeRadius * holeRadius
+            var allBelow = true
+
+            var prevIdx = headIdx
+            var j = headIdx + step
+            while j >= 0 && j < n {
+                let prev = bands[i].positions[prevIdx]
+                let curr = bands[i].positions[j]
+                let diff = curr - prev
+                let d = simd_length(diff)
+                if d > segLen && d > 1e-6 {
+                    bands[i].positions[j] = prev + (diff / d) * segLen
+                }
+
+                let p = bands[i].positions[j]
+                let dx = p.x - holeXY.x
+                let dy = p.y - holeXY.y
+                let xyDist2 = dx * dx + dy * dy
+
+                if p.z < 0 && xyDist2 > holeR2 {
+                    let xyDist = sqrt(xyDist2)
+                    bands[i].positions[j].x = holeXY.x + (dx / xyDist) * holeRadius * 0.9
+                    bands[i].positions[j].y = holeXY.y + (dy / xyDist) * holeRadius * 0.9
+                    bands[i].positions[j].z = 0
+                }
+
+                if bands[i].positions[j].z >= 0 && bands[i].positions[j].z < R {
+                    bands[i].positions[j].z = R
+                }
+
+                if bands[i].positions[j].z >= 0 { allBelow = false }
+                bands[i].previousPositions[j] = bands[i].positions[j]
+                prevIdx = j
+                j += step
+            }
+
+            if allBelow {
                 bands[i].fadeOut = 1
                 bands[i].active = false
                 bands[i].pinStart = nil
                 bands[i].pinEnd = nil
+                bands[i].suckHole = nil
+            } else {
+                var aboveCount = 0
+                for k in 0..<n { if bands[i].positions[k].z >= 0 { aboveCount += 1 } }
+                bands[i].fadeOut = min(1.0 - Float(aboveCount) / Float(n), 0.999)
             }
         }
 
@@ -329,11 +541,11 @@ final class VerletSimulator {
         }
     }
 
-    private var perfAccum: (verlet: Double, constr: Double, postCol: Double, count: Int, logTime: Double, pairs: Int) = (0,0,0,0,0,0)
+    let profiler = PhysicsProfiler.shared
 
     private func verletStep(collide: Bool, dt: Float) {
         let dt2 = dt * dt
-        let t0 = CACurrentMediaTime()
+        profiler.begin()
 
         // 1. Verlet position update + velocity limiting
         let gravVec = SIMD3<Float>(0, 0, gravity * dt2)
@@ -350,8 +562,20 @@ final class VerletSimulator {
                 bands[bi].previousPositions[i] = pos
                 bands[bi].positions[i] = pos + vel + gravVec
             }
+
+            if bands[bi].crossSection.isRectangular {
+                let maxTwistVel: Float = 0.15
+                for i in 1..<(n - 1) {
+                    let twist = bands[bi].twistAngles[i]
+                    let oldTwist = bands[bi].previousTwistAngles[i]
+                    var twistVel = (twist - oldTwist) * twistDamping
+                    twistVel = max(-maxTwistVel, min(maxTwistVel, twistVel))
+                    bands[bi].previousTwistAngles[i] = twist
+                    bands[bi].twistAngles[i] = twist + twistVel
+                }
+            }
         }
-        let t1 = CACurrentMediaTime()
+        profiler.end(.verletIntegration)
 
         // 2. Constraint + collision iterations (interleaved for robust PBD)
         let active = collide ? bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 }) : []
@@ -375,24 +599,43 @@ final class VerletSimulator {
         let effectiveIters = max(constraintIterations, Int(Float(constraintIterations) / max(currentTension, 0.3)))
 
         // Build collision pair list once per substep (broadphase)
-        let collisionPairs = collide ? buildCollisionPairs(active) : []
+        let collisionPairs: [CollisionPair] = collide ? profiler.measure(.broadphase) { buildCollisionPairs(active) } : []
 
+        // Recompute material frames for rectangular bands (needed for collision + twist)
+        profiler.measure(.frames) { recomputeFrames() }
+
+        // Gravity torque: rotate flat bands so wide side (d1) is horizontal.
+        // d1.z measures how much the wide axis is tilted out of horizontal.
+        // Restoring torque proportional to d1.z drives it toward zero.
+        for bi in bands.indices {
+            guard bands[bi].active && bands[bi].fadeOut == 0 && bands[bi].crossSection.isRectangular else { continue }
+            let n = bands[bi].positions.count
+            guard cachedFrames[bi].count == n else { continue }
+            for i in 1..<(n - 1) {
+                let d1z = cachedFrames[bi][i].d1.z
+                let torque = -d1z * gravityTorqueStrength * dt2
+                let maxTorque: Float = 0.01
+                bands[bi].twistAngles[i] += max(-maxTorque, min(maxTorque, torque))
+            }
+        }
+
+        profiler.begin()
         for _ in 0..<effectiveIters {
             for bi in bands.indices {
-                guard bands[bi].active else { continue }
+                guard bands[bi].active && bands[bi].fadeOut == 0 else { continue }
                 bandConstraints(bi)
             }
             if collide {
                 resolveCollisionPairs(collisionPairs)
             }
         }
+        profiler.end(.constraints)
 
-        let t2Start = CACurrentMediaTime()
+        profiler.begin()
         // Post-solve: collision-only passes until converged
         if collide {
             for _ in 0..<3 {
                 let hadCollision = resolveCollisionPairs(collisionPairs, injectVelocity: true)
-                // Re-apply pin + board constraints
                 for bi in active {
                     let n = bands[bi].positions.count
                     if let startHole = bands[bi].pinStart {
@@ -405,9 +648,24 @@ final class VerletSimulator {
                         bands[bi].positions[n - 1] = hp
                         bands[bi].previousPositions[n - 1] = hp
                     }
-                    for i in 1..<(n - 1) {
-                        if bands[bi].positions[i].z < bands[bi].radius {
-                            bands[bi].positions[i].z = bands[bi].radius
+                    if bands[bi].crossSection.isRectangular && cachedFrames.indices.contains(bi) && cachedFrames[bi].count == n {
+                        let cs = bands[bi].crossSection
+                        for i in 1..<(n - 1) {
+                            let frame = cachedFrames[bi][i]
+                            let zExtent = cs.effectiveRadius(
+                                normal: SIMD3<Float>(0, 0, 1),
+                                d1: frame.d1,
+                                d2: frame.d2
+                            )
+                            if bands[bi].positions[i].z < zExtent {
+                                bands[bi].positions[i].z = zExtent
+                            }
+                        }
+                    } else {
+                        for i in 1..<(n - 1) {
+                            if bands[bi].positions[i].z < bands[bi].radius {
+                                bands[bi].positions[i].z = bands[bi].radius
+                            }
                         }
                     }
                 }
@@ -415,24 +673,35 @@ final class VerletSimulator {
             }
         }
 
-        let t3 = CACurrentMediaTime()
-        perfAccum.verlet += t1 - t0
-        perfAccum.constr += t2Start - t1
-        perfAccum.postCol += t3 - t2Start
-        perfAccum.count += 1
-        perfAccum.pairs = collisionPairs.count
-        let now = CACurrentMediaTime()
-        if now - perfAccum.logTime >= 2.0 {
-            let c = Double(max(perfAccum.count, 1))
-            let vUs = perfAccum.verlet / c * 1e6
-            let cUs = perfAccum.constr / c * 1e6
-            let pUs = perfAccum.postCol / c * 1e6
-            let tUs = vUs + cUs + pUs
-            let pc = bands.first?.positions.count ?? 0
-            let cp = perfAccum.pairs
-            Self.logger.warning("[PERF] steps=\(Int(c)) verlet=\(vUs, format: .fixed(precision: 0))µs constr=\(cUs, format: .fixed(precision: 0))µs postCol=\(pUs, format: .fixed(precision: 0))µs total=\(tUs, format: .fixed(precision: 0))µs effIter=\(effectiveIters) particles=\(pc) pairs=\(cp)")
-            perfAccum = (0, 0, 0, 0, now, 0)
+        // Board friction: applied once per substep after all solving is done.
+        // Uses true Verlet velocity (pos - previousPos) which is clean at this point.
+        let boardMu = frictionCoefficient * 0.5
+        if boardMu > 0 {
+            for bi in active {
+                let n = bands[bi].positions.count
+                let R = bands[bi].radius
+                for i in 1..<(n - 1) {
+                    if bands[bi].positions[i].z <= R + 1e-4 {
+                        let vx = bands[bi].positions[i].x - bands[bi].previousPositions[i].x
+                        let vy = bands[bi].positions[i].y - bands[bi].previousPositions[i].y
+                        let velLen = sqrtf(vx * vx + vy * vy)
+                        if velLen > 1e-8 {
+                            let scale = max(0.0, 1.0 - boardMu)
+                            bands[bi].previousPositions[i].x = bands[bi].positions[i].x - vx * scale
+                            bands[bi].previousPositions[i].y = bands[bi].positions[i].y - vy * scale
+                        }
+                    }
+                }
+            }
         }
+
+        profiler.end(.postCollision)
+
+        profiler.setCounter("pairs", collisionPairs.count)
+        profiler.setCounter("particles", bands.first?.positions.count ?? 0)
+        profiler.setCounter("bands", active.count)
+        profiler.setCounter("effIter", effectiveIters)
+        profiler.logIfNeeded()
 
         if shouldLogStep && active.count >= 2 {
             var currentLinking: [(Int, Int, Int)] = []
@@ -469,9 +738,9 @@ final class VerletSimulator {
 
         let pos = bands[bi].positions
         let prev = bands[bi].previousPositions
+        let twist = bands[bi].twistAngles
+        let prevTwist = bands[bi].previousTwistAngles
 
-        // 1. Compute per-vertex curvature (angle between adjacent segments)
-        //    Endpoints get 0 curvature.
         var curvature = [Float](repeating: 0, count: n)
         for i in 1..<(n - 1) {
             let d0 = pos[i] - pos[i - 1]
@@ -480,14 +749,10 @@ final class VerletSimulator {
             let len1 = simd_length(d1)
             if len0 > 1e-9 && len1 > 1e-9 {
                 let cosA = simd_dot(d0, d1) / (len0 * len1)
-                // curvature ~ angle; acos is expensive, use 1-cos as proxy (0=straight, 2=hairpin)
                 curvature[i] = max(1.0 - cosA, 0)
             }
         }
 
-        // 2. Compute weighted cumulative arc length.
-        //    Weight = 1 + curvatureScale * avgCurvature(segment)
-        //    Higher weight = more particles allocated to that segment.
         let curvatureScale: Float = 8.0
         var wArcLen = [Float](repeating: 0, count: n)
         for i in 1..<n {
@@ -499,13 +764,11 @@ final class VerletSimulator {
         let totalW = wArcLen[n - 1]
         guard totalW > 1e-6 else { return }
 
-        // 3. Also compute plain arc length for interpolation
         var arcLen = [Float](repeating: 0, count: n)
         for i in 1..<n {
             arcLen[i] = arcLen[i - 1] + simd_length(pos[i] - pos[i - 1])
         }
 
-        // 4. Check if resampling needed
         var maxSeg: Float = 0, minSeg: Float = Float.greatestFiniteMagnitude
         for i in 0..<(n - 1) {
             let s = arcLen[i + 1] - arcLen[i]
@@ -514,7 +777,6 @@ final class VerletSimulator {
         }
         guard minSeg < 1e-9 || maxSeg / max(minSeg, 1e-9) > 1.5 else { return }
 
-        // 5. Place particles at uniform weighted-arc-length intervals
         let idealW = totalW / Float(n - 1)
         var seg = 0
         for i in 1..<(n - 1) {
@@ -528,20 +790,24 @@ final class VerletSimulator {
 
             bands[bi].positions[i] = pos[seg] + (pos[seg + 1] - pos[seg]) * t
             bands[bi].previousPositions[i] = prev[seg] + (prev[seg + 1] - prev[seg]) * t
+            bands[bi].twistAngles[i] = twist[seg] + (twist[seg + 1] - twist[seg]) * t
+            bands[bi].previousTwistAngles[i] = prevTwist[seg] + (prevTwist[seg + 1] - prevTwist[seg]) * t
         }
     }
 
     private func bandConstraints(_ bi: Int) {
         let n = bands[bi].positions.count
         let segLen = bands[bi].segmentLength * currentTension
-        let R = bands[bi].radius
         let pinS = bands[bi].pinStart
         let pinE = bands[bi].pinEnd
         let holeS = pinS.map { holePosition3D($0) }
         let holeE = pinE.map { holePosition3D($0) }
+        let cs = bands[bi].crossSection
+        let isRect = cs.isRectangular
+        let R = bands[bi].radius
+        let frames = (isRect && cachedFrames.indices.contains(bi) && cachedFrames[bi].count == n) ? cachedFrames[bi] : []
 
         bands[bi].positions.withUnsafeMutableBufferPointer { pos in
-            // Even-odd (red-black) distance constraints
             for offset in 0...1 {
                 var idx = offset
                 while idx < n - 1 {
@@ -557,20 +823,37 @@ final class VerletSimulator {
                 }
             }
 
-            // Pin constraints
             if let hp = holeS { pos[0] = hp }
             if let hp = holeE { pos[n - 1] = hp }
 
-            // Board: z >= R
-            for i in 1..<(n - 1) {
-                if pos[i].z < R { pos[i].z = R }
+            if !frames.isEmpty {
+                let upN = SIMD3<Float>(0, 0, 1)
+                for i in 1..<(n - 1) {
+                    let frame = frames[i]
+                    let zExtent = cs.effectiveRadius(normal: upN, d1: frame.d1, d2: frame.d2)
+                    if pos[i].z < zExtent { pos[i].z = zExtent }
+                }
+            } else {
+                for i in 1..<(n - 1) {
+                    if pos[i].z < R { pos[i].z = R }
+                }
+            }
+        }
+
+        if isRect {
+            let stiffness = twistStiffness
+            for i in 0..<(n - 1) {
+                let diff = bands[bi].twistAngles[i + 1] - bands[bi].twistAngles[i]
+                let corr = diff * stiffness * 0.5
+                if i > 0 { bands[bi].twistAngles[i] += corr }
+                if i + 1 < n - 1 { bands[bi].twistAngles[i + 1] -= corr }
             }
         }
     }
 
     // MARK: - Collision
 
-    private struct CollisionPair {
+    struct CollisionPair {
         let bandA: UInt16
         let segA: UInt16
         let bandB: UInt16
@@ -578,7 +861,7 @@ final class VerletSimulator {
     }
 
     /// Broadphase: AABB sweep between band pairs, returns collision pair list.
-    private func buildCollisionPairs(_ activeBands: [Int]) -> [CollisionPair] {
+    func buildCollisionPairs(_ activeBands: [Int]) -> [CollisionPair] {
         guard activeBands.count >= 2 else { return [] }
         var pairs: [CollisionPair] = []
         pairs.reserveCapacity(512)
@@ -587,13 +870,13 @@ final class VerletSimulator {
             let bi = activeBands[ai]
             let posI = bands[bi].positions
             let segsI = posI.count - 1
-            let ri = bands[bi].radius
+            let ri = bands[bi].crossSection.collisionRadius
 
             for aj in (ai + 1)..<activeBands.count {
                 let bj = activeBands[aj]
                 let posJ = bands[bj].positions
                 let segsJ = posJ.count - 1
-                let minDist = ri + bands[bj].radius
+                let minDist = ri + bands[bj].crossSection.collisionRadius
 
                 for si in 0..<segsI {
                     let a0 = posI[si]
@@ -627,11 +910,14 @@ final class VerletSimulator {
         return found
     }
 
-    /// Collide two specific segments from different bands
+    /// Collide two specific segments from different bands.
+    /// For rectangular cross-sections, uses oriented effective radius via Minkowski support function.
+    /// Applies Coulomb friction in the tangential plane to simulate rubber grip.
+    /// Accounts for latex thinning: stretched segments have reduced collision radius matching visual mesh.
     @inline(__always)
     private func collideSegments(_ bi: Int, _ si: Int, _ bj: Int, _ sj: Int, injectVelocity: Bool) -> Bool {
-        let minDist = bands[bi].radius + bands[bj].radius
-        let minDist2 = minDist * minDist
+        let maxDist = bands[bi].crossSection.collisionRadius + bands[bj].crossSection.collisionRadius
+        let maxDist2 = maxDist * maxDist
 
         let a0 = bands[bi].positions[si]
         let a1 = bands[bi].positions[si + 1]
@@ -669,17 +955,55 @@ final class VerletSimulator {
         let diff = closestA - closestB
         let dist2 = simd_dot(diff, diff)
 
-        guard dist2 < minDist2 && dist2 > 1e-12 else { return false }
+        guard dist2 < maxDist2 && dist2 > 1e-12 else { return false }
 
         let dist = sqrtf(dist2)
-        let overlap = minDist - dist
         let normal = diff / dist
+
+        let effRadiusA = effectiveCollisionRadius(bandIndex: bi, segIndex: si, param: s, normal: normal)
+            * latexThinningFactor(bandIndex: bi, segIndex: si, param: s)
+        let effRadiusB = effectiveCollisionRadius(bandIndex: bj, segIndex: sj, param: t, normal: normal)
+            * latexThinningFactor(bandIndex: bj, segIndex: sj, param: t)
+        let minDist = effRadiusA + effRadiusB
+
+        guard dist < minDist else { return false }
+
+        let overlap = minDist - dist
         let corr = normal * (overlap * 0.5)
 
         bands[bi].positions[si] += corr * (1 - s)
         bands[bi].positions[si + 1] += corr * s
         bands[bj].positions[sj] -= corr * (1 - t)
         bands[bj].positions[sj + 1] -= corr * t
+
+        let mu = frictionCoefficient
+        if mu > 0 {
+            let velA = (bands[bi].positions[si] - bands[bi].previousPositions[si]) * (1 - s)
+                     + (bands[bi].positions[si + 1] - bands[bi].previousPositions[si + 1]) * s
+            let velB = (bands[bj].positions[sj] - bands[bj].previousPositions[sj]) * (1 - t)
+                     + (bands[bj].positions[sj + 1] - bands[bj].previousPositions[sj + 1]) * t
+            let relVel = velA - velB
+            let tangent = relVel - normal * simd_dot(relVel, normal)
+            let tangentLen = simd_length(tangent)
+            let minSlide: Float = 0.0002
+            if tangentLen > minSlide {
+                let maxFriction = mu * overlap * 0.25
+                let frictionMag = min(tangentLen * 0.3, maxFriction)
+                let frictionDir = tangent / tangentLen
+                let velCorr = frictionDir * frictionMag
+
+                bands[bi].previousPositions[si] += velCorr * (1 - s)
+                bands[bi].previousPositions[si + 1] += velCorr * s
+                bands[bj].previousPositions[sj] -= velCorr * (1 - t)
+                bands[bj].previousPositions[sj + 1] -= velCorr * t
+
+                let contactPos = (closestA + closestB) * 0.5
+                frictionAccumulator += overlap
+                frictionSpeedAccumulator += tangentLen
+                frictionPositionAccumulator += contactPos
+                frictionSampleCount += 1
+            }
+        }
 
         if injectVelocity {
             let velCorr = corr * 0.5
@@ -689,6 +1013,41 @@ final class VerletSimulator {
             bands[bj].previousPositions[sj + 1] += velCorr * t
         }
         return true
+    }
+
+    @inline(__always)
+    private func effectiveCollisionRadius(bandIndex bi: Int, segIndex si: Int, param s: Float, normal: SIMD3<Float>) -> Float {
+        let cs = bands[bi].crossSection
+        guard cs.isRectangular,
+              cachedFrames.indices.contains(bi),
+              cachedFrames[bi].count > si + 1 else {
+            return bands[bi].radius
+        }
+        let f0 = cachedFrames[bi][si]
+        let f1 = cachedFrames[bi][si + 1]
+        let d1 = simd_normalize(f0.d1 * (1 - s) + f1.d1 * s)
+        let d2 = simd_normalize(f0.d2 * (1 - s) + f1.d2 * s)
+        return cs.effectiveRadius(normal: normal, d1: d1, d2: d2)
+    }
+
+    @inline(__always)
+    private func latexThinningFactor(bandIndex bi: Int, segIndex si: Int, param s: Float) -> Float {
+        let band = bands[bi]
+        let n = band.positions.count
+        guard n >= 2 else { return 1.0 }
+
+        let segLen = band.segmentLength
+        guard segLen > 1e-6 else { return 1.0 }
+
+        let actualLen = simd_length(band.positions[si + 1] - band.positions[si])
+        let localStretch = max(0.0, actualLen / segLen - 1.0)
+
+        let particleT = (Float(si) + s) / Float(n - 1)
+        let center = sin(particleT * Float.pi)
+        let centerMask = center * center * center * center
+
+        let tension = localStretch * centerMask
+        return 1.0 / sqrt(max(1.0, 1.0 + tension * 1.5))
     }
 
     // MARK: - Drag
@@ -772,6 +1131,7 @@ final class VerletSimulator {
         let startHole: Int
         let endHole: Int
         let radius: Float
+        var crossSection: CrossSection? = nil
     }
 
     struct LevelAction {
@@ -789,7 +1149,7 @@ final class VerletSimulator {
         currentTension = ropeTension
 
         for config in ropeConfigs {
-            addBand(radius: config.radius, particleCount: particleCount)
+            addBand(radius: config.radius, crossSection: config.crossSection, particleCount: particleCount)
         }
 
         if actions.isEmpty {
@@ -904,6 +1264,106 @@ final class VerletSimulator {
         guard holePositions.indices.contains(holeIndex) else { return .zero }
         let p = holePositions[holeIndex]
         return SIMD3<Float>(p.x, p.y, -holeDepth)
+    }
+
+    // MARK: - Material frame computation (shared between physics and rendering)
+
+    static func computeFrames(
+        positions: ContiguousArray<SIMD3<Float>>,
+        twistAngles: ContiguousArray<Float>
+    ) -> [MaterialFrame] {
+        let n = positions.count
+        guard n >= 2 else { return [] }
+
+        var frames = [MaterialFrame](repeating: MaterialFrame(tangent: .zero, d1: .zero, d2: .zero), count: n)
+        let up = SIMD3<Float>(0, 0, 1)
+
+        var tPrev = simd_normalize(positions[1] - positions[0])
+        var uPrev: SIMD3<Float> = {
+            var u = simd_cross(up, tPrev)
+            if simd_length_squared(u) < 1e-8 { u = SIMD3<Float>(1, 0, 0) }
+            return simd_normalize(u)
+        }()
+
+        for i in 0..<n {
+            let tangent: SIMD3<Float>
+            if i == 0 {
+                tangent = simd_normalize(positions[1] - positions[0])
+            } else if i == n - 1 {
+                tangent = simd_normalize(positions[n - 1] - positions[n - 2])
+            } else {
+                tangent = simd_normalize(positions[i + 1] - positions[i - 1])
+            }
+
+            var u = uPrev
+            if i > 0 {
+                let axis = simd_cross(tPrev, tangent)
+                let axisLen = simd_length(axis)
+                if axisLen > 1e-6 {
+                    let axisN = axis / axisLen
+                    let dotClamped = max(-1.0 as Float, min(1.0 as Float, simd_dot(tPrev, tangent)))
+                    let angle = atan2(axisLen, dotClamped)
+                    u = rotateVector(u, axis: axisN, angle: angle)
+                    let proj = u - tangent * simd_dot(u, tangent)
+                    if simd_length_squared(proj) > 1e-10 {
+                        u = simd_normalize(proj)
+                    }
+                }
+            }
+
+            var v = simd_cross(tangent, u)
+            if simd_length_squared(v) < 1e-8 {
+                var fallback = simd_cross(up, tangent)
+                if simd_length_squared(fallback) < 1e-8 { fallback = SIMD3<Float>(1, 0, 0) }
+                u = simd_normalize(fallback)
+                v = simd_cross(tangent, u)
+            }
+            v = simd_normalize(v)
+
+            let twist = twistAngles[i]
+            let cosT = cos(twist)
+            let sinT = sin(twist)
+            let d1 = u * cosT + v * sinT
+            let d2 = -u * sinT + v * cosT
+
+            frames[i] = MaterialFrame(tangent: tangent, d1: d1, d2: d2)
+
+            tPrev = tangent
+            uPrev = u
+        }
+
+        return frames
+    }
+
+    static func rotateVector(_ vector: SIMD3<Float>, axis: SIMD3<Float>, angle: Float) -> SIMD3<Float> {
+        let cosA = cos(angle)
+        let sinA = sin(angle)
+        return vector * cosA
+            + simd_cross(axis, vector) * sinA
+            + axis * simd_dot(axis, vector) * (1 - cosA)
+    }
+
+    /// Cached frames per band, recomputed each substep for bands with rectangular cross-section
+    var cachedFrames: [[MaterialFrame]] = []
+
+    func recomputeFrames() {
+        if cachedFrames.count != bands.count {
+            cachedFrames = Array(repeating: [], count: bands.count)
+        }
+        for bi in bands.indices {
+            guard bands[bi].active && bands[bi].fadeOut == 0 else {
+                cachedFrames[bi] = []
+                continue
+            }
+            if bands[bi].crossSection.isRectangular {
+                cachedFrames[bi] = Self.computeFrames(
+                    positions: bands[bi].positions,
+                    twistAngles: bands[bi].twistAngles
+                )
+            } else {
+                cachedFrames[bi] = []
+            }
+        }
     }
 
 }

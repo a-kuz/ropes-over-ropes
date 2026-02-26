@@ -2,6 +2,25 @@ import MetalKit
 import simd
 import os.log
 
+enum InputPhase {
+    case began, moved, ended, cancelled
+}
+
+#if os(iOS)
+import UIKit
+extension InputPhase {
+    init(_ phase: UITouch.Phase) {
+        switch phase {
+        case .began: self = .began
+        case .moved: self = .moved
+        case .ended: self = .ended
+        case .cancelled: self = .cancelled
+        default: self = .cancelled
+        }
+    }
+}
+#endif
+
 extension Renderer {
     private static let interactionLogger = Logger(subsystem: "com.uzls.four", category: "Interaction")
 
@@ -13,7 +32,7 @@ extension Renderer {
     }
 
     @MainActor
-    func handleTouch(phase: UITouch.Phase, location: CGPoint, in view: MTKView) {
+    func handleTouch(phase: InputPhase, location: CGPoint, in view: MTKView) {
         if cameraDebugMode {
             switch phase {
             case .began:
@@ -39,8 +58,6 @@ extension Renderer {
                 }
             case .ended, .cancelled:
                 cameraDebugTouchStart = nil
-            default:
-                break
             }
             return
         }
@@ -48,12 +65,30 @@ extension Renderer {
         switch phase {
         case .began:
             beginDrag(world: worldPosition)
+            if dragState == nil {
+                cameraDragActive = true
+                cameraDragStart = location
+            }
         case .moved:
-            updateDrag(world: worldPosition)
+            if cameraDragActive {
+                if let start = cameraDragStart {
+                    let dy = Float(location.y - start.y)
+                    let height = max(1.0, Float(view.bounds.size.height))
+                    let rotationDelta = dy / height * Float.pi * 0.15
+                    camera.tiltAngle += rotationDelta
+                    camera.tiltAngle = max(0.0, min(Float.pi / 2 - 0.1, camera.tiltAngle))
+                    cameraDragStart = location
+                }
+            } else {
+                updateDrag(world: worldPosition)
+            }
         case .ended, .cancelled:
-            endDrag(world: worldPosition)
-        default:
-            break
+            if cameraDragActive {
+                cameraDragActive = false
+                cameraDragStart = nil
+            } else {
+                endDrag(world: worldPosition)
+            }
         }
     }
 
@@ -82,7 +117,6 @@ extension Renderer {
 
     @MainActor
     func handleCameraZoom(scale: Float) {
-        guard cameraDebugMode else { return }
         camera.orthoHalfHeight *= scale
         camera.orthoHalfHeight = max(0.1, min(10.0, camera.orthoHalfHeight))
     }
@@ -123,13 +157,15 @@ extension Renderer {
                 dragState = nil
                 return
             }
+
+            pushUndoState()
+
             dragWorld = holePositions[best.holeIndex]
             lastDragWorld = dragWorld
             holeOccupied[best.holeIndex] = false
 
             dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex)
 
-            // Physics: begin drag (lift endpoint)
             simulator?.beginDrag(bandIndex: best.ropeIndex, endIndex: best.endIndex, worldPosition: dragWorld)
             Haptics.light()
         }
@@ -139,9 +175,21 @@ extension Renderer {
         guard dragState != nil else { return }
 
         dragWorld = world
-
-        // Physics: move dragged endpoint
         simulator?.updateDrag(worldPosition: world)
+
+        let snapRadius = holeRadius * 1.9
+        var bestIndex: Int = -1
+        var bestDistance: Float = .greatestFiniteMagnitude
+        for holeIndex in holePositions.indices {
+            guard holeOccupied.indices.contains(holeIndex) else { continue }
+            if holeOccupied[holeIndex] { continue }
+            let distance = simd_length(holePositions[holeIndex] - world)
+            if distance < snapRadius && distance < bestDistance {
+                bestIndex = holeIndex
+                bestDistance = distance
+            }
+        }
+        highlightHoleIndex = bestIndex
     }
 
     private func endDrag(world: SIMD2<Float>) {
@@ -187,9 +235,9 @@ extension Renderer {
             }
         }
 
-        // Delay win check so rope has time to settle after drag
         settleCheckTimer = settleCheckDelay
         self.dragState = nil
+        highlightHoleIndex = -1
     }
 
     @MainActor
@@ -197,29 +245,25 @@ extension Renderer {
         let width = max(1.0, Float(view.bounds.size.width))
         let height = max(1.0, Float(view.bounds.size.height))
         let aspect = width / height
-        let halfHeight = camera.orthoHalfHeight
-        let halfWidth = halfHeight * aspect
 
         let ndcX = (Float(location.x) / width) * 2 - 1
         let ndcY = (Float(location.y) / height) * 2 - 1
 
-        if abs(camera.tiltAngle) < 0.01 {
-            return SIMD2<Float>(ndcX * halfWidth, ndcY * halfHeight)
+        let vp = camera.viewProj(aspect: aspect)
+        let inv = vp.inverse
+
+        let nearClip = SIMD4<Float>(ndcX, ndcY, 0, 1)
+        let farClip = SIMD4<Float>(ndcX, ndcY, 1, 1)
+        let nearW = inv * nearClip
+        let farW = inv * farClip
+        let nearP = SIMD3<Float>(nearW.x, nearW.y, nearW.z) / nearW.w
+        let farP = SIMD3<Float>(farW.x, farW.y, farW.z) / farW.w
+        let dir = farP - nearP
+
+        guard abs(dir.z) > 1e-8 else {
+            return SIMD2<Float>(nearP.x, nearP.y)
         }
-
-        let yOffset = camera.distance * sin(camera.tiltAngle)
-        let zOffset = camera.distance * cos(camera.tiltAngle)
-        let eye = camera.center + SIMD3<Float>(0, yOffset, zOffset)
-        let viewMatrix = simd_float4x4.lookAt(eye: eye, center: camera.center, up: SIMD3<Float>(0, 1, 0))
-
-        let right = SIMD3<Float>(viewMatrix[0].x, viewMatrix[0].y, viewMatrix[0].z)
-        let up = SIMD3<Float>(viewMatrix[1].x, viewMatrix[1].y, viewMatrix[1].z)
-
-        let viewX = ndcX * halfWidth
-        let viewY = ndcY * halfHeight
-
-        let worldPoint = camera.center + right * viewX + up * viewY
-
-        return SIMD2<Float>(worldPoint.x, worldPoint.y)
+        let t = -nearP.z / dir.z
+        return SIMD2<Float>(nearP.x + dir.x * t, nearP.y + dir.y * t)
     }
 }

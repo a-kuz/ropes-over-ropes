@@ -3,6 +3,7 @@ import simd
 
 extension Renderer {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+        lastViewSize = size
         resizeTextures(size: size)
     }
 
@@ -26,6 +27,14 @@ extension Renderer {
         // Physics step — fixed timestep accumulator handles variable frame rate
         simulator?.update(deltaTime: deltaTime)
 
+        let isDragging = dragState != nil || simulator?.lowerAnimation != nil
+        if isDragging, let friction = simulator?.consumeAndResetFriction() {
+            frictionSound.update(intensity: friction.intensity, speed: friction.speed)
+        } else {
+            _ = simulator?.consumeAndResetFriction()
+            frictionSound.fadeOut()
+        }
+
         // Delayed next level load after victory
         if let timer = nextLevelTimer {
             let remaining = timer - deltaTime
@@ -44,14 +53,15 @@ extension Renderer {
             let remaining = timer - deltaTime
             if remaining <= 0 {
                 settleCheckTimer = nil
-                removeUntangledRopes()
+                PhysicsProfiler.shared.measure(.winCheck) { removeUntangledRopes() }
             } else {
                 settleCheckTimer = remaining
             }
         }
 
-        updateRopeMesh()
+        PhysicsProfiler.shared.measure(.meshBuild) { updateRopeMesh() }
 
+        lastViewSize = view.drawableSize
         if hdrTex == nil {
             resizeTextures(size: view.drawableSize)
         }
@@ -75,7 +85,7 @@ extension Renderer {
         renderPass.colorAttachments[0].texture = hdrTexture
         renderPass.colorAttachments[0].loadAction = .clear
         renderPass.colorAttachments[0].storeAction = .store
-        renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0.07, green: 0.08, blue: 0.11, alpha: 1)
+        renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
         renderPass.depthAttachment.texture = depthTexture
         renderPass.depthAttachment.loadAction = .clear
         renderPass.depthAttachment.storeAction = .dontCare
@@ -88,9 +98,17 @@ extension Renderer {
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
 
         encoder.setRenderPipelineState(tablePipeline)
-        encoder.setDepthStencilState(depthStateBackground)
+        encoder.setDepthStencilState(depthStateScene)
         if let frameUniforms {
             encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+        }
+        if let holeInstances {
+            var holeCount: UInt32 = UInt32(holeInstances.length / MemoryLayout<HoleInstance>.stride)
+            encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            encoder.setFragmentBuffer(holeInstances, offset: 0, index: 4)
+        } else {
+            var holeCount: UInt32 = 0
+            encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
         }
         if let shadowDepthTex {
             encoder.setFragmentTexture(shadowDepthTex, index: 2)
@@ -230,21 +248,24 @@ extension Renderer {
         let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)
         let invShadow = 1.0 / Float(max(1, shadowMapSize))
 
+        let invViewProj = viewProjection.inverse
+
         let uniforms = FrameUniforms(
             viewProj: viewProjection,
+            invViewProj: invViewProj,
             lightViewProj: lightViewProj,
             lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, 5.2),
-            ambientColor: SIMD4<Float>(0, 0, 0, 1),
+            ambientColor: SIMD4<Float>(0, 0, 0, Float(highlightHoleIndex)),
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
             orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
-            shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, 0, 0),
-            timeDrag: SIMD4<Float>(time, 0, 0, dragState != nil ? 1 : 0)
+            shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, camera.center.x, camera.center.y),
+            timeDrag: SIMD4<Float>(time, 0, Float(currentLevelId), dragState != nil ? 1 : 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
     }
 
     private func makeLightViewProj(lightDir: SIMD3<Float>, halfW: Float, halfH: Float) -> simd_float4x4 {
-        let target = SIMD3<Float>(0, 0, 0)
+        let target = camera.center
         let eye = target + lightDir * 4.9
         var up = SIMD3<Float>(0, 1, 0)
         if abs(simd_dot(up, lightDir)) > 0.95 {

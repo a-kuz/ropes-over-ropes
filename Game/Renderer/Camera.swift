@@ -4,7 +4,31 @@ struct Camera {
     var center: SIMD3<Float> = .zero
     var distance: Float = 2.8
     var orthoHalfHeight: Float = 2.05
-    var tiltAngle: Float = 0.25
+    var tiltAngle: Float = 0.0
+
+    mutating func fitToHoles(_ holes: [SIMD2<Float>], holeRadius: Float, aspect: Float) {
+        guard !holes.isEmpty else { return }
+        var minX: Float = .greatestFiniteMagnitude
+        var maxX: Float = -.greatestFiniteMagnitude
+        var minY: Float = .greatestFiniteMagnitude
+        var maxY: Float = -.greatestFiniteMagnitude
+        for h in holes {
+            minX = min(minX, h.x)
+            maxX = max(maxX, h.x)
+            minY = min(minY, h.y)
+            maxY = max(maxY, h.y)
+        }
+        let margin = holeRadius * 2.5
+        let contentW = (maxX - minX) + margin * 2
+        let contentH = (maxY - minY) + margin * 2
+        let centerX = (minX + maxX) * 0.5
+        let centerY = (minY + maxY) * 0.5
+
+        let halfHFromHeight = contentH * 0.5
+        let halfHFromWidth = (contentW * 0.5) / max(aspect, 0.01)
+        orthoHalfHeight = max(halfHFromHeight, halfHFromWidth) * 1.2
+        center = SIMD3<Float>(centerX, centerY, 0)
+    }
 
     func viewProj(aspect: Float) -> simd_float4x4 {
         let yOffset = distance * sin(tiltAngle)
@@ -46,4 +70,3 @@ extension simd_float4x4 {
         return m
     }
 }
-

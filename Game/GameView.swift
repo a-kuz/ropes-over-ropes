@@ -1,3 +1,8 @@
+#if os(iOS)
+import UIKit
+#elseif os(macOS)
+import AppKit
+#endif
 import MetalKit
 import SwiftUI
 
@@ -49,8 +54,18 @@ class GameController: ObservableObject {
     }
 
     @Published var fps: Float = 0
-    @Published var currentLevel: Int = 1
+    @Published var currentLevel: Int = 49 {
+        didSet { persist("p.lvl", Float(currentLevel)) }
+    }
     @Published var showLevelComplete: Bool = false
+    @Published var canUndo: Bool = false
+    @Published var frictionSoundEnabled: Bool = true {
+        didSet { renderer?.frictionSound.enabled = frictionSoundEnabled; persist("p.snd", frictionSoundEnabled ? 1 : 0) }
+    }
+    @Published var profilerActive: Bool = false {
+        didSet { PhysicsProfiler.shared.enabled = profilerActive }
+    }
+    @Published var profilerSummary: String = ""
 
     private var fpsTimer: Timer?
 
@@ -63,6 +78,9 @@ class GameController: ObservableObject {
             self.fps = r.currentFPS
             if self.currentLevel != r.currentLevelId {
                 self.currentLevel = r.currentLevelId
+            }
+            if self.profilerActive {
+                self.profilerSummary = PhysicsProfiler.shared.summaryString()
             }
         }
     }
@@ -79,10 +97,12 @@ class GameController: ObservableObject {
         if let v = f("p.drg") { dragHeight = v }
         if let v = f("p.lft") { liftHeight = v }
         if let v = f("p.rtn") { ropeTension = v }
+        if let v = f("p.snd") { frictionSoundEnabled = v > 0.5 }
+        if let v = f("p.lvl"), v >= 1 { currentLevel = Int(v) }
     }
 
     private static let allKeys = [
-        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.drg", "p.lft", "p.rtn"
+        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.drg", "p.lft", "p.rtn", "p.snd", "p.lvl"
     ]
 
     func resetToDefaults() {
@@ -94,7 +114,13 @@ class GameController: ObservableObject {
         dragHeight = Defaults.dragHeight
         liftHeight = Defaults.liftHeight
         ropeTension = Defaults.ropeTension
+        frictionSoundEnabled = true
         Self.allKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
+    }
+
+    func undo() {
+        guard let renderer = renderer else { return }
+        renderer.performUndo()
     }
 
     func restartLevel() {
@@ -162,6 +188,59 @@ class GameController: ObservableObject {
     }
 }
 
+@MainActor
+private func configureGameView(_ view: GameMTKView, controller: GameController, coordinator: GameViewCoordinator) {
+    let renderer = Renderer(view: view)
+    coordinator.renderer = renderer
+    controller.renderer = renderer
+    renderer.onLevelComplete = { [weak controller] in
+        DispatchQueue.main.async {
+            controller?.showLevelComplete = true
+        }
+    }
+    renderer.onUndoStackChanged = { [weak controller] hasEntries in
+        DispatchQueue.main.async {
+            controller?.canUndo = hasEntries
+        }
+    }
+
+    renderer.physicsParticleCount = Int(controller.particleCount)
+    renderer.physicsGravity = controller.gravity
+    renderer.physicsDamping = controller.damping
+    renderer.physicsConstraintIterations = Int(controller.constraintIterations)
+    renderer.physicsSettleSteps = Int(controller.settleSteps)
+    renderer.dragHeight = controller.dragHeight
+    renderer.physicsLiftHeight = controller.liftHeight
+    renderer.physicsRopeTension = controller.ropeTension
+    renderer.frictionSound.enabled = controller.frictionSoundEnabled
+
+    view.delegate = renderer
+    view.onTouch = { phase, location in
+        renderer.handleTouch(phase: phase, location: location, in: view)
+    }
+    view.onCameraPan = { translation in
+        renderer.handleCameraPan(translation: translation, in: view)
+    }
+    view.onCameraRotation = { delta in
+        renderer.handleCameraRotation(delta: delta)
+    }
+    view.onCameraZoom = { scale in
+        renderer.handleCameraZoom(scale: scale)
+    }
+    view.onCameraDebugToggle = {
+        renderer.cameraDebugMode.toggle()
+    }
+
+    if controller.currentLevel != 49 {
+        renderer.loadLevel(levelId: controller.currentLevel)
+    }
+}
+
+final class GameViewCoordinator {
+    var renderer: Renderer?
+}
+
+#if os(iOS)
 struct GameView: UIViewRepresentable {
     @ObservedObject var controller: GameController
 
@@ -176,57 +255,34 @@ struct GameView: UIViewRepresentable {
         view.backgroundColor = .black
         view.alpha = 1.0
 
-        let renderer = Renderer(view: view)
-        context.coordinator.renderer = renderer
-        controller.renderer = renderer
-        renderer.onLevelComplete = { [weak controller] in
-            DispatchQueue.main.async {
-                controller?.showLevelComplete = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-                    controller?.showLevelComplete = false
-                }
-            }
-        }
-
-        renderer.physicsParticleCount = Int(controller.particleCount)
-        renderer.physicsGravity = controller.gravity
-        renderer.physicsDamping = controller.damping
-        renderer.physicsConstraintIterations = Int(controller.constraintIterations)
-        renderer.physicsSettleSteps = Int(controller.settleSteps)
-        renderer.dragHeight = controller.dragHeight
-        renderer.physicsLiftHeight = controller.liftHeight
-        renderer.physicsRopeTension = controller.ropeTension
-
-        view.delegate = renderer
-        view.onTouch = { phase, location in
-            renderer.handleTouch(phase: phase, location: location, in: view)
-        }
-        view.onCameraPan = { translation in
-            renderer.handleCameraPan(translation: translation, in: view)
-        }
-        view.onCameraRotation = { delta in
-            renderer.handleCameraRotation(delta: delta)
-        }
-        view.onCameraZoom = { scale in
-            renderer.handleCameraZoom(scale: scale)
-        }
-        view.onCameraDebugToggle = {
-            renderer.cameraDebugMode.toggle()
-        }
-
+        configureGameView(view, controller: controller, coordinator: context.coordinator)
         return view
     }
 
-    func updateUIView(_ uiView: MTKView, context: Context) {
-        _ = uiView
-        _ = context
-    }
+    func updateUIView(_ uiView: MTKView, context: Context) {}
 
-    func makeCoordinator() -> Coordinator {
-        Coordinator()
-    }
-
-    final class Coordinator {
-        var renderer: Renderer?
-    }
+    func makeCoordinator() -> GameViewCoordinator { GameViewCoordinator() }
 }
+
+#elseif os(macOS)
+struct GameView: NSViewRepresentable {
+    @ObservedObject var controller: GameController
+
+    func makeNSView(context: Context) -> MTKView {
+        let view = GameMTKView(frame: .zero, device: MTLCreateSystemDefaultDevice())
+        view.colorPixelFormat = .bgra8Unorm
+        view.depthStencilPixelFormat = .depth32Float_stencil8
+        view.clearColor = MTLClearColor(red: 0.07, green: 0.08, blue: 0.12, alpha: 1.0)
+        view.preferredFramesPerSecond = 120
+        view.framebufferOnly = false
+        view.layer?.isOpaque = true
+
+        configureGameView(view, controller: controller, coordinator: context.coordinator)
+        return view
+    }
+
+    func updateNSView(_ nsView: MTKView, context: Context) {}
+
+    func makeCoordinator() -> GameViewCoordinator { GameViewCoordinator() }
+}
+#endif

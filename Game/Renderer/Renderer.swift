@@ -26,6 +26,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var camera = Camera()
     var cameraDebugMode = false
     var cameraDebugTouchStart: CGPoint?
+    var cameraDragActive = false
+    var cameraDragStart: CGPoint?
     var time: Float = 0
     var dragVisualEnergy: Float = 0
     var lastDeltaTime: Float = 1.0 / 60.0
@@ -47,6 +49,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         var endHole: Int
         var color: SIMD3<Float>
         var radius: Float
+        var crossSection: CrossSection
     }
 
     var ropes: [RopeEndpoints] = []
@@ -64,6 +67,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var dragState: DragState?
     var dragWorld: SIMD2<Float> = .zero
     var dragHeight: Float = 0.35
+    var highlightHoleIndex: Int = -1
 
     var ropeVB: MTLBuffer?
     var ropeIB: MTLBuffer?
@@ -72,9 +76,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     var hdrTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
+    var lastViewSize: CGSize = CGSize(width: 400, height: 600)
     
     var ropePhysicsLogger = RopePhysics()
     var lastPhysicsLogTime: Double = 0
+    let frictionSound = RubberFrictionSound()
 
     struct MeshStats: Equatable {
         let vertices: Int
@@ -83,8 +89,43 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
     var lastMeshStats: MeshStats?
 
-    var currentLevelId: Int = 1
+    var currentLevelId: Int = 49
     var onLevelComplete: (() -> Void)?
+    var onUndoStackChanged: ((Bool) -> Void)?
+
+    // MARK: - Undo
+
+    struct UndoEntry {
+        var simulatorSnapshot: VerletSimulator.Snapshot
+        var ropeEndpoints: [RopeEndpoints]
+        var holeOccupied: [Bool]
+    }
+
+    private var undoStack: [UndoEntry] = []
+
+    var canUndo: Bool { !undoStack.isEmpty }
+
+    func pushUndoState() {
+        guard let sim = simulator else { return }
+        let entry = UndoEntry(
+            simulatorSnapshot: sim.takeSnapshot(),
+            ropeEndpoints: ropes,
+            holeOccupied: holeOccupied
+        )
+        undoStack.append(entry)
+        onUndoStackChanged?(true)
+    }
+
+    func performUndo() {
+        guard let entry = undoStack.popLast(), let sim = simulator else { return }
+        dragState = nil
+        highlightHoleIndex = -1
+        settleCheckTimer = nil
+        sim.restoreSnapshot(entry.simulatorSnapshot)
+        ropes = entry.ropeEndpoints
+        holeOccupied = entry.holeOccupied
+        onUndoStackChanged?(!undoStack.isEmpty)
+    }
 
     /// Timer for delayed win check after drag ends.
     /// Rope needs time to settle before we check crossings.
@@ -140,7 +181,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         super.init()
 
-        loadLevel(levelId: 1)
+        loadLevel(levelId: 49)
     }
     
     func loadLevel(levelId: Int) {
@@ -150,6 +191,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragState = nil
         dragWorld = .zero
         simulator = nil
+        undoStack.removeAll()
+        onUndoStackChanged?(false)
         
         // Try JSON first, fallback to procedural generation
         let level: LevelDefinition
@@ -176,7 +219,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         holeInstances = Self.makeHoleInstances(device: device, positions: levelHoles, radius: levelHoleRadius)
 
         ropes = validatedRopes.map { rope in
-            RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, radius: rope.radius)
+            RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, radius: rope.radius, crossSection: rope.crossSection)
         }
 
         let ropeConfigs = ropes.map { rope in
@@ -210,7 +253,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.ropeTension = physicsRopeTension
 
         let simRopeConfigs = ropes.map { rope in
-            VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius)
+            VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius, crossSection: rope.crossSection)
         }
 
         let simActions: [VerletSimulator.LevelAction] = level.actions?.compactMap { action in
@@ -241,6 +284,9 @@ final class Renderer: NSObject, MTKViewDelegate {
             holeOccupied[startHoleIndex] = true
             holeOccupied[endHoleIndex] = true
         }
+
+        let aspect = Float(lastViewSize.width / max(1, lastViewSize.height))
+        camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect)
     }
 
     private static func makePipeline(device: MTLDevice, descriptor: MTLRenderPipelineDescriptor) -> MTLRenderPipelineState {

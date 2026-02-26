@@ -1,7 +1,10 @@
 import MetalKit
 
+#if os(iOS)
+import UIKit
+
 final class GameMTKView: MTKView {
-    var onTouch: ((UITouch.Phase, CGPoint) -> Void)?
+    var onTouch: ((InputPhase, CGPoint) -> Void)?
     var onCameraPan: ((SIMD2<Float>) -> Void)?
     var onCameraRotation: ((Float) -> Void)?
     var onCameraZoom: ((Float) -> Void)?
@@ -115,3 +118,92 @@ final class GameMTKView: MTKView {
     }
 }
 
+#elseif os(macOS)
+import AppKit
+
+final class GameMTKView: MTKView {
+    var onTouch: ((InputPhase, CGPoint) -> Void)?
+    var onCameraPan: ((SIMD2<Float>) -> Void)?
+    var onCameraRotation: ((Float) -> Void)?
+    var onCameraZoom: ((Float) -> Void)?
+    var onCameraDebugToggle: (() -> Void)?
+
+    private var isDragging = false
+    private var lastRightDragLocation: CGPoint?
+    private var clickCount = 0
+    private var lastClickTime: Date?
+
+    override var acceptsFirstResponder: Bool { true }
+
+    private func flippedLocation(for event: NSEvent) -> CGPoint {
+        let loc = convert(event.locationInWindow, from: nil)
+        return CGPoint(x: loc.x, y: bounds.height - loc.y)
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        let loc = flippedLocation(for: event)
+        isDragging = true
+        onTouch?(.began, loc)
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard isDragging else { return }
+        let loc = flippedLocation(for: event)
+        onTouch?(.moved, loc)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        let loc = flippedLocation(for: event)
+        isDragging = false
+
+        let now = Date()
+        if let lastTime = lastClickTime, now.timeIntervalSince(lastTime) < 0.4 {
+            clickCount += 1
+        } else {
+            clickCount = 1
+        }
+        lastClickTime = now
+
+        if clickCount >= 3 {
+            clickCount = 0
+            lastClickTime = nil
+            onCameraDebugToggle?()
+        } else {
+            onTouch?(.ended, loc)
+        }
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        lastRightDragLocation = flippedLocation(for: event)
+    }
+
+    override func rightMouseDragged(with event: NSEvent) {
+        let loc = flippedLocation(for: event)
+        if let last = lastRightDragLocation {
+            let dx = Float(loc.x - last.x)
+            let dy = Float(loc.y - last.y)
+            onCameraPan?(SIMD2<Float>(dx, dy))
+            let rotationDelta = -dy / Float(bounds.height) * Float.pi * 0.5
+            onCameraRotation?(rotationDelta)
+        }
+        lastRightDragLocation = loc
+    }
+
+    override func rightMouseUp(with event: NSEvent) {
+        lastRightDragLocation = nil
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        let delta = Float(event.scrollingDeltaY)
+        if abs(delta) > 0.01 {
+            let scale = 1.0 - delta * 0.01
+            onCameraZoom?(scale)
+        }
+    }
+
+    override func magnify(with event: NSEvent) {
+        let scale = 1.0 - Float(event.magnification)
+        onCameraZoom?(scale)
+    }
+}
+#endif

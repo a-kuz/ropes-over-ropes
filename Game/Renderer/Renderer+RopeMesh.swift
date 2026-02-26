@@ -31,12 +31,67 @@ extension Renderer {
 
             let ropeColor = ropes[ropeIndex].color
             let fadeOut = sim.bands[ropeIndex].fadeOut
-            let ropeRadius = ropes[ropeIndex].radius * (1 - fadeOut)
+            let ropeRadius = ropes[ropeIndex].radius
+            let cs = ropes[ropeIndex].crossSection
 
             let band = sim.bands[ropeIndex]
-            let restLength = band.segmentLength * Float(points.count - 1)
 
-            let ropeMesh = points.withUnsafeBufferPointer { pointsBuffer in
+            let frames: [MaterialFrame]?
+            if cs.isRectangular && sim.cachedFrames.indices.contains(ropeIndex) && !sim.cachedFrames[ropeIndex].isEmpty {
+                frames = sim.cachedFrames[ropeIndex]
+            } else {
+                frames = nil
+            }
+
+            var visiblePoints = points
+            var visibleFrames = frames
+
+            if fadeOut > 0, let suckHole = band.suckHole {
+                let n = points.count
+                let clipZ: Float = -ropeRadius * 1.5
+                var lo = 0
+                var hi = n - 1
+
+                while lo < n && points[lo].z < clipZ { lo += 1 }
+                while hi >= 0 && points[hi].z < clipZ { hi -= 1 }
+
+                if hi - lo >= 1 {
+                    var clipped = ContiguousArray(points[lo...hi])
+                    var clippedFrames: [MaterialFrame]? = nil
+                    if let f = frames, f.count == n {
+                        clippedFrames = Array(f[lo...hi])
+                    }
+
+                    let holeXY = holePositions[suckHole]
+                    let sinkZ: Float = -ropeRadius * 2.5
+
+                    if lo > 0 {
+                        let entryPt = SIMD3<Float>(holeXY.x, holeXY.y, sinkZ)
+                        clipped.insert(entryPt, at: 0)
+                        if var cf = clippedFrames, !cf.isEmpty {
+                            cf.insert(cf[0], at: 0)
+                            clippedFrames = cf
+                        }
+                    }
+                    if hi < n - 1 {
+                        let entryPt = SIMD3<Float>(holeXY.x, holeXY.y, sinkZ)
+                        clipped.append(entryPt)
+                        if var cf = clippedFrames, !cf.isEmpty {
+                            cf.append(cf[cf.count - 1])
+                            clippedFrames = cf
+                        }
+                    }
+
+                    visiblePoints = clipped
+                    visibleFrames = clippedFrames
+                } else {
+                    continue
+                }
+            }
+
+            let restLength = band.segmentLength * Float(visiblePoints.count - 1)
+
+            let ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
                 RopeMeshBuilder.buildRect(
                     points: pointsBuffer,
                     radius: ropeRadius,
@@ -47,13 +102,47 @@ extension Renderer {
                     stretchRatio: 1.0,
                     oscillation: 0.0,
                     segmentStarts: [],
-                    restLength: restLength
+                    restLength: restLength,
+                    crossSection: cs,
+                    materialFrames: visibleFrames
                 )
             }
 
             allVertices.append(contentsOf: ropeMesh.vertices)
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
+
+            let sphereRadius = holeRadius * 0.72
+            if visiblePoints.count >= 2 {
+                let isSucking = fadeOut > 0 && band.suckHole != nil
+
+                let drawStartSphere = !isSucking
+                let drawEndSphere = !isSucking
+
+                if drawStartSphere {
+                    let startPos = visiblePoints[0]
+                    let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                    let startSphere = RopeMeshBuilder.buildHemisphere(
+                        center: startPos, radius: sphereRadius, facing: -startTangent,
+                        color: ropeColor, segments: 12, rings: 6
+                    )
+                    allVertices.append(contentsOf: startSphere.vertices)
+                    allIndices.append(contentsOf: startSphere.indices.map { $0 + baseVertex })
+                    baseVertex += UInt32(startSphere.vertices.count)
+                }
+
+                if drawEndSphere {
+                    let endPos = visiblePoints[visiblePoints.count - 1]
+                    let endTangent = simd_normalize(visiblePoints[visiblePoints.count - 1] - visiblePoints[visiblePoints.count - 2])
+                    let endSphere = RopeMeshBuilder.buildHemisphere(
+                        center: endPos, radius: sphereRadius, facing: endTangent,
+                        color: ropeColor, segments: 12, rings: 6
+                    )
+                    allVertices.append(contentsOf: endSphere.vertices)
+                    allIndices.append(contentsOf: endSphere.indices.map { $0 + baseVertex })
+                    baseVertex += UInt32(endSphere.vertices.count)
+                }
+            }
         }
         ropeIndexCount = allIndices.count
 

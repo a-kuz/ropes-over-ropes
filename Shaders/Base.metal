@@ -8,6 +8,7 @@ struct VSOut {
 
 struct FrameUniforms {
     float4x4 viewProj;
+    float4x4 invViewProj;
     float4x4 lightViewProj;
     float4 lightDir_intensity;
     float4 ambientColor;
@@ -49,66 +50,130 @@ static float fbm2d(float2 p, int octaves) {
     return value;
 }
 
-static float3 woodTexture(float2 uv, float2 worldXY) {
-    float2 p = worldXY * 0.28;
-    
+static float3 woodTexture(float2 uv, float2 worldXY, float seed) {
+    float seedAngle = seed * 2.399;
+    float sa = sin(seedAngle);
+    float ca = cos(seedAngle);
+    float2 rotated = float2(worldXY.x * ca - worldXY.y * sa,
+                            worldXY.x * sa + worldXY.y * ca);
+    float2 offset = float2(hash21(float2(seed, seed * 7.13)) * 40.0 - 20.0,
+                           hash21(float2(seed * 3.71, seed)) * 40.0 - 20.0);
+    float2 p = (rotated + offset) * 1.1;
+
+    float scaleVar = mix(0.8, 1.2, hash21(float2(seed * 1.23, 0.0)));
+    p *= scaleVar;
+
     float angle = atan2(p.y, p.x);
     float ringDist = length(p);
-    
-    float ringNoise = fbm2d(p * 3.2 + float2(angle * 0.5, 0.0), 4);
-    float ringWarp = ringNoise * 0.15;
+
+    float ringNoise = fbm2d(p * 3.2 + float2(angle * 0.5, 0.0), 5);
+    float ringWarp = ringNoise * 0.12;
     float warpedDist = ringDist + ringWarp;
-    
-    float ringPhase = warpedDist * 10.5 + fbm2d(p * 1.8, 3) * 1.4;
+
+    float ringDensity = mix(10.0, 18.0, hash21(float2(seed * 2.17, 1.0)));
+    float ringPhase = warpedDist * ringDensity + fbm2d(p * 2.2, 4) * 1.2;
     float rings = sin(ringPhase) * 0.5 + 0.5;
-    rings = pow(rings, 2.2);
-    
-    float ringVariation = fbm2d(p * 4.5, 3);
-    rings = mix(rings, rings * 0.7, ringVariation * 0.4);
-    
-    float densityNoise = fbm2d(p * 6.0, 4);
-    float density = mix(0.85, 1.15, densityNoise);
+    float ringSharp = mix(2.5, 4.0, hash21(float2(seed * 5.77, 3.0)));
+    rings = pow(rings, ringSharp);
+
+    float ringVariation = fbm2d(p * 5.5, 4);
+    rings = mix(rings, rings * 0.65, ringVariation * 0.45);
+
+    float densityNoise = fbm2d(p * 8.0, 5);
+    float density = mix(0.88, 1.12, densityNoise);
     rings *= density;
-    
+
     float grainDir = angle + ringDist * 0.3;
-    float grainScale = 52.0;
-    float grainNoise = fbm2d(float2(p.y * grainScale, p.x * 0.25 + grainDir * 2.0), 5);
-    float grainPattern = sin(p.y * grainScale + grainNoise * 4.5) * 0.5 + 0.5;
-    grainPattern = pow(grainPattern, 5.5);
-    
-    float grainIntensity = mix(0.65, 0.95, fbm2d(p * 8.0, 3));
-    grainPattern = grainPattern * grainIntensity;
-    
-    float medullaryRays = sin(angle * 8.0 + ringDist * 3.0) * 0.5 + 0.5;
-    medullaryRays = pow(medullaryRays, 12.0) * 0.3;
-    medullaryRays *= smoothstep(0.2, 1.5, ringDist);
-    
-    float3 heartwoodDark = float3(0.38, 0.24, 0.16);
-    float3 heartwoodMid = float3(0.52, 0.36, 0.24);
-    float3 heartwoodLight = float3(0.68, 0.52, 0.38);
-    float3 sapwoodLight = float3(0.82, 0.70, 0.56);
-    
+    float grainScale = mix(45.0, 80.0, hash21(float2(seed * 4.31, 2.0)));
+    float grainNoise = fbm2d(float2(p.y * grainScale, p.x * 0.25 + grainDir * 2.0), 6);
+    float grainPattern = sin(p.y * grainScale + grainNoise * 5.0) * 0.5 + 0.5;
+    grainPattern = pow(grainPattern, 6.0);
+
+    float grainIntensity = mix(0.6, 0.95, fbm2d(p * 10.0, 4));
+    grainPattern *= grainIntensity;
+
+    float fineGrain = fbm2d(p * 28.0, 4) * 0.08;
+
+    float medullaryRays = sin(angle * 10.0 + ringDist * 4.0) * 0.5 + 0.5;
+    medullaryRays = pow(medullaryRays, 14.0) * 0.25;
+    medullaryRays *= smoothstep(0.15, 1.2, ringDist);
+
+    float pores = hash21(floor(p * 120.0));
+    pores = smoothstep(0.92, 0.98, pores) * 0.06;
+
+    float hue = fract(seed * 0.618033988);
+    float3 heartwoodDark, heartwoodMid, heartwoodLight, sapwoodLight;
+    if (hue < 0.125) {
+        // oak — classic warm
+        heartwoodDark  = float3(0.38, 0.24, 0.16);
+        heartwoodMid   = float3(0.52, 0.36, 0.24);
+        heartwoodLight = float3(0.68, 0.52, 0.38);
+        sapwoodLight   = float3(0.82, 0.70, 0.56);
+    } else if (hue < 0.25) {
+        // walnut — dark brown
+        heartwoodDark  = float3(0.18, 0.12, 0.08);
+        heartwoodMid   = float3(0.30, 0.20, 0.14);
+        heartwoodLight = float3(0.42, 0.30, 0.22);
+        sapwoodLight   = float3(0.55, 0.42, 0.32);
+    } else if (hue < 0.375) {
+        // maple — light blonde
+        heartwoodDark  = float3(0.62, 0.52, 0.38);
+        heartwoodMid   = float3(0.74, 0.64, 0.50);
+        heartwoodLight = float3(0.84, 0.76, 0.62);
+        sapwoodLight   = float3(0.92, 0.86, 0.74);
+    } else if (hue < 0.5) {
+        // wenge — very dark
+        heartwoodDark  = float3(0.12, 0.08, 0.06);
+        heartwoodMid   = float3(0.22, 0.15, 0.10);
+        heartwoodLight = float3(0.32, 0.22, 0.16);
+        sapwoodLight   = float3(0.44, 0.32, 0.24);
+    } else if (hue < 0.625) {
+        // cherry — reddish
+        heartwoodDark  = float3(0.42, 0.20, 0.14);
+        heartwoodMid   = float3(0.58, 0.32, 0.22);
+        heartwoodLight = float3(0.72, 0.46, 0.32);
+        sapwoodLight   = float3(0.85, 0.62, 0.48);
+    } else if (hue < 0.75) {
+        // ebony — near black
+        heartwoodDark  = float3(0.06, 0.05, 0.04);
+        heartwoodMid   = float3(0.14, 0.11, 0.08);
+        heartwoodLight = float3(0.22, 0.17, 0.13);
+        sapwoodLight   = float3(0.34, 0.26, 0.20);
+    } else if (hue < 0.875) {
+        // mahogany — deep red-brown
+        heartwoodDark  = float3(0.26, 0.12, 0.08);
+        heartwoodMid   = float3(0.40, 0.22, 0.14);
+        heartwoodLight = float3(0.54, 0.32, 0.22);
+        sapwoodLight   = float3(0.68, 0.48, 0.34);
+    } else {
+        // ash — pale grey-brown
+        heartwoodDark  = float3(0.52, 0.46, 0.38);
+        heartwoodMid   = float3(0.64, 0.58, 0.50);
+        heartwoodLight = float3(0.76, 0.70, 0.62);
+        sapwoodLight   = float3(0.88, 0.84, 0.76);
+    }
+
     float ringMask = rings;
     float3 heartwoodColor = mix(heartwoodDark, heartwoodMid, ringMask);
-    heartwoodColor = mix(heartwoodColor, heartwoodLight, smoothstep(0.3, 0.7, rings));
-    
-    float sapwoodMask = smoothstep(0.0, 0.35, ringDist) * smoothstep(1.4, 0.95, ringDist);
-    float3 woodColor = mix(heartwoodColor, sapwoodLight, sapwoodMask * 0.65);
-    
-    float grainEffect = grainPattern * 0.45;
-    woodColor = mix(woodColor, heartwoodLight * 1.15, grainEffect);
-    
-    woodColor = mix(woodColor, woodColor * 1.12, medullaryRays);
-    
-    float colorVariation = fbm2d(p * 0.95, 4);
-    woodColor *= mix(0.88, 1.12, colorVariation);
-    
-    float textureVariation = fbm2d(p * 2.3, 5);
-    woodColor *= mix(0.92, 1.08, textureVariation);
-    
-    float3 finalColor = saturate(woodColor);
-    
-    return finalColor;
+    heartwoodColor = mix(heartwoodColor, heartwoodLight, smoothstep(0.25, 0.65, rings));
+
+    float sapwoodMask = smoothstep(0.0, 0.3, ringDist) * smoothstep(1.4, 0.9, ringDist);
+    float3 woodColor = mix(heartwoodColor, sapwoodLight, sapwoodMask * 0.6);
+
+    float grainEffect = grainPattern * 0.4;
+    woodColor = mix(woodColor, heartwoodLight * 1.1, grainEffect);
+    woodColor += fineGrain;
+
+    woodColor = mix(woodColor, woodColor * 1.1, medullaryRays);
+    woodColor -= pores;
+
+    float colorVariation = fbm2d(p * 1.2, 5);
+    woodColor *= mix(0.9, 1.1, colorVariation);
+
+    float textureVariation = fbm2d(p * 3.0, 6);
+    woodColor *= mix(0.93, 1.07, textureVariation);
+
+    return saturate(woodColor);
 }
 
 static float3 matteRubber(float3 baseColor, float3 n, float3 l, float3 v, float rough, float fiber) {
@@ -188,18 +253,50 @@ fragment float4 solidColorFragment(VSOut in [[stage_in]]) {
     return float4(c, 1.0);
 }
 
-fragment float4 tableFragment(VSOut in [[stage_in]],
+struct TableOut {
+    float4 color [[color(0)]];
+    float depth [[depth(any)]];
+};
+
+struct HoleCountBuf {
+    uint count;
+};
+
+fragment TableOut tableFragment(VSOut in [[stage_in]],
                               constant FrameUniforms& frame [[buffer(1)]],
+                              constant HoleCountBuf& holeCounts [[buffer(3)]],
+                              const device HoleInstance* holes [[buffer(4)]],
                               depth2d<float> shadowMap [[texture(2)]]) {
     float2 uv = in.uv;
-    
-    float halfW = frame.orthoHalfSize_shadowBias.x;
-    float halfH = frame.orthoHalfSize_shadowBias.y;
-    float2 worldXY = float2((uv.x * 2.0 - 1.0) * halfW, (uv.y * 2.0 - 1.0) * halfH);
-    float3 worldPos = float3(worldXY.x, worldXY.y, 0.0);
+    float2 ndc = uv * 2.0 - 1.0;
+
+    float4 nearW = frame.invViewProj * float4(ndc.x, ndc.y, 0.0, 1.0);
+    float4 farW  = frame.invViewProj * float4(ndc.x, ndc.y, 1.0, 1.0);
+    float3 nearP = nearW.xyz / nearW.w;
+    float3 farP  = farW.xyz / farW.w;
+    float3 dir = farP - nearP;
+    float t = -nearP.z / dir.z;
+    float2 worldXY = nearP.xy + dir.xy * t;
+
+    float3 worldPos = float3(worldXY, 0.0);
+
+    float4 clipPos = frame.viewProj * float4(worldPos, 1.0);
+    float tableDepth = clipPos.z / clipPos.w + 0.0004;
+
+    for (uint i = 0; i < holeCounts.count; i++) {
+        float2 holeCenter = holes[i].position_radius.xy;
+        float holeR = holes[i].position_radius.w * 0.76;
+        float dist = length(worldXY - holeCenter);
+        if (dist < holeR) {
+            tableDepth = 1.0;
+            break;
+        }
+    }
+
+    float levelSeed = frame.timeDrag.z;
     float3 worldN = float3(0.0, 0.0, 1.0);
     
-    float3 baseColor = woodTexture(uv, worldXY);
+    float3 baseColor = woodTexture(uv, worldXY, levelSeed);
     
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - worldPos);
@@ -236,7 +333,10 @@ fragment float4 tableFragment(VSOut in [[stage_in]],
     float ambient = 0.15;
     c += baseColor * ambient;
     
-    return float4(c, 1.0);
+    TableOut out;
+    out.color = float4(c, 1.0);
+    out.depth = tableDepth;
+    return out;
 }
 
 struct HoleIn {
@@ -248,6 +348,8 @@ struct HoleOut {
     float4 position [[position]];
     float3 normal;
     float3 worldPos;
+    float highlight;
+    float holeId;
 };
 
 vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
@@ -260,10 +362,15 @@ vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
     float3 lp = vertices[vid].position * radius;
     float3 wp = float3(inst.position_radius.x + lp.x, inst.position_radius.y + lp.y, lp.z);
 
+    float hlIdx = frame.ambientColor.w;
+    float isHighlight = (hlIdx >= 0.0 && abs(float(iid) - hlIdx) < 0.5) ? 1.0 : 0.0;
+
     HoleOut o;
     o.worldPos = wp;
     o.position = frame.viewProj * float4(wp, 1.0);
     o.normal = normalize(vertices[vid].normal);
+    o.highlight = isHighlight;
+    o.holeId = float(iid);
     return o;
 }
 
@@ -274,15 +381,57 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
 
-    float3 topCol = float3(0.90, 0.92, 0.97);
-    float3 wallCol = float3(0.70, 0.74, 0.82);
+    float levelSeed = frame.timeDrag.z;
+    float matSeed = hash21(float2(levelSeed * 1.37, 0.0));
+
+    float3 topCol, wallCol;
+    float specPower, specStrength;
+
+    if (matSeed < 0.2) {
+        topCol  = float3(0.90, 0.92, 0.97);
+        wallCol = float3(0.70, 0.74, 0.82);
+        specPower = 48.0; specStrength = 0.25;
+    } else if (matSeed < 0.4) {
+        topCol  = float3(0.78, 0.68, 0.48);
+        wallCol = float3(0.55, 0.45, 0.30);
+        specPower = 64.0; specStrength = 0.35;
+    } else if (matSeed < 0.6) {
+        topCol  = float3(0.35, 0.35, 0.38);
+        wallCol = float3(0.20, 0.20, 0.22);
+        specPower = 80.0; specStrength = 0.40;
+    } else if (matSeed < 0.8) {
+        topCol  = float3(0.92, 0.82, 0.55);
+        wallCol = float3(0.70, 0.58, 0.32);
+        specPower = 96.0; specStrength = 0.45;
+    } else {
+        topCol  = float3(0.72, 0.50, 0.42);
+        wallCol = float3(0.48, 0.30, 0.24);
+        specPower = 56.0; specStrength = 0.30;
+    }
+
+    float perHole = hash21(float2(in.holeId * 3.17, levelSeed * 2.31));
+    topCol  *= mix(0.92, 1.08, perHole);
+    wallCol *= mix(0.92, 1.08, perHole);
+
     float3 col = mix(wallCol, topCol, smoothstep(0.15, 0.65, n.z));
+
+    if (in.highlight > 0.5) {
+        float3 hlCol = float3(0.55, 0.85, 1.0);
+        col = mix(col, hlCol, 0.6);
+    }
 
     float ndl = saturate(dot(n, l));
     float3 h = normalize(l + v);
     float ndh = saturate(dot(n, h));
-    float spec = pow(ndh, 32.0) * 0.18;
-    float3 lit = col * (0.25 + 0.75 * ndl) + float3(spec);
+    float nv = saturate(dot(n, v));
+    float fresnel = pow(1.0 - nv, 4.0);
+    float spec = pow(ndh, specPower) * specStrength * (0.3 + 0.7 * fresnel);
+    float3 specCol = mix(col, float3(1.0), 0.5) * spec;
+    float3 lit = col * (0.22 + 0.78 * ndl) + specCol;
+
+    if (in.highlight > 0.5) {
+        lit += float3(0.08, 0.15, 0.22);
+    }
 
     float shadow = 1.0;
     if (shadowMap.get_width() > 0) {

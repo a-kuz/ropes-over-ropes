@@ -14,6 +14,7 @@ extension Renderer {
                     Self.logger.info("Rope \(ropeIndex) is untangled — fading out")
                     startFadeOut(ropeIndex: ropeIndex)
                     Haptics.medium()
+                    SoundPlayer.playRopeVanish()
                     removed = true
                     break
                 }
@@ -28,25 +29,42 @@ extension Renderer {
         if allDone {
             Haptics.success()
             onLevelComplete?()
-            // Delay next level so victory animation shows
-            nextLevelTimer = 1.2
         }
     }
 
     /// Start fade-out animation. Actual deactivation happens when fadeOut reaches 1.0.
     private func startFadeOut(ropeIndex: Int) {
         guard let sim = simulator, sim.bands.indices.contains(ropeIndex) else { return }
-        sim.bands[ropeIndex].fadeOut = 0.001  // trigger fade
 
-        // Free holes immediately so other ropes can use them
-        let startHoleIndex = ropes[ropeIndex].startHole
-        let endHoleIndex = ropes[ropeIndex].endHole
-        if startHoleIndex >= 0 && startHoleIndex < holeOccupied.count {
-            holeOccupied[startHoleIndex] = false
+        let pinS = sim.bands[ropeIndex].pinStart
+        let pinE = sim.bands[ropeIndex].pinEnd
+        let holeS = pinS ?? (ropes[ropeIndex].startHole >= 0 ? ropes[ropeIndex].startHole : nil)
+        let holeE = pinE ?? (ropes[ropeIndex].endHole >= 0 ? ropes[ropeIndex].endHole : nil)
+
+        let suckTarget: Int
+        let suckFromEnd: Int
+        if let s = holeS {
+            suckTarget = s
+            suckFromEnd = 1
+        } else if let e = holeE {
+            suckTarget = e
+            suckFromEnd = 0
+        } else {
+            suckTarget = 0
+            suckFromEnd = 1
         }
-        if endHoleIndex >= 0 && endHoleIndex < holeOccupied.count {
-            holeOccupied[endHoleIndex] = false
-        }
+
+        sim.bands[ropeIndex].suckHole = suckTarget
+        sim.bands[ropeIndex].suckFromEnd = suckFromEnd
+        sim.bands[ropeIndex].suckConsumed = 0
+        sim.bands[ropeIndex].fadeOut = 0.001
+        sim.bands[ropeIndex].pinStart = nil
+        sim.bands[ropeIndex].pinEnd = nil
+
+        let sh = ropes[ropeIndex].startHole
+        let eh = ropes[ropeIndex].endHole
+        if sh >= 0 && sh < holeOccupied.count { holeOccupied[sh] = false }
+        if eh >= 0 && eh < holeOccupied.count { holeOccupied[eh] = false }
         ropes[ropeIndex].startHole = -1
         ropes[ropeIndex].endHole = -1
     }

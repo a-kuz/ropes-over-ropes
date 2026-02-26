@@ -63,6 +63,49 @@ struct ContentView: View {
                     .padding(.trailing, 8)
 
                     Button(action: {
+                        gameController.profilerActive.toggle()
+                    }) {
+                        Image(systemName: gameController.profilerActive ? "gauge.open.with.lines.needle.84percent.exclamation" : "gauge.open.with.lines.needle.33percent")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(gameController.profilerActive ? .red : .white)
+                            .frame(width: 44, height: 44)
+                            .background(gameController.profilerActive ? Color.red.opacity(0.3) : Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .padding(.top, 50)
+                    .padding(.trailing, 8)
+
+                    Button(action: {
+                        gameController.undo()
+                    }) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(gameController.canUndo ? .white : .white.opacity(0.3))
+                            .frame(width: 44, height: 44)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .disabled(!gameController.canUndo)
+                    #if os(macOS)
+                    .keyboardShortcut("z", modifiers: .command)
+                    #endif
+                    .padding(.top, 50)
+                    .padding(.trailing, 8)
+
+                    Button(action: {
+                        gameController.frictionSoundEnabled.toggle()
+                    }) {
+                        Image(systemName: gameController.frictionSoundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(gameController.frictionSoundEnabled ? .white : .white.opacity(0.5))
+                            .frame(width: 44, height: 44)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .padding(.top, 50)
+                    .padding(.trailing, 8)
+
+                    Button(action: {
                         gameController.restartLevel()
                     }) {
                         Image(systemName: "arrow.counterclockwise")
@@ -127,17 +170,33 @@ struct ContentView: View {
                 Spacer()
             }
 
-            // Victory overlay
+            if gameController.profilerActive {
+                VStack {
+                    Spacer()
+                    Text(gameController.profilerSummary)
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundColor(.green)
+                        .padding(8)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(Color.black.opacity(0.75))
+                }
+                .ignoresSafeArea()
+            }
+
             if gameController.showLevelComplete {
-                Text("✓")
-                    .font(.system(size: 80, weight: .bold, design: .rounded))
-                    .foregroundColor(.white)
-                    .shadow(color: .white.opacity(0.6), radius: 20)
-                    .transition(.scale.combined(with: .opacity))
-                    .animation(.spring(response: 0.4, dampingFraction: 0.6), value: gameController.showLevelComplete)
+                Color.black.opacity(0.4)
+                    .ignoresSafeArea()
+                    .transition(.opacity)
+
+                VictoryOverlay(level: gameController.currentLevel) {
+                    let next = gameController.currentLevel + 1
+                    gameController.showLevelComplete = false
+                    gameController.loadLevel(next)
+                }
+                .transition(.scale(scale: 0.7).combined(with: .opacity))
             }
         }
-        .animation(.easeInOut(duration: 0.3), value: gameController.showLevelComplete)
+        .animation(.spring(response: 0.5, dampingFraction: 0.75), value: gameController.showLevelComplete)
         .overlay(alignment: .bottom) {
             if let msg = dumpMessage {
                 Text("Saved: \(msg)")
@@ -159,7 +218,9 @@ struct ContentView: View {
         .animation(.easeInOut(duration: 0.3), value: dumpMessage)
         .alert("Go to Level", isPresented: $showLevelPicker) {
             TextField("Level number", text: $levelInput)
+                #if os(iOS)
                 .keyboardType(.numberPad)
+                #endif
             Button("Go") {
                 if let id = Int(levelInput), id >= 1 {
                     gameController.loadLevel(id)
@@ -239,7 +300,9 @@ private struct ParamRow: View {
                 .frame(width: 58)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 10, design: .monospaced))
+                #if os(iOS)
                 .keyboardType(.decimalPad)
+                #endif
                 .onAppear { textValue = String(format: format, value) }
                 .onSubmit { applyText() }
                 .onChange(of: isEditing) { _, editing in
@@ -283,7 +346,9 @@ private struct ParamRowInt: View {
                 .frame(width: 42)
                 .textFieldStyle(.roundedBorder)
                 .font(.system(size: 10, design: .monospaced))
+                #if os(iOS)
                 .keyboardType(.numberPad)
+                #endif
                 .onAppear { textValue = "\(Int(value))" }
                 .onSubmit { applyText() }
                 .onChange(of: isEditing) { _, editing in
@@ -297,5 +362,127 @@ private struct ParamRowInt: View {
             value = Float(min(max(parsed, range.lowerBound), range.upperBound))
         }
         textValue = "\(Int(value))"
+    }
+}
+
+private struct ConfettiPiece: Identifiable {
+    let id: Int
+    let x: CGFloat
+    let color: Color
+    let width: CGFloat
+    let height: CGFloat
+    let rotation: Double
+    let delay: Double
+    let drift: CGFloat
+    let duration: Double
+}
+
+private struct VictoryOverlay: View {
+    let level: Int
+    let onNext: () -> Void
+
+    @State private var titleScale: CGFloat = 0.3
+    @State private var titleOpacity: Double = 0
+    @State private var buttonOffset: CGFloat = 30
+    @State private var buttonOpacity: Double = 0
+    @State private var confettiLaunched = false
+
+    private let confetti: [ConfettiPiece] = {
+        let colors: [Color] = [
+            .red, .orange, .yellow, .green, .blue, .purple, .pink,
+            Color(red: 1, green: 0.4, blue: 0.7),
+            Color(red: 0.3, green: 0.9, blue: 1),
+            Color(red: 1, green: 0.85, blue: 0.2),
+        ]
+        return (0..<40).map { i in
+            let sz = CGFloat.random(in: 4...10)
+            return ConfettiPiece(
+                id: i,
+                x: CGFloat.random(in: 0.05...0.95),
+                color: colors[i % colors.count],
+                width: sz,
+                height: sz * CGFloat.random(in: 0.5...1.5),
+                rotation: Double.random(in: 0...360),
+                delay: Double.random(in: 0...0.4),
+                drift: CGFloat.random(in: -30...30),
+                duration: Double.random(in: 1.8...3.0)
+            )
+        }
+    }()
+
+    var body: some View {
+        ZStack {
+            GeometryReader { geo in
+                ForEach(confetti) { piece in
+                    RoundedRectangle(cornerRadius: piece.width * 0.2)
+                        .fill(piece.color)
+                        .frame(width: piece.width, height: piece.height)
+                        .rotationEffect(.degrees(confettiLaunched ? piece.rotation + 720 : piece.rotation))
+                        .position(
+                            x: piece.x * geo.size.width + (confettiLaunched ? piece.drift : 0),
+                            y: confettiLaunched ? geo.size.height + 40 : -20
+                        )
+                        .opacity(confettiLaunched ? 0 : 1)
+                        .animation(
+                            .easeIn(duration: piece.duration).delay(piece.delay),
+                            value: confettiLaunched
+                        )
+                }
+            }
+            .allowsHitTesting(false)
+
+            VStack(spacing: 24) {
+                Text("Level \(level)")
+                    .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .foregroundColor(.white)
+                    .shadow(color: .white.opacity(0.4), radius: 16)
+                    .scaleEffect(titleScale)
+                    .opacity(titleOpacity)
+
+                Text("completed!")
+                    .font(.system(size: 24, weight: .medium, design: .rounded))
+                    .foregroundColor(.white.opacity(0.8))
+                    .scaleEffect(titleScale)
+                    .opacity(titleOpacity)
+
+                Button(action: onNext) {
+                    HStack(spacing: 10) {
+                        Text("Level \(level + 1)")
+                            .font(.system(size: 21, weight: .bold, design: .rounded))
+                        Image(systemName: "arrow.right")
+                            .font(.system(size: 17, weight: .bold))
+                    }
+                    .foregroundColor(.white)
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 15)
+                    .background(
+                        Capsule()
+                            .fill(
+                                LinearGradient(
+                                    colors: [Color(red: 0.35, green: 0.6, blue: 1.0), Color(red: 0.5, green: 0.35, blue: 0.95)],
+                                    startPoint: .leading,
+                                    endPoint: .trailing
+                                )
+                            )
+                    )
+                    .shadow(color: Color(red: 0.4, green: 0.4, blue: 1.0).opacity(0.5), radius: 12, y: 4)
+                }
+                .offset(y: buttonOffset)
+                .opacity(buttonOpacity)
+            }
+        }
+        .onAppear {
+            withAnimation(.spring(response: 0.45, dampingFraction: 0.6)) {
+                titleScale = 1.0
+                titleOpacity = 1.0
+            }
+            withAnimation(.easeOut(duration: 0.45).delay(0.2)) {
+                buttonOffset = 0
+                buttonOpacity = 1.0
+            }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                confettiLaunched = true
+            }
+        }
     }
 }

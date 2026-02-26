@@ -2,6 +2,7 @@ import simd
 
 struct FrameUniforms {
     var viewProj: simd_float4x4
+    var invViewProj: simd_float4x4
     var lightViewProj: simd_float4x4
     var lightDirIntensity: SIMD4<Float>
     var ambientColor: SIMD4<Float>

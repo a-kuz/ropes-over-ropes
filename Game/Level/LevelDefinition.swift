@@ -28,24 +28,44 @@ struct LevelDefinition: Codable {
         var simd: SIMD3<Float> { SIMD3<Float>(redChannel, greenChannel, blueChannel) }
     }
 
+    struct CrossSectionDef: Codable {
+        let type: String
+        let width: Float?
+        let height: Float?
+
+        func toCrossSection(fallbackRadius: Float) -> CrossSection {
+            switch type {
+            case "rectangular":
+                let w = width ?? fallbackRadius * 2
+                let h = height ?? fallbackRadius * 0.7
+                return .rectangular(width: w, height: h)
+            default:
+                return .circular(radius: fallbackRadius)
+            }
+        }
+    }
+
     struct Rope: Codable {
         let startHole: Int
         let endHole: Int
         let color: Color
         let radius: Float
+        let crossSectionDef: CrossSectionDef?
 
         enum CodingKeys: String, CodingKey {
             case startHole
             case endHole
             case color
             case radius
+            case crossSectionDef = "crossSection"
         }
 
-        init(startHole: Int, endHole: Int, color: Color, radius: Float) {
+        init(startHole: Int, endHole: Int, color: Color, radius: Float, crossSectionDef: CrossSectionDef? = nil) {
             self.startHole = startHole
             self.endHole = endHole
             self.color = color
             self.radius = radius
+            self.crossSectionDef = crossSectionDef
         }
 
         init(from decoder: Decoder) throws {
@@ -53,6 +73,7 @@ struct LevelDefinition: Codable {
             startHole = try container.decode(Int.self, forKey: .startHole)
             endHole = try container.decode(Int.self, forKey: .endHole)
             color = try container.decode(Color.self, forKey: .color)
+            crossSectionDef = try container.decodeIfPresent(CrossSectionDef.self, forKey: .crossSectionDef)
             if let radius = try? container.decode(Float.self, forKey: .radius) {
                 self.radius = radius
             } else {
@@ -63,6 +84,10 @@ struct LevelDefinition: Codable {
             }
         }
         
+        var crossSection: CrossSection {
+            crossSectionDef?.toCrossSection(fallbackRadius: radius) ?? .circular(radius: radius)
+        }
+
         private struct AnyCodingKey: CodingKey {
             var stringValue: String
             var intValue: Int?

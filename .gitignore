@@ -112,5 +112,8 @@ Temporary Items
 Untitled*
 
 # XcodeGen generated files
-UzlsFour.xcodeproj/project.pbxproj
-UzlsFour.xcodeproj/project.xcworkspace/contents.xcworkspacedata
+UzlsFour.xcodeproj
+UzlsFour.xcodeproj
+UzlsFour.xcodeproj/xcuserdata/alexsandrkuznetsov.xcuserdatad/xcschemes/xcschememanagement.plist
+cross/target
+cross/node_modules
