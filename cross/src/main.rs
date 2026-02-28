@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::sync::Arc;
 use web_time::Instant;
 use winit::application::ApplicationHandler;
@@ -8,58 +9,21 @@ use winit::window::{Window, WindowId};
 use uzls_cross::level::definition::LevelDefinition;
 use uzls_cross::level::generator;
 use uzls_cross::renderer::frame_types::RopeVertex;
-use uzls_cross::renderer::gpu::GpuRenderer;
+use uzls_cross::renderer::gpu::{GpuRenderer, GpuTimings};
 use uzls_cross::renderer::rope_mesh;
 use uzls_cross::simulation::verlet::{Snapshot, VerletSimulator};
 use uzls_cross::input;
+use uzls_cross::input::DragResult;
+use uzls_cross::audio::AudioPlayer;
+use uzls_cross::storage::{save_level_to_storage, load_level_from_storage};
+use uzls_cross::hud::{self, HudAction, ProfilingSnapshot, render_mode_scale};
+use uzls_cross::celebration::{self, CelebrationBand, CameraSnapshot};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
 
 #[cfg(target_arch = "wasm32")]
 type RendererCell = std::rc::Rc<std::cell::RefCell<Option<GpuRenderer>>>;
-
-#[cfg(target_arch = "wasm32")]
-fn save_level_to_storage(level_id: usize) {
-    let storage: Option<web_sys::Storage> = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten());
-    if let Some(s) = storage {
-        let _ = s.set_item("uzls_level", &level_id.to_string());
-    }
-}
-
-#[cfg(target_arch = "wasm32")]
-fn load_level_from_storage() -> Option<usize> {
-    let storage: Option<web_sys::Storage> = web_sys::window()
-        .and_then(|w| w.local_storage().ok().flatten());
-    let val: Option<String> = storage
-        .and_then(|s| s.get_item("uzls_level").ok().flatten());
-    val.and_then(|v| v.parse::<usize>().ok())
-        .filter(|&v| v >= 1)
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_file_path() -> Option<std::path::PathBuf> {
-    dirs::data_local_dir().map(|d| d.join("uzls4").join("save.txt"))
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn save_level_to_storage(level_id: usize) {
-    if let Some(path) = save_file_path() {
-        if let Some(parent) = path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        let _ = std::fs::write(&path, level_id.to_string());
-    }
-}
-
-#[cfg(not(target_arch = "wasm32"))]
-fn load_level_from_storage() -> Option<usize> {
-    save_file_path()
-        .and_then(|p| std::fs::read_to_string(p).ok())
-        .and_then(|s| s.trim().parse::<usize>().ok())
-        .filter(|&v| v >= 1)
-}
 
 struct UndoEntry {
     simulator_snapshot: Snapshot,
@@ -96,10 +60,38 @@ struct App {
     wants_restart: bool,
     wants_undo: bool,
     undo_stack: Vec<UndoEntry>,
-    table_mode: u32,
+    audio: Option<AudioPlayer>,
+    victory_sound_played: bool,
+    celebration_active: bool,
+    celebration_bands: Vec<CelebrationBand>,
+    pre_victory_camera: Option<CameraSnapshot>,
+    move_count: u32,
+    min_moves: u32,
+    render_mode: u8,
+    cel_mode: bool,
+    downscaled: bool,
+    low_fps_frames: u32,
+    active_touches: HashMap<u64, (f32, f32)>,
+    touch_camera_active: bool,
     #[cfg(target_arch = "wasm32")]
     pending_renderer: Option<RendererCell>,
     init_done: bool,
+    prof_physics_ms: f32,
+    prof_mesh_ms: f32,
+    prof_egui_ms: f32,
+    prof_frame_ms: f32,
+    prof_check_win_ms: f32,
+    prof_shadow_segs_ms: f32,
+    prof_submit_ms: f32,
+    prof_celebration_ms: f32,
+    prof_gpu: GpuTimings,
+    prof_show: bool,
+    prof_rope_verts: u32,
+    prof_rope_tris: u32,
+    #[cfg(not(target_arch = "wasm32"))]
+    prof_writer: Option<std::io::BufWriter<std::fs::File>>,
+    prof_frame_num: u64,
+    prof_events: Vec<&'static str>,
 }
 
 impl App {
@@ -133,10 +125,38 @@ impl App {
             wants_restart: false,
             wants_undo: false,
             undo_stack: Vec::new(),
-            table_mode: 1,
+            audio: AudioPlayer::new(),
+            victory_sound_played: false,
+            celebration_active: false,
+            celebration_bands: Vec::new(),
+            pre_victory_camera: None,
+            move_count: 0,
+            min_moves: 1,
+            render_mode: 0,
+            cel_mode: false,
+            downscaled: false,
+            low_fps_frames: 0,
+            active_touches: HashMap::new(),
+            touch_camera_active: false,
             #[cfg(target_arch = "wasm32")]
             pending_renderer: None,
             init_done: false,
+            prof_physics_ms: 0.0,
+            prof_mesh_ms: 0.0,
+            prof_egui_ms: 0.0,
+            prof_frame_ms: 0.0,
+            prof_check_win_ms: 0.0,
+            prof_shadow_segs_ms: 0.0,
+            prof_submit_ms: 0.0,
+            prof_celebration_ms: 0.0,
+            prof_gpu: GpuTimings::default(),
+            prof_show: false,
+            prof_rope_verts: 0,
+            prof_rope_tris: 0,
+            #[cfg(not(target_arch = "wasm32"))]
+            prof_writer: None,
+            prof_frame_num: 0,
+            prof_events: Vec::new(),
         }
     }
 
@@ -149,7 +169,7 @@ impl App {
         let level = uzls_cross::level::loader::load_embedded(level_id)
             .unwrap_or_else(|| generator::generate(level_id as u32));
 
-        let hole_positions: Vec<glam::Vec2> = level.holes.iter().map(|h| h.to_vec2()).collect();
+        let hole_positions = level.hole_positions();
         let mut sim = VerletSimulator::new(hole_positions.clone(), level.hole_radius);
         sim.particle_count = level.particles_per_rope;
 
@@ -220,11 +240,22 @@ impl App {
             fit_camera(&mut renderer.camera, &hole_positions, level.hole_radius, aspect);
         }
 
+        self.min_moves = uzls_cross::level::solver::min_moves_for_level(level_id);
+
         self.simulator = Some(sim);
         self.level = Some(level);
         self.settle_check_timer = None;
         self.next_level_timer = None;
         self.victory_time = 0.0;
+        self.victory_sound_played = false;
+        self.celebration_active = false;
+        self.celebration_bands.clear();
+        self.move_count = 0;
+        if let Some(snap) = self.pre_victory_camera.take() {
+            if let Some(r) = &mut self.renderer {
+                snap.restore(&mut r.camera);
+            }
+        }
     }
 
     fn push_undo_state(&mut self) {
@@ -244,9 +275,122 @@ impl App {
             }
             self.rope_endpoints = entry.rope_endpoints;
             self.hole_occupied = entry.hole_occupied;
+            self.move_count = self.move_count.saturating_sub(1);
             self.drag_state = None;
             self.highlight_hole = -1;
             self.settle_check_timer = None;
+        }
+    }
+
+    fn try_begin_drag(&mut self, screen_pos: (f32, f32)) {
+        let result = {
+            let renderer = match &self.renderer { Some(r) => r, None => return };
+            let level = match &self.level { Some(l) => l, None => return };
+            let sim = match &self.simulator { Some(s) => s, None => return };
+
+            let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+            let hole_positions = level.hole_positions();
+            let hole_radius = level.hole_radius;
+            let endpoint_z = |rope: usize, end: usize| -> f32 { sim.endpoint_z(rope, end) };
+
+            input::begin_drag_action(
+                screen_pos, vp, &renderer.camera, &hole_positions,
+                &self.rope_endpoints, &endpoint_z, hole_radius,
+            )
+        };
+
+        if let Some((drag, hole_to_free)) = result {
+            self.push_undo_state();
+            if hole_to_free < self.hole_occupied.len() {
+                self.hole_occupied[hole_to_free] = false;
+            }
+            if let Some(renderer) = &self.renderer {
+                let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+                let world = input::screen_to_world(screen_pos, vp, &renderer.camera);
+                if let Some(sim) = &mut self.simulator {
+                    sim.begin_drag(drag.rope_index, drag.end_index, world);
+                }
+            }
+            self.drag_state = Some(drag);
+            self.prof_events.push("drag_start");
+        }
+    }
+
+    fn finish_drag(&mut self, screen_pos: (f32, f32)) {
+        self.highlight_hole = -1;
+        let drag = match self.drag_state.take() { Some(d) => d, None => return };
+        let renderer = match &self.renderer { Some(r) => r, None => return };
+        let level = match &self.level { Some(l) => l, None => return };
+
+        let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+        let hole_positions = level.hole_positions();
+
+        match input::end_drag_action(
+            &drag, screen_pos, vp, &renderer.camera,
+            &hole_positions, &self.hole_occupied, level.hole_radius,
+        ) {
+            DragResult::Snapped { hole, moved } => {
+                if let Some(sim) = &mut self.simulator { sim.end_drag(hole); }
+                if drag.end_index == 0 {
+                    self.rope_endpoints[drag.rope_index].0 = hole;
+                } else {
+                    self.rope_endpoints[drag.rope_index].1 = hole;
+                }
+                if hole < self.hole_occupied.len() {
+                    self.hole_occupied[hole] = true;
+                }
+                if moved {
+                    self.move_count += 1;
+                    if let Some(audio) = &self.audio { audio.play_snap(); }
+                }
+                self.settle_check_timer = Some(0.5);
+                self.prof_events.push("drag_snap");
+            }
+            DragResult::Cancelled => {
+                if let Some(sim) = &mut self.simulator { sim.cancel_drag(); }
+                if drag.end_index == 0 {
+                    self.rope_endpoints[drag.rope_index].0 = drag.original_hole_index;
+                } else {
+                    self.rope_endpoints[drag.rope_index].1 = drag.original_hole_index;
+                }
+                if drag.original_hole_index < self.hole_occupied.len() {
+                    self.hole_occupied[drag.original_hole_index] = true;
+                }
+                self.undo_stack.pop();
+                self.settle_check_timer = Some(0.5);
+                self.prof_events.push("drag_cancel");
+            }
+        }
+    }
+
+    fn cancel_drag(&mut self) {
+        let drag = match self.drag_state.take() { Some(d) => d, None => return };
+        self.highlight_hole = -1;
+        if let Some(sim) = &mut self.simulator { sim.cancel_drag(); }
+        if drag.end_index == 0 {
+            self.rope_endpoints[drag.rope_index].0 = drag.original_hole_index;
+        } else {
+            self.rope_endpoints[drag.rope_index].1 = drag.original_hole_index;
+        }
+        if drag.original_hole_index < self.hole_occupied.len() {
+            self.hole_occupied[drag.original_hole_index] = true;
+        }
+        self.undo_stack.pop();
+    }
+
+    fn update_drag_highlight(&mut self, screen_pos: (f32, f32)) {
+        if self.drag_state.is_none() { return; }
+        let renderer = match &self.renderer { Some(r) => r, None => return };
+        let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+        let world = input::screen_to_world(screen_pos, vp, &renderer.camera);
+        if let Some(sim) = &mut self.simulator {
+            sim.update_drag(world);
+        }
+        if let Some(level) = &self.level {
+            let hole_positions = level.hole_positions();
+            self.highlight_hole = input::find_snap_hole(
+                world, &hole_positions, &self.hole_occupied, level.hole_radius,
+            ).map(|i| i as i32).unwrap_or(-1);
         }
     }
 
@@ -264,10 +408,12 @@ impl App {
         }
 
         if let Some(lvl) = self.pending_level.take() {
+            self.prof_events.push("level_load");
             self.load_level(lvl);
         }
         if self.wants_restart {
             self.wants_restart = false;
+            self.prof_events.push("restart");
             let lvl = self.current_level_id;
             self.load_level(lvl);
         }
@@ -277,21 +423,47 @@ impl App {
         }
 
         let now = Instant::now();
-        let dt = self
+        let raw_dt = self
             .last_instant
             .map(|prev| now.duration_since(prev).as_secs_f32())
-            .unwrap_or(1.0 / 60.0)
-            .min(1.0 / 15.0);
+            .unwrap_or(1.0 / 60.0);
+        let dt = raw_dt.min(1.0 / 15.0);
         self.last_instant = Some(now);
         self.time += dt;
 
-        let instant_fps = 1.0 / dt.max(0.0001);
+        let instant_fps = 1.0 / raw_dt.max(0.0001);
         self.fps = if self.fps == 0.0 { instant_fps } else { self.fps * 0.95 + instant_fps * 0.05 };
 
+        if self.render_mode >= 1 && self.drag_state.is_some() {
+            if self.fps < 30.0 {
+                self.low_fps_frames += 1;
+                if self.low_fps_frames > 5 && !self.downscaled {
+                    self.downscaled = true;
+                    if let Some(r) = &mut self.renderer {
+                        r.set_render_scale(0.5);
+                    }
+                    self.prof_events.push("downscale");
+                }
+            } else {
+                self.low_fps_frames = 0;
+            }
+        }
+        if self.downscaled && self.drag_state.is_none() {
+            self.downscaled = false;
+            self.low_fps_frames = 0;
+            if let Some(r) = &mut self.renderer {
+                r.set_render_scale(render_mode_scale(self.render_mode));
+            }
+            self.prof_events.push("upscale");
+        }
+
+        let t_physics = Instant::now();
         if let Some(sim) = &mut self.simulator {
             sim.update(dt);
         }
+        let physics_elapsed = Instant::now().duration_since(t_physics).as_secs_f32() * 1000.0;
 
+        let t_check_win = Instant::now();
         if let Some(ref mut timer) = self.settle_check_timer {
             *timer -= dt;
             if *timer <= 0.0 {
@@ -299,17 +471,11 @@ impl App {
                 self.check_win();
             }
         }
+        let check_win_elapsed = Instant::now().duration_since(t_check_win).as_secs_f32() * 1000.0;
 
-        if let Some(ref mut timer) = self.next_level_timer {
-            *timer -= dt;
-            if *timer <= 0.0 {
-                self.next_level_timer = None;
-                let next = self.current_level_id + 1;
-                self.load_level(next);
-            }
-        }
-
-        self.update_rope_buffers();
+        let t_mesh = Instant::now();
+        let shadow_segs_elapsed = self.update_rope_buffers();
+        let mesh_elapsed = Instant::now().duration_since(t_mesh).as_secs_f32() * 1000.0 - shadow_segs_elapsed;
 
         let window = match &self.window {
             Some(w) => w.clone(),
@@ -325,20 +491,69 @@ impl App {
             sim.bands.iter().any(|b| b.active && b.fade_out > 0.0)
         });
         let is_victory = active_ropes == 0 && total_ropes > 0 && !any_sucking;
+        let mut celebration_elapsed = 0.0_f32;
         if is_victory {
             self.victory_time += dt;
+            if !self.victory_sound_played {
+                self.victory_sound_played = true;
+                if let Some(audio) = &self.audio {
+                    audio.play_firework(self.time);
+                }
+            }
+            if !self.celebration_active {
+                self.celebration_active = true;
+                self.prof_events.push("victory");
+                if let Some(level) = &self.level {
+                    let holes = level.hole_positions();
+                    self.celebration_bands = celebration::spawn_celebration_bands(
+                        &holes, level.ropes.len(), &self.rope_colors, &self.rope_radii,
+                    );
+                }
+                if let Some(r) = &self.renderer {
+                    self.pre_victory_camera = Some(CameraSnapshot::capture(&r.camera));
+                }
+            }
+            let t_celeb = Instant::now();
+            celebration::update_celebration(&mut self.celebration_bands, self.victory_time);
+            if let (Some(renderer), Some(snap)) = (&mut self.renderer, &self.pre_victory_camera) {
+                celebration::animate_victory_camera(&mut renderer.camera, snap, self.victory_time, dt);
+            }
+            celebration_elapsed = Instant::now().duration_since(t_celeb).as_secs_f32() * 1000.0;
         } else {
             self.victory_time = 0.0;
         }
         let victory_time = self.victory_time;
 
         let can_undo = !self.undo_stack.is_empty();
+        let render_mode = self.render_mode;
+        let cel_mode = self.cel_mode;
+        let prof_show = self.prof_show;
+        let draw_flags = self.renderer.as_ref().map(|r| r.draw_flags).unwrap_or_default();
+        let prof_data = ProfilingSnapshot {
+            physics_ms: self.prof_physics_ms,
+            mesh_ms: self.prof_mesh_ms,
+            egui_ms: self.prof_egui_ms,
+            frame_ms: self.prof_frame_ms,
+            check_win_ms: self.prof_check_win_ms,
+            shadow_segs_ms: self.prof_shadow_segs_ms,
+            submit_ms: self.prof_submit_ms,
+            celebration_ms: self.prof_celebration_ms,
+            gpu: self.prof_gpu.clone(),
+            rope_verts: self.prof_rope_verts,
+            rope_tris: self.prof_rope_tris,
+            skip_table: draw_flags.skip_table,
+            skip_holes: draw_flags.skip_holes,
+            skip_ropes: draw_flags.skip_ropes,
+            table_shadow_mode: draw_flags.table_shadow_mode,
+        };
+        let t_egui = Instant::now();
         let egui_output = if let Some(egui_state) = &mut self.egui_state {
             let ctx = egui_state.egui_ctx().clone();
             let raw_input = egui_state.take_egui_input(&window);
-            let mut hud_action = HudAction { go_to_level: None, restart: false, undo: false, cycle_table: false };
+            let mut hud_action = HudAction::default();
+            let min_moves = self.min_moves;
             let full_output = ctx.run(raw_input, |ctx| {
-                hud_action = draw_hud(ctx, level, fps, active_ropes, total_ropes, victory_time, can_undo);
+                hud_action = hud::draw_hud(ctx, level, fps, active_ropes, total_ropes, victory_time, can_undo, render_mode, self.move_count, min_moves, cel_mode, prof_show, &prof_data);
             });
             egui_state.handle_platform_output(&window, full_output.platform_output.clone());
             if let Some(lvl) = hud_action.go_to_level {
@@ -350,13 +565,33 @@ impl App {
             if hud_action.undo {
                 self.wants_undo = true;
             }
-            if hud_action.cycle_table {
-                self.table_mode = (self.table_mode + 1) % 4;
+            if hud_action.toggle_hd {
+                self.render_mode = (self.render_mode + 1) % 3;
+                self.downscaled = false;
+                self.low_fps_frames = 0;
+                if let Some(r) = &mut self.renderer {
+                    r.set_render_scale(render_mode_scale(self.render_mode));
+                }
+                self.prof_events.push(match self.render_mode {
+                    0 => "mode_sd",
+                    2 => "mode_uhd",
+                    _ => "mode_hd",
+                });
+            }
+            if hud_action.toggle_cel {
+                self.cel_mode = !self.cel_mode;
+                self.prof_events.push(if self.cel_mode { "cel_on" } else { "cel_off" });
+            }
+            if hud_action.toggle_prof {
+                self.prof_show = !self.prof_show;
+                #[cfg(not(target_arch = "wasm32"))]
+                self.toggle_prof_file();
             }
             Some((full_output, ctx))
         } else {
             None
         };
+        let egui_elapsed = Instant::now().duration_since(t_egui).as_secs_f32() * 1000.0;
 
         let renderer = match &mut self.renderer { Some(r) => r, None => return };
         let scale = window.scale_factor() as f32;
@@ -364,7 +599,7 @@ impl App {
 
         let level_seed = self.current_level_id as f32;
         renderer.highlight_hole = self.highlight_hole;
-        let mut frame = match renderer.begin_frame(self.time, self.drag_state.is_some(), victory_time, level_seed, self.table_mode) {
+        let mut frame = match renderer.begin_frame(self.time, self.drag_state.is_some(), victory_time, level_seed, self.render_mode as u32, self.cel_mode) {
             Some(f) => f,
             None => return,
         };
@@ -396,9 +631,85 @@ impl App {
             }
         }
 
+        let t_submit = Instant::now();
         renderer.end_frame(frame);
+        let submit_elapsed = Instant::now().duration_since(t_submit).as_secs_f32() * 1000.0;
+
+        let frame_elapsed = Instant::now().duration_since(now).as_secs_f32() * 1000.0;
+        let a = 0.9_f32;
+        self.prof_physics_ms = self.prof_physics_ms * a + physics_elapsed * (1.0 - a);
+        self.prof_mesh_ms = self.prof_mesh_ms * a + mesh_elapsed * (1.0 - a);
+        self.prof_egui_ms = self.prof_egui_ms * a + egui_elapsed * (1.0 - a);
+        self.prof_frame_ms = self.prof_frame_ms * a + frame_elapsed * (1.0 - a);
+        self.prof_check_win_ms = self.prof_check_win_ms * a + check_win_elapsed * (1.0 - a);
+        self.prof_shadow_segs_ms = self.prof_shadow_segs_ms * a + shadow_segs_elapsed * (1.0 - a);
+        self.prof_submit_ms = self.prof_submit_ms * a + submit_elapsed * (1.0 - a);
+        self.prof_celebration_ms = self.prof_celebration_ms * a + celebration_elapsed * (1.0 - a);
+        self.prof_gpu = renderer.gpu_timings.clone();
+        self.prof_frame_num += 1;
+
+        #[cfg(not(target_arch = "wasm32"))]
+        if let Some(w) = &mut self.prof_writer {
+            use std::io::Write;
+            let gpu = &renderer.gpu_timings;
+            let events = if self.prof_events.is_empty() {
+                String::new()
+            } else {
+                self.prof_events.join(";")
+            };
+            let rscale = renderer.render_scale;
+            let rmode = self.render_mode;
+            let dragging = if self.drag_state.is_some() { 1 } else { 0 };
+            let (sw, sh) = renderer.surface_size();
+            let rw = ((sw as f32 * rscale) as u32).max(1);
+            let rh = ((sh as f32 * rscale) as u32).max(1);
+            let df = &renderer.draw_flags;
+            let tsm_letter = match df.table_shadow_mode { 0 => "P", 1 => "L", _ => "N" };
+            let skip = format!("{}{}{}{}",
+                if df.skip_table { "T" } else { "" },
+                if df.skip_holes { "H" } else { "" },
+                if df.skip_ropes { "R" } else { "" },
+                tsm_letter,
+            );
+            let _ = writeln!(w,
+                "{},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{:.3},{},{},{},{:.2},{},{},{}x{},{},{}",
+                self.prof_frame_num,
+                frame_elapsed, physics_elapsed, mesh_elapsed, egui_elapsed,
+                check_win_elapsed, shadow_segs_elapsed, submit_elapsed, celebration_elapsed,
+                gpu.total_ms, gpu.shadow_ms, gpu.hdr_ms, gpu.bloom_ms,
+                self.prof_rope_verts, self.prof_rope_tris,
+                events,
+                rscale, rmode, dragging,
+                rw, rh,
+                skip,
+                df.table_shadow_mode,
+            );
+        }
+        self.prof_events.clear();
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    fn toggle_prof_file(&mut self) {
+        use std::io::Write;
+        if self.prof_show {
+            let ts = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_secs())
+                .unwrap_or(0);
+            let path = format!("profile_{}.csv", ts);
+            if let Ok(f) = std::fs::File::create(&path) {
+                let mut w = std::io::BufWriter::new(f);
+                let _ = writeln!(w, "frame,cpu_frame_ms,cpu_physics_ms,cpu_mesh_ms,cpu_egui_ms,cpu_check_win_ms,cpu_shadow_segs_ms,cpu_submit_ms,cpu_celebration_ms,gpu_total_ms,gpu_shadow_ms,gpu_hdr_ms,gpu_bloom_ms,rope_verts,rope_tris,event,render_scale,render_mode,dragging,render_size,skip,table_shadow_mode");
+                self.prof_writer = Some(w);
+                log::info!("profiling → {}", path);
+            }
+        } else {
+            if let Some(mut w) = self.prof_writer.take() {
+                let _ = w.flush();
+                log::info!("profiling file closed");
+            }
+        }
+    }
 }
 
 fn fit_camera(
@@ -428,189 +739,21 @@ fn fit_camera(
 
     let half_h_from_height = content_h * 0.5;
     let half_h_from_width = (content_w * 0.5) / aspect.max(0.01);
-    camera.ortho_half_height = half_h_from_height.max(half_h_from_width) * 1.2;
+    let required_half_h = half_h_from_height.max(half_h_from_width) * 1.2;
+    camera.ortho_half_height = required_half_h;
     camera.center = glam::Vec3::new(center_x, center_y, 0.0);
-}
 
-struct HudAction {
-    go_to_level: Option<usize>,
-    restart: bool,
-    undo: bool,
-    cycle_table: bool,
-}
-
-fn draw_hud(ctx: &egui::Context, level: usize, fps: u32, _active_ropes: usize, _total_ropes: usize, victory_time: f32, can_undo: bool) -> HudAction {
-    let mut action = HudAction { go_to_level: None, restart: false, undo: false, cycle_table: false };
-    let level_input_id = egui::Id::new("level_input_active");
-    let level_text_id = egui::Id::new("level_input_text");
-
-    let btn = |ui: &mut egui::Ui, text: &str| -> egui::Response {
-        ui.add(
-            egui::Button::new(
-                egui::RichText::new(text).color(egui::Color32::WHITE).size(18.0),
-            )
-            .fill(egui::Color32::from_black_alpha(140))
-            .corner_radius(22)
-            .min_size(egui::vec2(44.0, 44.0)),
-        )
-    };
-
-    egui::Area::new(egui::Id::new("level_badge"))
-        .fixed_pos(egui::pos2(12.0, 12.0))
-        .show(ctx, |ui| {
-            egui::Frame::none()
-                .fill(egui::Color32::from_black_alpha(140))
-                .corner_radius(10)
-                .inner_margin(egui::Margin { left: 14, right: 14, top: 8, bottom: 8 })
-                .show(ui, |ui| {
-                    ui.horizontal(|ui| {
-                        if btn(ui, "\u{25C0}").clicked() && level > 1 {
-                            action.go_to_level = Some(level - 1);
-                        }
-                        let mut editing: bool = ctx.data_mut(|d| *d.get_temp_mut_or(level_input_id, false));
-                        if editing {
-                            let mut text: String = ctx.data_mut(|d| d.get_temp_mut_or(level_text_id, String::new()).clone());
-                            let resp = ui.add(
-                                egui::TextEdit::singleline(&mut text)
-                                    .desired_width(50.0)
-                                    .font(egui::TextStyle::Heading)
-                            );
-                            ctx.data_mut(|d| d.insert_temp(level_text_id, text.clone()));
-                            if resp.lost_focus() || ui.input(|i| i.key_pressed(egui::Key::Enter)) {
-                                if let Ok(n) = text.trim().parse::<usize>() {
-                                    if n >= 1 { action.go_to_level = Some(n); }
-                                }
-                                editing = false;
-                                ctx.data_mut(|d| d.insert_temp(level_input_id, false));
-                            }
-                            if !resp.has_focus() {
-                                resp.request_focus();
-                            }
-                        } else {
-                            let label_resp = ui.add(
-                                egui::Label::new(
-                                    egui::RichText::new(format!("Level {}", level))
-                                        .color(egui::Color32::WHITE)
-                                        .size(18.0)
-                                        .strong(),
-                                ).sense(egui::Sense::click()),
-                            );
-                            if label_resp.clicked() {
-                                ctx.data_mut(|d| {
-                                    d.insert_temp(level_input_id, true);
-                                    d.insert_temp(level_text_id, level.to_string());
-                                });
-                            }
-                        }
-                        if btn(ui, "\u{25B6}").clicked() {
-                            action.go_to_level = Some(level + 1);
-                        }
-                    });
-                    ui.label(
-                        egui::RichText::new(format!("{} fps", fps))
-                            .color(egui::Color32::from_white_alpha(100))
-                            .size(11.0)
-                            .monospace(),
-                    );
-                });
-        });
-
-    egui::Area::new(egui::Id::new("top_buttons"))
-        .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 12.0))
-        .show(ctx, |ui| {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-                let undo_btn = ui.add_enabled(
-                    can_undo,
-                    egui::Button::new(
-                        egui::RichText::new("\u{21A9}")
-                            .color(if can_undo { egui::Color32::WHITE } else { egui::Color32::from_white_alpha(80) })
-                            .size(18.0),
-                    )
-                    .fill(egui::Color32::from_black_alpha(140))
-                    .corner_radius(22)
-                    .min_size(egui::vec2(44.0, 44.0)),
-                );
-                if undo_btn.clicked() {
-                    action.undo = true;
-                }
-                if btn(ui, "\u{27F3}").clicked() {
-                    action.restart = true;
-                }
-                if btn(ui, "\u{25A3}").clicked() {
-                    action.cycle_table = true;
-                }
-            });
-        });
-
-    if victory_time > 0.0 {
-        let appear_t = (victory_time / 0.4).min(1.0);
-        let bounce = if appear_t < 1.0 {
-            let t = appear_t;
-            let overshoot = 1.0 + (1.0 - t).powi(2) * 0.3 * (t * std::f32::consts::PI * 3.0).sin();
-            t * overshoot
-        } else {
-            1.0 + (victory_time * 2.5).sin() * 0.015
-        };
-        let alpha = (appear_t * 255.0).min(255.0) as u8;
-        let bg_alpha = (appear_t * 200.0).min(200.0) as u8;
-
-        let title_size = 32.0 * bounce;
-        let sub_size = 18.0 * bounce;
-        let btn_alpha = ((appear_t - 0.3).max(0.0) / 0.3).min(1.0);
-
-        egui::Area::new(egui::Id::new("victory"))
-            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, -20.0 * (1.0 - appear_t)))
-            .show(ctx, |ui| {
-                egui::Frame::none()
-                    .fill(egui::Color32::from_black_alpha(bg_alpha))
-                    .corner_radius(16)
-                    .inner_margin(egui::Margin { left: 32, right: 32, top: 20, bottom: 20 })
-                    .show(ui, |ui| {
-                        ui.vertical_centered(|ui| {
-                            ui.label(
-                                egui::RichText::new(format!("Level {}", level))
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha))
-                                    .size(title_size)
-                                    .strong(),
-                            );
-                            ui.label(
-                                egui::RichText::new("completed!")
-                                    .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, (alpha as f32 * 0.7) as u8))
-                                    .size(sub_size),
-                            );
-                            ui.add_space(8.0);
-                            if btn_alpha > 0.01 {
-                                let btn_color = egui::Color32::from_rgba_unmultiplied(100, 160, 255, (btn_alpha * 255.0) as u8);
-                                if ui.add(
-                                    egui::Button::new(
-                                        egui::RichText::new(format!("Level {} \u{25B6}", level + 1))
-                                            .color(egui::Color32::from_rgba_unmultiplied(255, 255, 255, (btn_alpha * 255.0) as u8))
-                                            .size(18.0)
-                                            .strong(),
-                                    )
-                                    .fill(btn_color)
-                                    .corner_radius(20)
-                                    .min_size(egui::vec2(140.0, 40.0)),
-                                ).clicked() {
-                                    action.go_to_level = Some(level + 1);
-                                }
-                            }
-                        });
-                    });
-            });
-
-        ctx.request_repaint();
-    }
-
-    action
+    let half_fov = (59.0f32 / 2.0).to_radians();
+    let dist_from_h = required_half_h / half_fov.tan();
+    let dist_from_w = (content_w * 0.5 * 1.2) / (half_fov.tan() * aspect.max(0.01));
+    camera.distance = dist_from_h.max(dist_from_w).max(1.0);
 }
 
 impl App {
-    fn update_rope_buffers(&mut self) {
+    fn update_rope_buffers(&mut self) -> f32 {
         let sim = match &self.simulator {
             Some(s) => s,
-            None => return,
+            None => return 0.0,
         };
 
         let mut all_vertices: Vec<RopeVertex> = Vec::new();
@@ -636,12 +779,14 @@ impl App {
             } else {
                 0.038
             };
+            let visual_radius = radius * 1.3;
 
             let rest_length = band.segment_length * (band.positions.len() as f32 - 1.0).max(1.0);
 
+            let prof_segs = if self.render_mode == 0 { 6 } else { 8 };
             let mesh = rope_mesh::build_rect(
                 &band.positions,
-                radius,
+                visual_radius,
                 color,
                 &[],
                 1.0,
@@ -654,6 +799,85 @@ impl App {
                 None,
                 band.fade_out,
                 rope_index,
+                prof_segs,
+            );
+
+            for idx in &mesh.indices {
+                all_indices.push(idx + base_vertex);
+            }
+            all_vertices.extend_from_slice(&mesh.vertices);
+            base_vertex += mesh.vertices.len() as u32;
+
+            if let Some(level) = &self.level {
+                let (start_hole, end_hole) = self.rope_endpoints[rope_index];
+                let dragging_start = self.drag_state.as_ref()
+                    .map_or(false, |d| d.rope_index == rope_index && d.end_index == 0);
+                let dragging_end = self.drag_state.as_ref()
+                    .map_or(false, |d| d.rope_index == rope_index && d.end_index == 1);
+                let hole_r = level.hole_radius;
+                let holes = &level.holes;
+
+                let start_pos = if dragging_start {
+                    band.positions.first().copied().unwrap_or(glam::Vec3::ZERO)
+                } else if start_hole < holes.len() {
+                    let hc = holes[start_hole].to_vec2();
+                    glam::Vec3::new(hc.x, hc.y, 0.0)
+                } else {
+                    glam::Vec3::ZERO
+                };
+                let plug_segs = if self.cel_mode { 8 } else { 20 };
+                if start_hole < holes.len() || dragging_start {
+                    let plug = rope_mesh::build_plug(
+                        start_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                    );
+                    for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                    all_vertices.extend_from_slice(&plug.vertices);
+                    base_vertex += plug.vertices.len() as u32;
+                }
+
+                let end_pos = if dragging_end {
+                    band.positions.last().copied().unwrap_or(glam::Vec3::ZERO)
+                } else if end_hole < holes.len() {
+                    let hc = holes[end_hole].to_vec2();
+                    glam::Vec3::new(hc.x, hc.y, 0.0)
+                } else {
+                    glam::Vec3::ZERO
+                };
+                if end_hole < holes.len() || dragging_end {
+                    let plug = rope_mesh::build_plug(
+                        end_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                    );
+                    for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                    all_vertices.extend_from_slice(&plug.vertices);
+                    base_vertex += plug.vertices.len() as u32;
+                }
+            }
+        }
+
+        for (ci, cband) in self.celebration_bands.iter().enumerate() {
+            if cband.positions.len() < 2 { continue; }
+            let color = glam::Vec3::from_array(cband.color);
+            let visual_radius = cband.radius * 1.3;
+            let rest_length = cband.segment_length * (cband.positions.len() as f32 - 1.0).max(1.0);
+            let cross_section = uzls_cross::level::definition::CrossSection::Circular { radius: cband.radius };
+
+            let prof_segs = if self.render_mode == 0 { 6 } else { 8 };
+            let mesh = rope_mesh::build_rect(
+                &cband.positions,
+                visual_radius,
+                color,
+                &[],
+                1.0,
+                &[],
+                1.0,
+                0.0,
+                &[],
+                rest_length,
+                cross_section,
+                None,
+                0.0,
+                1000 + ci,
+                prof_segs,
             );
 
             for idx in &mesh.indices {
@@ -663,48 +887,69 @@ impl App {
             base_vertex += mesh.vertices.len() as u32;
         }
 
-        let mut shadow_segs: Vec<uzls_cross::renderer::frame_types::ShadowSegment> = Vec::new();
-        for rope_index in 0..self.rope_endpoints.len() {
-            if rope_index >= sim.bands.len() || !sim.bands[rope_index].active {
-                continue;
-            }
-            let band = &sim.bands[rope_index];
-            if band.fade_out > 0.5 { continue; }
-            if self.rope_endpoints[rope_index].0 == usize::MAX { continue; }
+        let table_shadow_mode = self
+            .renderer
+            .as_ref()
+            .map(|r| r.draw_flags.table_shadow_mode)
+            .unwrap_or(0);
+        let need_shadow_segments = !self.cel_mode && (self.render_mode > 0 || table_shadow_mode == 1);
 
-            let radius = if rope_index < self.rope_radii.len() {
-                self.rope_radii[rope_index]
-            } else {
-                0.038
-            };
-            let pts = &band.positions;
-            if pts.len() < 2 { continue; }
-            for i in 0..pts.len() - 1 {
-                let az = pts[i].z;
-                let bz = pts[i+1].z;
-                if az <= 0.0 && bz <= 0.0 { continue; }
-                let mut a = pts[i];
-                let mut b = pts[i+1];
-                if a.z < 0.0 {
-                    let t = -a.z / (b.z - a.z).max(1e-6);
-                    a = a + (b - a) * t;
-                    a.z = 0.0;
-                } else if b.z < 0.0 {
-                    let t = -b.z / (a.z - b.z).max(1e-6);
-                    b = b + (a - b) * t;
-                    b.z = 0.0;
-                }
-                shadow_segs.push(uzls_cross::renderer::frame_types::ShadowSegment {
-                    ax: a.x, ay: a.y, az: a.z, radius,
-                    bx: b.x, by: b.y, bz: b.z, rope_id: rope_index as f32,
-                });
-            }
-        }
+        self.prof_rope_verts = all_vertices.len() as u32;
+        self.prof_rope_tris = all_indices.len() as u32 / 3;
 
         if let Some(renderer) = &mut self.renderer {
             renderer.update_rope_mesh(&all_vertices, &all_indices);
-            renderer.update_shadow_segments(&shadow_segs);
         }
+
+        let t_shadow_segs = Instant::now();
+        if need_shadow_segments {
+            let mut shadow_segs: Vec<uzls_cross::renderer::frame_types::ShadowSegment> = Vec::new();
+            for rope_index in 0..self.rope_endpoints.len() {
+                if rope_index >= sim.bands.len() || !sim.bands[rope_index].active {
+                    continue;
+                }
+                let band = &sim.bands[rope_index];
+                if band.fade_out > 0.5 { continue; }
+                if self.rope_endpoints[rope_index].0 == usize::MAX { continue; }
+
+                let radius = if rope_index < self.rope_radii.len() {
+                    self.rope_radii[rope_index]
+                } else {
+                    0.038
+                };
+                let pts = &band.positions;
+                if pts.len() < 2 { continue; }
+                let step = if pts.len() > 12 { 4 } else { 1 };
+                let mut i = 0;
+                while i < pts.len() - 1 {
+                    let next = (i + step).min(pts.len() - 1);
+                    let az = pts[i].z;
+                    let bz = pts[next].z;
+                    if az <= 0.0 && bz <= 0.0 { i = next; continue; }
+                    let mut a = pts[i];
+                    let mut b = pts[next];
+                    if a.z < 0.0 {
+                        let t = -a.z / (b.z - a.z).max(1e-6);
+                        a = a + (b - a) * t;
+                        a.z = 0.0;
+                    } else if b.z < 0.0 {
+                        let t = -b.z / (a.z - b.z).max(1e-6);
+                        b = b + (a - b) * t;
+                        b.z = 0.0;
+                    }
+                    shadow_segs.push(uzls_cross::renderer::frame_types::ShadowSegment {
+                        ax: a.x, ay: a.y, az: a.z, radius,
+                        bx: b.x, by: b.y, bz: b.z, rope_id: rope_index as f32,
+                    });
+                    i = next;
+                }
+            }
+
+            if let Some(renderer) = &mut self.renderer {
+                renderer.update_shadow_segments(&shadow_segs);
+            }
+        }
+        Instant::now().duration_since(t_shadow_segs).as_secs_f32() * 1000.0
     }
 
     fn check_win(&mut self) {
@@ -714,6 +959,10 @@ impl App {
         };
         let untangled = sim.find_untangled_ropes();
         if !untangled.is_empty() {
+            self.prof_events.push("untangle");
+            if let Some(audio) = &self.audio {
+                audio.play_vanish();
+            }
             for &rope_index in &untangled {
                 if let Some(sim) = &mut self.simulator {
                     if rope_index < sim.bands.len() {
@@ -737,10 +986,7 @@ impl App {
                 }
             }
 
-            let all_done = self.rope_endpoints.iter().all(|&(s, _)| s == usize::MAX);
-            if all_done {
-                self.next_level_timer = Some(1.5);
-            }
+            let _all_done = self.rope_endpoints.iter().all(|&(s, _)| s == usize::MAX);
         }
     }
 }
@@ -854,9 +1100,10 @@ impl ApplicationHandler for App {
     }
 
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
+        let is_touch = matches!(event, WindowEvent::Touch(_));
         if let Some(egui_state) = &mut self.egui_state {
             let resp = egui_state.on_window_event(&self.window.as_ref().unwrap(), &event);
-            if resp.consumed {
+            if resp.consumed && !is_touch {
                 return;
             }
         }
@@ -869,8 +1116,7 @@ impl ApplicationHandler for App {
                 if let Some(renderer) = &mut self.renderer {
                     renderer.resize(size.width, size.height);
                     if let Some(level) = &self.level {
-                        let hole_positions: Vec<glam::Vec2> =
-                            level.holes.iter().map(|h| h.to_vec2()).collect();
+                        let hole_positions = level.hole_positions();
                         let aspect = size.width as f32 / size.height.max(1) as f32;
                         fit_camera(&mut renderer.camera, &hole_positions, level.hole_radius, aspect);
                     }
@@ -885,41 +1131,53 @@ impl ApplicationHandler for App {
             WindowEvent::ModifiersChanged(modifiers) => {
                 self.shift_held = modifiers.state().shift_key();
             }
+            WindowEvent::KeyboardInput { event, .. } => {
+                if event.state == winit::event::ElementState::Pressed {
+                    if let winit::keyboard::PhysicalKey::Code(code) = event.physical_key {
+                        if code == winit::keyboard::KeyCode::KeyP {
+                            self.prof_show = !self.prof_show;
+                            #[cfg(not(target_arch = "wasm32"))]
+                            self.toggle_prof_file();
+                        }
+                        if let Some(r) = &mut self.renderer {
+                            match code {
+                                winit::keyboard::KeyCode::Digit1 => {
+                                    r.draw_flags.skip_table = !r.draw_flags.skip_table;
+                                    self.prof_events.push(if r.draw_flags.skip_table { "table_off" } else { "table_on" });
+                                }
+                                winit::keyboard::KeyCode::Digit2 => {
+                                    r.draw_flags.skip_holes = !r.draw_flags.skip_holes;
+                                    self.prof_events.push(if r.draw_flags.skip_holes { "holes_off" } else { "holes_on" });
+                                }
+                                winit::keyboard::KeyCode::Digit3 => {
+                                    r.draw_flags.skip_ropes = !r.draw_flags.skip_ropes;
+                                    self.prof_events.push(if r.draw_flags.skip_ropes { "ropes_off" } else { "ropes_on" });
+                                }
+                                winit::keyboard::KeyCode::Digit4 => {
+                                    r.draw_flags.table_shadow_mode = (r.draw_flags.table_shadow_mode + 1) % 3;
+                                    self.prof_events.push(match r.draw_flags.table_shadow_mode {
+                                        0 => "tshadow_pcf",
+                                        1 => "tshadow_planar",
+                                        _ => "tshadow_off",
+                                    });
+                                }
+                                _ => {}
+                            }
+                        }
+                    }
+                }
+            }
             WindowEvent::CursorMoved { position, .. } => {
                 let pos = (position.x as f32, position.y as f32);
                 if self.right_mouse_down || self.middle_mouse_down {
                     if let (Some(prev), Some(renderer)) = (self.pan_last_pos, &mut self.renderer) {
                         let (sw, sh) = renderer.surface_size();
-                        let aspect = sw as f32 / sh.max(1) as f32;
-                        let half_h = renderer.camera.ortho_half_height;
-                        let half_w = half_h * aspect;
-                        let dx = (pos.0 - prev.0) / sw as f32 * half_w * 2.0;
-                        let dy = (pos.1 - prev.1) / sh as f32 * half_h * 2.0;
-                        renderer.camera.center.x -= dx;
-                        renderer.camera.center.y += dy;
+                        input::apply_camera_pan(&mut renderer.camera, prev, pos, sw, sh);
                     }
                     self.pan_last_pos = Some(pos);
                 }
                 self.last_cursor_pos = pos;
-                if self.drag_state.is_some() {
-                    if let (Some(renderer), Some(sim)) =
-                        (&self.renderer, &mut self.simulator)
-                    {
-                        let world = input::screen_to_world(
-                            self.last_cursor_pos,
-                            (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32),
-                            &renderer.camera,
-                        );
-                        sim.update_drag(world);
-                        if let Some(level) = &self.level {
-                            let hole_positions: Vec<glam::Vec2> =
-                                level.holes.iter().map(|h| h.to_vec2()).collect();
-                            self.highlight_hole = input::find_snap_hole(
-                                world, &hole_positions, &self.hole_occupied, level.hole_radius,
-                            ).map(|i| i as i32).unwrap_or(-1);
-                        }
-                    }
-                }
+                self.update_drag_highlight(pos);
             }
             WindowEvent::MouseWheel { delta, .. } => {
                 let scroll = match delta {
@@ -976,133 +1234,91 @@ impl ApplicationHandler for App {
             } => {
                 match state {
                     winit::event::ElementState::Pressed => {
-                        if let Some(renderer) = &self.renderer {
-                            let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
-                            let world = input::screen_to_world(self.last_cursor_pos, vp, &renderer.camera);
-                            let level = match &self.level {
-                                Some(l) => l,
-                                None => return,
-                            };
-                            let hole_positions: Vec<glam::Vec2> =
-                                level.holes.iter().map(|h| h.to_vec2()).collect();
-                            let sim = match &self.simulator {
-                                Some(s) => s,
-                                None => return,
-                            };
-                            let endpoint_z = |rope: usize, end: usize| -> f32 {
-                                sim.endpoint_z(rope, end)
-                            };
-                            if let Some((rope_index, end_index, hole_index)) =
-                                input::find_nearest_endpoint(
-                                    world, &hole_positions, &self.rope_endpoints,
-                                    &endpoint_z, level.hole_radius,
-                                )
-                            {
-                                self.push_undo_state();
-                                if hole_index < self.hole_occupied.len() {
-                                    self.hole_occupied[hole_index] = false;
-                                }
-                                self.drag_state = Some(input::DragState {
-                                    rope_index, end_index, original_hole_index: hole_index,
-                                });
-                                if let Some(sim) = &mut self.simulator {
-                                    sim.begin_drag(rope_index, end_index, world);
-                                }
-                            }
+                        if let Some(audio) = &mut self.audio {
+                            audio.ensure_context();
+                            audio.resume();
                         }
+                        self.try_begin_drag(self.last_cursor_pos);
                     }
                     winit::event::ElementState::Released => {
-                        self.highlight_hole = -1;
-                        if let Some(drag) = self.drag_state.take() {
-                            if let (Some(renderer), Some(sim)) =
-                                (&self.renderer, &mut self.simulator)
-                            {
-                                let world = input::screen_to_world(
-                                    self.last_cursor_pos,
-                                    (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32),
-                                    &renderer.camera,
-                                );
-                                let level = self.level.as_ref().unwrap();
-                                let hole_positions: Vec<glam::Vec2> =
-                                    level.holes.iter().map(|h| h.to_vec2()).collect();
-                                let snap = input::find_snap_hole(
-                                    world, &hole_positions, &self.hole_occupied, level.hole_radius,
-                                ).unwrap_or(drag.original_hole_index);
-                                sim.end_drag(snap);
-                                if drag.end_index == 0 {
-                                    self.rope_endpoints[drag.rope_index].0 = snap;
-                                } else {
-                                    self.rope_endpoints[drag.rope_index].1 = snap;
-                                }
-                                if snap < self.hole_occupied.len() {
-                                    self.hole_occupied[snap] = true;
-                                }
-                                self.settle_check_timer = Some(0.5);
-                            }
-                        }
+                        self.finish_drag(self.last_cursor_pos);
                     }
                 }
             }
             WindowEvent::Touch(touch) => {
                 let pos = (touch.location.x as f32, touch.location.y as f32);
+                let id = touch.id;
                 match touch.phase {
                     winit::event::TouchPhase::Started => {
-                        self.last_cursor_pos = pos;
-                        if let Some(renderer) = &self.renderer {
-                            let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
-                            let world = input::screen_to_world(pos, vp, &renderer.camera);
-                            let level = match &self.level { Some(l) => l, None => return };
-                            let hole_positions: Vec<glam::Vec2> = level.holes.iter().map(|h| h.to_vec2()).collect();
-                            let sim = match &self.simulator { Some(s) => s, None => return };
-                            let endpoint_z = |rope: usize, end: usize| -> f32 { sim.endpoint_z(rope, end) };
-                            if let Some((rope_index, end_index, hole_index)) =
-                                input::find_nearest_endpoint(world, &hole_positions, &self.rope_endpoints, &endpoint_z, level.hole_radius)
-                            {
-                                self.push_undo_state();
-                                if hole_index < self.hole_occupied.len() {
-                                    self.hole_occupied[hole_index] = false;
-                                }
-                                self.drag_state = Some(input::DragState { rope_index, end_index, original_hole_index: hole_index });
-                                if let Some(sim) = &mut self.simulator {
-                                    sim.begin_drag(rope_index, end_index, world);
-                                }
+                        self.active_touches.insert(id, pos);
+                        if self.active_touches.len() == 1 && !self.touch_camera_active {
+                            self.last_cursor_pos = pos;
+                            if let Some(audio) = &mut self.audio {
+                                audio.ensure_context();
+                                audio.resume();
                             }
+                            self.try_begin_drag(pos);
+                        }
+                        if self.active_touches.len() >= 2 {
+                            self.cancel_drag();
+                            self.touch_camera_active = true;
                         }
                     }
                     winit::event::TouchPhase::Moved => {
-                        self.last_cursor_pos = pos;
-                        if self.drag_state.is_some() {
-                            if let (Some(renderer), Some(sim)) = (&self.renderer, &mut self.simulator) {
-                                let world = input::screen_to_world(pos, (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32), &renderer.camera);
-                                sim.update_drag(world);
-                                if let Some(level) = &self.level {
-                                    let hole_positions: Vec<glam::Vec2> = level.holes.iter().map(|h| h.to_vec2()).collect();
-                                    self.highlight_hole = input::find_snap_hole(world, &hole_positions, &self.hole_occupied, level.hole_radius)
-                                        .map(|i| i as i32).unwrap_or(-1);
+                        let prev = self.active_touches.get(&id).copied();
+                        self.active_touches.insert(id, pos);
+
+                        if self.active_touches.len() >= 2 && self.touch_camera_active {
+                            let touches: Vec<(u64, (f32, f32))> = self.active_touches.iter().map(|(&k, &v)| (k, v)).collect();
+                            if touches.len() >= 2 {
+                                let (id_a, cur_a) = touches[0];
+                                let (_, cur_b) = touches[1];
+
+                                if let Some(prev_pos) = prev {
+                                    let other_pos = if id == id_a { cur_b } else { cur_a };
+                                    let my_prev = prev_pos;
+                                    let my_cur = pos;
+
+                                    let prev_dx = my_prev.0 - other_pos.0;
+                                    let prev_dy = my_prev.1 - other_pos.1;
+                                    let cur_dx = my_cur.0 - other_pos.0;
+                                    let cur_dy = my_cur.1 - other_pos.1;
+                                    let prev_dist = (prev_dx * prev_dx + prev_dy * prev_dy).sqrt();
+                                    let cur_dist = (cur_dx * cur_dx + cur_dy * cur_dy).sqrt();
+
+                                    if let Some(renderer) = &mut self.renderer {
+                                        let (sw, sh) = renderer.surface_size();
+
+                                        if prev_dist > 1.0 && cur_dist > 1.0 {
+                                            let scale = prev_dist / cur_dist;
+                                            renderer.camera.ortho_half_height = (renderer.camera.ortho_half_height * scale).clamp(0.5, 12.0);
+                                        }
+
+                                        let prev_angle = prev_dy.atan2(prev_dx);
+                                        let cur_angle = cur_dy.atan2(cur_dx);
+                                        let mut d_angle = cur_angle - prev_angle;
+                                        if d_angle > std::f32::consts::PI { d_angle -= 2.0 * std::f32::consts::PI; }
+                                        if d_angle < -std::f32::consts::PI { d_angle += 2.0 * std::f32::consts::PI; }
+                                        renderer.camera.orbit_angle -= d_angle;
+
+                                        let mid_prev = ((my_prev.0 + other_pos.0) * 0.5, (my_prev.1 + other_pos.1) * 0.5);
+                                        let mid_cur = ((my_cur.0 + other_pos.0) * 0.5, (my_cur.1 + other_pos.1) * 0.5);
+                                        input::apply_camera_pan(&mut renderer.camera, mid_prev, mid_cur, sw, sh);
+                                    }
                                 }
                             }
+                        } else if self.active_touches.len() == 1 && self.drag_state.is_some() {
+                            self.last_cursor_pos = pos;
+                            self.update_drag_highlight(pos);
                         }
                     }
                     winit::event::TouchPhase::Ended | winit::event::TouchPhase::Cancelled => {
-                        self.highlight_hole = -1;
-                        if let Some(drag) = self.drag_state.take() {
-                            if let (Some(renderer), Some(sim)) = (&self.renderer, &mut self.simulator) {
-                                let world = input::screen_to_world(pos, (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32), &renderer.camera);
-                                let level = self.level.as_ref().unwrap();
-                                let hole_positions: Vec<glam::Vec2> = level.holes.iter().map(|h| h.to_vec2()).collect();
-                                let snap = input::find_snap_hole(world, &hole_positions, &self.hole_occupied, level.hole_radius)
-                                    .unwrap_or(drag.original_hole_index);
-                                sim.end_drag(snap);
-                                if drag.end_index == 0 {
-                                    self.rope_endpoints[drag.rope_index].0 = snap;
-                                } else {
-                                    self.rope_endpoints[drag.rope_index].1 = snap;
-                                }
-                                if snap < self.hole_occupied.len() {
-                                    self.hole_occupied[snap] = true;
-                                }
-                                self.settle_check_timer = Some(0.5);
+                        self.active_touches.remove(&id);
+                        if self.active_touches.is_empty() {
+                            if !self.touch_camera_active {
+                                self.finish_drag(pos);
                             }
+                            self.touch_camera_active = false;
                         }
                     }
                 }

@@ -672,8 +672,8 @@ pub fn generate(level_id: u32) -> LevelDefinition {
 
     LevelDefinition {
         id: level_id,
-        hole_radius: 0.08,
-        particles_per_rope: 40,
+        hole_radius: 0.062,
+        particles_per_rope: 45,
         holes,
         ropes,
         hooks: None,

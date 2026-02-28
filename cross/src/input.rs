@@ -15,6 +15,11 @@ pub struct DragState {
     pub original_hole_index: usize,
 }
 
+pub enum DragResult {
+    Snapped { hole: usize, moved: bool },
+    Cancelled,
+}
+
 pub fn screen_to_world(
     location: (f32, f32),
     viewport_size: (f32, f32),
@@ -52,7 +57,7 @@ pub fn find_nearest_endpoint(
     endpoint_z: &dyn Fn(usize, usize) -> f32,
     hole_radius: f32,
 ) -> Option<(usize, usize, usize)> {
-    let hit_radius = hole_radius * 1.65;
+    let hit_radius = hole_radius * 3.5;
     let mut best: Option<(usize, usize, usize, f32)> = None;
 
     for (rope_index, &(start_hole, end_hole)) in rope_endpoints.iter().enumerate() {
@@ -92,7 +97,7 @@ pub fn find_snap_hole(
     hole_occupied: &[bool],
     hole_radius: f32,
 ) -> Option<usize> {
-    let snap_radius = hole_radius * 1.9;
+    let snap_radius = hole_radius * 3.8;
     let mut best_index = None;
     let mut best_distance = f32::MAX;
 
@@ -107,4 +112,57 @@ pub fn find_snap_hole(
         }
     }
     best_index
+}
+
+pub fn begin_drag_action(
+    screen_pos: (f32, f32),
+    viewport: (f32, f32),
+    camera: &Camera,
+    hole_positions: &[Vec2],
+    rope_endpoints: &[(usize, usize)],
+    endpoint_z: &dyn Fn(usize, usize) -> f32,
+    hole_radius: f32,
+) -> Option<(DragState, usize)> {
+    let world = screen_to_world(screen_pos, viewport, camera);
+    let (rope_index, end_index, hole_index) =
+        find_nearest_endpoint(world, hole_positions, rope_endpoints, endpoint_z, hole_radius)?;
+    Some((
+        DragState { rope_index, end_index, original_hole_index: hole_index },
+        hole_index,
+    ))
+}
+
+pub fn end_drag_action(
+    drag: &DragState,
+    screen_pos: (f32, f32),
+    viewport: (f32, f32),
+    camera: &Camera,
+    hole_positions: &[Vec2],
+    hole_occupied: &[bool],
+    hole_radius: f32,
+) -> DragResult {
+    let world = screen_to_world(screen_pos, viewport, camera);
+    match find_snap_hole(world, hole_positions, hole_occupied, hole_radius) {
+        Some(snap_hole) => DragResult::Snapped {
+            hole: snap_hole,
+            moved: snap_hole != drag.original_hole_index,
+        },
+        None => DragResult::Cancelled,
+    }
+}
+
+pub fn apply_camera_pan(
+    camera: &mut Camera,
+    prev: (f32, f32),
+    cur: (f32, f32),
+    surface_w: u32,
+    surface_h: u32,
+) {
+    let aspect = surface_w as f32 / surface_h.max(1) as f32;
+    let half_h = camera.ortho_half_height;
+    let half_w = half_h * aspect;
+    let dx = (cur.0 - prev.0) / surface_w as f32 * half_w * 2.0;
+    let dy = (cur.1 - prev.1) / surface_h as f32 * half_h * 2.0;
+    camera.center.x -= dx;
+    camera.center.y += dy;
 }

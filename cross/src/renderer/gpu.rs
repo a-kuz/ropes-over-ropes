@@ -9,14 +9,43 @@ use super::frame_types::*;
 use super::hole_mesh;
 use super::passes::build_frame_uniforms;
 
-const SHADOW_MAP_SIZE: u32 = 1024;
-const BLOOM_DIVISOR: u32 = 4;
+const SHADOW_MAP_SIZE: u32 = 512;
+const BLOOM_DIVISOR: u32 = 16;
 
 pub struct FrameInFlight {
     pub encoder: wgpu::CommandEncoder,
     pub screen_view: wgpu::TextureView,
     output: wgpu::SurfaceTexture,
 }
+
+#[derive(Clone, Debug, Default)]
+pub struct GpuTimings {
+    pub shadow_ms: f32,
+    pub hdr_ms: f32,
+    pub bloom_ms: f32,
+    pub total_ms: f32,
+}
+
+#[derive(Clone, Copy, Default)]
+pub struct DrawFlags {
+    pub skip_table: bool,
+    pub skip_holes: bool,
+    pub skip_ropes: bool,
+    pub table_shadow_mode: u8,
+}
+
+const TIMESTAMP_QUERY_COUNT: u32 = 10;
+
+const TS_SHADOW_BEGIN: u32 = 0;
+const TS_SHADOW_END: u32 = 1;
+const TS_HDR_BEGIN: u32 = 2;
+const TS_HDR_END: u32 = 3;
+const TS_BLOOM_TH_BEGIN: u32 = 4;
+const TS_BLOOM_TH_END: u32 = 5;
+const TS_BLOOM_H_BEGIN: u32 = 6;
+const TS_BLOOM_H_END: u32 = 7;
+const TS_BLOOM_V_BEGIN: u32 = 8;
+const TS_BLOOM_V_END: u32 = 9;
 
 // ─────────────────────────── GpuRenderer ───────────────────────────
 
@@ -32,6 +61,7 @@ pub struct GpuRenderer {
     post_pipeline: wgpu::RenderPipeline,
     shadow_rope_pipeline: wgpu::RenderPipeline,
     shadow_hole_pipeline: wgpu::RenderPipeline,
+    planar_mask_pipeline: wgpu::ComputePipeline,
     bloom_threshold_pipeline: wgpu::ComputePipeline,
     bloom_blur_h_pipeline: wgpu::ComputePipeline,
     bloom_blur_v_pipeline: wgpu::ComputePipeline,
@@ -43,6 +73,10 @@ pub struct GpuRenderer {
     bloom_a_view: wgpu::TextureView,
     bloom_b_texture: wgpu::Texture,
     bloom_b_view: wgpu::TextureView,
+    planar_mask_texture: wgpu::Texture,
+    planar_mask_view: wgpu::TextureView,
+    planar_mask_w: u32,
+    planar_mask_h: u32,
     depth_view: wgpu::TextureView,
 
     frame_uniforms_buffer: wgpu::Buffer,
@@ -64,6 +98,7 @@ pub struct GpuRenderer {
     post_bind_group_layout: wgpu::BindGroupLayout,
     post_bind_group: wgpu::BindGroup,
     bloom_bind_group_layout: wgpu::BindGroupLayout,
+    planar_mask_bind_group: wgpu::BindGroup,
     bloom_threshold_bind_group: wgpu::BindGroup,
     bloom_blur_h_bind_group: wgpu::BindGroup,
     bloom_blur_v_bind_group: wgpu::BindGroup,
@@ -76,10 +111,24 @@ pub struct GpuRenderer {
     hole_instance_count: u32,
     rope_index_count: u32,
 
+    hole_mask_view: wgpu::TextureView,
+    hole_mask_bounds: [f32; 4],
+
     pub camera: Camera,
     pub highlight_hole: i32,
+    pub render_scale: f32,
     width: u32,
     height: u32,
+
+    timestamp_supported: bool,
+    timestamp_query_set: Option<wgpu::QuerySet>,
+    timestamp_resolve_buffer: Option<wgpu::Buffer>,
+    timestamp_readback_buffer: Option<wgpu::Buffer>,
+    timestamp_period: f32,
+    pub gpu_timings: GpuTimings,
+    timestamp_pending: bool,
+    frame_index: u64,
+    pub draw_flags: DrawFlags,
 }
 
 // ─────────────────────────── vertex layouts ───────────────────────────
@@ -143,6 +192,21 @@ fn create_hdr_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> (wg
     (tex, view)
 }
 
+fn create_planar_mask_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+    let tex = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some(label),
+        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba16Float,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+        view_formats: &[],
+    });
+    let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+    (tex, view)
+}
+
 // ─────────────────────────── bind group layouts ───────────────────────────
 
 fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -151,7 +215,7 @@ fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -181,6 +245,16 @@ fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 4,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
         ],
     })
 }
@@ -201,11 +275,21 @@ fn create_hole_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
             },
             wgpu::BindGroupLayoutEntry {
                 binding: 1,
-                visibility: wgpu::ShaderStages::FRAGMENT,
+                visibility: wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Storage { read_only: true },
                     has_dynamic_offset: false,
                     min_binding_size: None,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
                 },
                 count: None,
             },
@@ -241,6 +325,16 @@ fn create_post_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout
                 binding: 2,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 3,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Depth,
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             },
         ],
@@ -284,6 +378,7 @@ fn build_frame_bind_group(
     shadow_view: &wgpu::TextureView,
     shadow_sampler: &wgpu::Sampler,
     linear_sampler: &wgpu::Sampler,
+    planar_mask_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("frame_bind_group"),
@@ -293,6 +388,7 @@ fn build_frame_bind_group(
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(shadow_view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(linear_sampler) },
+            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(planar_mask_view) },
         ],
     })
 }
@@ -303,6 +399,7 @@ fn build_post_bind_group(
     hdr_view: &wgpu::TextureView,
     bloom_view: &wgpu::TextureView,
     sampler: &wgpu::Sampler,
+    depth_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("post_bind_group"),
@@ -311,6 +408,7 @@ fn build_post_bind_group(
             wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr_view) },
             wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(bloom_view) },
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
+            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(depth_view) },
         ],
     })
 }
@@ -466,15 +564,23 @@ impl GpuRenderer {
             .await
             .expect("no suitable GPU adapter");
 
+        let timestamp_supported = adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY);
+        let mut required_features = wgpu::Features::empty();
+        if timestamp_supported {
+            required_features |= wgpu::Features::TIMESTAMP_QUERY;
+        }
+
         let (device, queue) = adapter
             .request_device(&wgpu::DeviceDescriptor {
                 label: Some("uzls_device"),
-                required_features: wgpu::Features::empty(),
+                required_features,
                 required_limits: wgpu::Limits::default(),
                 memory_hints: wgpu::MemoryHints::Performance,
             }, None)
             .await
             .expect("failed to create device");
+
+        let timestamp_period = if timestamp_supported { queue.get_timestamp_period() } else { 0.0 };
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -521,14 +627,22 @@ impl GpuRenderer {
 
         // ── textures ──
 
-        let shadow_depth_view = create_depth_texture(&device, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, "shadow_depth");
-        let (hdr_texture, hdr_view) = create_hdr_texture(&device, width, height, "hdr");
-        let depth_view = create_depth_texture(&device, width, height, "scene_depth");
+        let render_scale: f32 = 1.0;
+        let rw = ((width as f32 * render_scale) as u32).clamp(1, 8192);
+        let rh = ((height as f32 * render_scale) as u32).clamp(1, 8192);
 
-        let bloom_w = (width / BLOOM_DIVISOR).max(1);
-        let bloom_h = (height / BLOOM_DIVISOR).max(1);
+        let shadow_depth_view = create_depth_texture(&device, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, "shadow_depth");
+        let (hdr_texture, hdr_view) = create_hdr_texture(&device, rw, rh, "hdr");
+        let depth_view = create_depth_texture(&device, rw, rh, "scene_depth");
+
+        let bloom_w = (rw / BLOOM_DIVISOR).max(1);
+        let bloom_h = (rh / BLOOM_DIVISOR).max(1);
         let (bloom_a_texture, bloom_a_view) = create_hdr_texture(&device, bloom_w, bloom_h, "bloom_a");
         let (bloom_b_texture, bloom_b_view) = create_hdr_texture(&device, bloom_w, bloom_h, "bloom_b");
+        let planar_mask_w = (rw / 4).clamp(128, 1024);
+        let planar_mask_h = (rh / 4).clamp(128, 1024);
+        let (planar_mask_texture, planar_mask_view) =
+            create_planar_mask_texture(&device, planar_mask_w, planar_mask_h, "planar_mask");
 
         // ── buffers ──
 
@@ -548,6 +662,23 @@ impl GpuRenderer {
             contents: &initial_data,
             usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
         });
+
+        let hole_mask_tex = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hole_mask_placeholder"),
+            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &hole_mask_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &[255u8],
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: None },
+            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+        );
+        let hole_mask_view = hole_mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
         // ── bind group layouts ──
 
@@ -586,6 +717,7 @@ impl GpuRenderer {
             &shadow_depth_view,
             &shadow_sampler,
             &linear_sampler,
+            &planar_mask_view,
         );
 
         let post_bind_group = build_post_bind_group(
@@ -594,6 +726,7 @@ impl GpuRenderer {
             &hdr_view,
             &bloom_a_view,
             &linear_sampler,
+            &depth_view,
         );
 
         let bloom_threshold_bind_group = build_bloom_bind_group(
@@ -604,6 +737,9 @@ impl GpuRenderer {
         );
         let bloom_blur_v_bind_group = build_bloom_bind_group(
             &device, &bloom_bind_group_layout, &bloom_b_view, &bloom_a_view, "bloom_blur_v_bg",
+        );
+        let planar_mask_bind_group = build_bloom_bind_group(
+            &device, &bloom_bind_group_layout, &hdr_view, &planar_mask_view, "planar_mask_bg",
         );
 
         // ── pipeline layouts ──
@@ -640,6 +776,11 @@ impl GpuRenderer {
             bind_group_layouts: &[&empty_bind_group_layout, &empty_bind_group_layout, &empty_bind_group_layout, &bloom_bind_group_layout],
             push_constant_ranges: &[],
         });
+        let planar_mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("planar_mask_layout"),
+            bind_group_layouts: &[&frame_bind_group_layout, &hole_bind_group_layout, &empty_bind_group_layout, &bloom_bind_group_layout],
+            push_constant_ranges: &[],
+        });
 
         // ── render pipelines ──
 
@@ -656,7 +797,7 @@ impl GpuRenderer {
             &device, "hole_pipeline", &frame_hole_layout, &shader,
             "hole_vertex", "hole_fragment",
             &[hole_vertex_layout()], hdr_format, Some(depth_fmt), true,
-            None,
+            Some(wgpu::Face::Back),
         );
 
         let rope_pipeline = build_render_pipeline(
@@ -703,6 +844,9 @@ impl GpuRenderer {
         let bloom_blur_v_pipeline = build_compute_pipeline(
             &device, "bloom_blur_v", &bloom_layout, &shader, "bloom_blur_v",
         );
+        let planar_mask_pipeline = build_compute_pipeline(
+            &device, "planar_mask", &planar_mask_layout, &shader, "planar_shadow_mask_cs",
+        );
 
         Self {
             device,
@@ -716,6 +860,7 @@ impl GpuRenderer {
             post_pipeline,
             shadow_rope_pipeline,
             shadow_hole_pipeline,
+            planar_mask_pipeline,
             bloom_threshold_pipeline,
             bloom_blur_h_pipeline,
             bloom_blur_v_pipeline,
@@ -727,6 +872,10 @@ impl GpuRenderer {
             bloom_a_view,
             bloom_b_texture,
             bloom_b_view,
+            planar_mask_texture,
+            planar_mask_view,
+            planar_mask_w,
+            planar_mask_h,
             depth_view,
 
             frame_uniforms_buffer,
@@ -748,6 +897,7 @@ impl GpuRenderer {
             post_bind_group_layout,
             post_bind_group,
             bloom_bind_group_layout,
+            planar_mask_bind_group,
             bloom_threshold_bind_group,
             bloom_blur_h_bind_group,
             bloom_blur_v_bind_group,
@@ -760,11 +910,49 @@ impl GpuRenderer {
             hole_instance_count: 0,
             rope_index_count: 0,
 
+            hole_mask_view,
+            hole_mask_bounds: [0.0; 4],
+
             camera: Camera::default(),
             highlight_hole: -1,
+            render_scale,
             width,
             height,
+
+            timestamp_supported,
+            timestamp_query_set: None,
+            timestamp_resolve_buffer: None,
+            timestamp_readback_buffer: None,
+            timestamp_period,
+            gpu_timings: GpuTimings::default(),
+            timestamp_pending: false,
+            frame_index: 0,
+            draw_flags: DrawFlags::default(),
         }
+    }
+
+    fn ensure_timestamp_resources(&mut self) {
+        if !self.timestamp_supported || self.timestamp_query_set.is_some() {
+            return;
+        }
+        self.timestamp_query_set = Some(self.device.create_query_set(&wgpu::QuerySetDescriptor {
+            label: Some("timestamp_queries"),
+            ty: wgpu::QueryType::Timestamp,
+            count: TIMESTAMP_QUERY_COUNT,
+        }));
+        let resolve_size = (TIMESTAMP_QUERY_COUNT as u64) * 8;
+        self.timestamp_resolve_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("timestamp_resolve"),
+            size: resolve_size,
+            usage: wgpu::BufferUsages::QUERY_RESOLVE | wgpu::BufferUsages::COPY_SRC,
+            mapped_at_creation: false,
+        }));
+        self.timestamp_readback_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("timestamp_readback"),
+            size: resolve_size,
+            usage: wgpu::BufferUsages::MAP_READ | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        }));
     }
 
     pub fn surface_size(&self) -> (u32, u32) {
@@ -784,20 +972,41 @@ impl GpuRenderer {
         self.surface_config.width = width;
         self.surface_config.height = height;
         self.surface.configure(&self.device, &self.surface_config);
+        self.rebuild_render_textures();
+    }
 
-        let (hdr_texture, hdr_view) = create_hdr_texture(&self.device, width, height, "hdr");
+    pub fn set_render_scale(&mut self, scale: f32) {
+        let scale = scale.clamp(0.25, 2.0);
+        if (scale - self.render_scale).abs() < 0.001 {
+            return;
+        }
+        self.render_scale = scale;
+        self.rebuild_render_textures();
+    }
+
+    fn rebuild_render_textures(&mut self) {
+        let rw = ((self.width as f32 * self.render_scale) as u32).clamp(1, 8192);
+        let rh = ((self.height as f32 * self.render_scale) as u32).clamp(1, 8192);
+
+        let (hdr_texture, hdr_view) = create_hdr_texture(&self.device, rw, rh, "hdr");
         self.hdr_texture = hdr_texture;
         self.hdr_view = hdr_view;
-        self.depth_view = create_depth_texture(&self.device, width, height, "scene_depth");
+        self.depth_view = create_depth_texture(&self.device, rw, rh, "scene_depth");
 
-        let bloom_w = (width / BLOOM_DIVISOR).max(1);
-        let bloom_h = (height / BLOOM_DIVISOR).max(1);
+        let bloom_w = (rw / BLOOM_DIVISOR).max(1);
+        let bloom_h = (rh / BLOOM_DIVISOR).max(1);
         let (ba_tex, ba_view) = create_hdr_texture(&self.device, bloom_w, bloom_h, "bloom_a");
         let (bb_tex, bb_view) = create_hdr_texture(&self.device, bloom_w, bloom_h, "bloom_b");
         self.bloom_a_texture = ba_tex;
         self.bloom_a_view = ba_view;
         self.bloom_b_texture = bb_tex;
         self.bloom_b_view = bb_view;
+        self.planar_mask_w = (rw / 4).clamp(128, 1024);
+        self.planar_mask_h = (rh / 4).clamp(128, 1024);
+        let (pm_tex, pm_view) =
+            create_planar_mask_texture(&self.device, self.planar_mask_w, self.planar_mask_h, "planar_mask");
+        self.planar_mask_texture = pm_tex;
+        self.planar_mask_view = pm_view;
 
         self.rebuild_texture_bind_groups();
     }
@@ -810,6 +1019,7 @@ impl GpuRenderer {
             &self.shadow_depth_view,
             &self.shadow_sampler,
             &self.linear_sampler,
+            &self.planar_mask_view,
         );
 
         self.post_bind_group = build_post_bind_group(
@@ -818,6 +1028,7 @@ impl GpuRenderer {
             &self.hdr_view,
             &self.bloom_a_view,
             &self.linear_sampler,
+            &self.depth_view,
         );
 
         self.bloom_threshold_bind_group = build_bloom_bind_group(
@@ -831,6 +1042,13 @@ impl GpuRenderer {
         self.bloom_blur_v_bind_group = build_bloom_bind_group(
             &self.device, &self.bloom_bind_group_layout,
             &self.bloom_b_view, &self.bloom_a_view, "bloom_blur_v_bg",
+        );
+        self.planar_mask_bind_group = build_bloom_bind_group(
+            &self.device,
+            &self.bloom_bind_group_layout,
+            &self.hdr_view,
+            &self.planar_mask_view,
+            "planar_mask_bg",
         );
     }
 
@@ -875,6 +1093,8 @@ impl GpuRenderer {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
+        self.bake_hole_mask(positions, radius);
+
         self.hole_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hole_bind_group"),
             layout: &self.hole_bind_group_layout,
@@ -887,9 +1107,86 @@ impl GpuRenderer {
                     binding: 1,
                     resource: self.shadow_segment_buffer.as_entire_binding(),
                 },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::TextureView(&self.hole_mask_view),
+                },
             ],
         }));
         self.hole_instance_buffer = Some(instance_buf);
+    }
+
+    fn bake_hole_mask(&mut self, positions: &[glam::Vec2], radius: f32) {
+        if positions.is_empty() { return; }
+        let inner_r = radius * 0.76;
+        let margin = radius * 2.0;
+
+        let mut min_x = f32::MAX;
+        let mut max_x = f32::MIN;
+        let mut min_y = f32::MAX;
+        let mut max_y = f32::MIN;
+        for p in positions {
+            min_x = min_x.min(p.x);
+            max_x = max_x.max(p.x);
+            min_y = min_y.min(p.y);
+            max_y = max_y.max(p.y);
+        }
+        min_x -= margin;
+        min_y -= margin;
+        max_x += margin;
+        max_y += margin;
+
+        let world_w = max_x - min_x;
+        let world_h = max_y - min_y;
+        let pixels_per_unit = 64.0;
+        let tw = ((world_w * pixels_per_unit) as u32).clamp(4, 2048);
+        let th = ((world_h * pixels_per_unit) as u32).clamp(4, 2048);
+
+        let sdf_range = inner_r * 1.5;
+        let mut pixels = vec![255u8; (tw * th) as usize];
+        for y in 0..th {
+            for x in 0..tw {
+                let wx = (x as f32 + 0.5) / tw as f32 * world_w + min_x;
+                let wy = (y as f32 + 0.5) / th as f32 * world_h + min_y;
+                let mut min_dist = f32::MAX;
+                for p in positions {
+                    let dx = wx - p.x;
+                    let dy = wy - p.y;
+                    let dist = (dx * dx + dy * dy).sqrt() - inner_r;
+                    if dist < min_dist { min_dist = dist; }
+                }
+                let norm = ((min_dist / sdf_range) * 0.5 + 0.5).clamp(0.0, 1.0);
+                pixels[(y * tw + x) as usize] = (norm * 255.0) as u8;
+            }
+        }
+
+        let bytes_per_row = tw;
+        let aligned_bpr = (bytes_per_row + 255) & !255;
+        let mut aligned_pixels = vec![255u8; (aligned_bpr * th) as usize];
+        for y in 0..th {
+            let src_start = (y * tw) as usize;
+            let dst_start = (y * aligned_bpr) as usize;
+            aligned_pixels[dst_start..dst_start + tw as usize]
+                .copy_from_slice(&pixels[src_start..src_start + tw as usize]);
+        }
+
+        let tex = self.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("hole_mask"),
+            size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+            mip_level_count: 1, sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.queue.write_texture(
+            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            &aligned_pixels,
+            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(aligned_bpr), rows_per_image: None },
+            wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+        );
+        self.hole_mask_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        self.hole_mask_bounds = [min_x, min_y, max_x, max_y];
     }
 
     pub fn update_shadow_segments(&mut self, segments: &[ShadowSegment]) {
@@ -923,6 +1220,10 @@ impl GpuRenderer {
                     wgpu::BindGroupEntry {
                         binding: 1,
                         resource: self.shadow_segment_buffer.as_entire_binding(),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::TextureView(&self.hole_mask_view),
                     },
                 ],
             }));
@@ -972,9 +1273,25 @@ impl GpuRenderer {
 
     // ─────────────────────────── render ───────────────────────────
 
-    pub fn begin_frame(&mut self, time: f32, drag_active: bool, victory_time: f32, level_seed: f32, table_mode: u32) -> Option<FrameInFlight> {
+    pub fn begin_frame(&mut self, time: f32, drag_active: bool, victory_time: f32, level_seed: f32, render_mode: u32, cel_mode: bool) -> Option<FrameInFlight> {
+        self.ensure_timestamp_resources();
+        self.poll_timestamp_readback();
+
         let aspect = self.width as f32 / self.height.max(1) as f32;
-        let uniforms = build_frame_uniforms(&self.camera, aspect, SHADOW_MAP_SIZE, time, drag_active, victory_time, level_seed, self.highlight_hole, table_mode);
+        let uniforms = build_frame_uniforms(
+            &self.camera,
+            aspect,
+            SHADOW_MAP_SIZE,
+            time,
+            drag_active,
+            victory_time,
+            level_seed,
+            self.highlight_hole,
+            render_mode,
+            cel_mode,
+            self.hole_mask_bounds,
+            self.draw_flags.table_shadow_mode,
+        );
         self.queue.write_buffer(&self.frame_uniforms_buffer, 0, bytemuck::bytes_of(&uniforms));
 
         let output = match self.surface.get_current_texture() {
@@ -992,12 +1309,82 @@ impl GpuRenderer {
             label: Some("frame_encoder"),
         });
 
-        self.encode_shadow_pass(&mut encoder);
+        let sd = render_mode == 0;
+        let do_shadow_pass = !cel_mode && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
+        let do_planar_mask_pass = !cel_mode
+            && self.draw_flags.table_shadow_mode == 1
+            && (drag_active || (self.frame_index & 1) == 0);
+        if do_shadow_pass {
+            self.encode_shadow_pass(&mut encoder);
+        }
+        if do_planar_mask_pass {
+            self.encode_planar_mask_pass(&mut encoder);
+        }
+        self.frame_index = self.frame_index.wrapping_add(1);
         self.encode_hdr_pass(&mut encoder);
-        self.encode_bloom_pass(&mut encoder);
+        if !sd && !cel_mode {
+            self.encode_bloom_pass(&mut encoder);
+        }
         self.encode_composite_pass(&mut encoder, &screen_view);
 
+        if self.timestamp_supported && !self.timestamp_pending {
+            if let (Some(qs), Some(resolve), Some(readback)) = (
+                &self.timestamp_query_set,
+                &self.timestamp_resolve_buffer,
+                &self.timestamp_readback_buffer,
+            ) {
+                let size = (TIMESTAMP_QUERY_COUNT as u64) * 8;
+                encoder.resolve_query_set(qs, 0..TIMESTAMP_QUERY_COUNT, resolve, 0);
+                encoder.copy_buffer_to_buffer(resolve, 0, readback, 0, size);
+                self.timestamp_pending = true;
+            }
+        }
+
         Some(FrameInFlight { encoder, screen_view, output })
+    }
+
+    fn poll_timestamp_readback(&mut self) {
+        if !self.timestamp_pending {
+            return;
+        }
+        #[cfg(target_arch = "wasm32")]
+        {
+            self.timestamp_pending = false;
+            return;
+        }
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            let readback = match &self.timestamp_readback_buffer {
+                Some(b) => b,
+                None => return,
+            };
+            let slice = readback.slice(..);
+            let (tx, rx) = std::sync::mpsc::channel();
+            slice.map_async(wgpu::MapMode::Read, move |result| {
+                let _ = tx.send(result);
+            });
+            self.device.poll(wgpu::Maintain::Wait);
+            if rx.recv().ok().and_then(|r| r.ok()).is_some() {
+                let data = slice.get_mapped_range();
+                let timestamps: &[u64] = bytemuck::cast_slice(&data);
+                let ns_per_tick = self.timestamp_period as f64;
+                let to_ms = |begin: u32, end: u32| -> f32 {
+                    let b = timestamps.get(begin as usize).copied().unwrap_or(0);
+                    let e = timestamps.get(end as usize).copied().unwrap_or(0);
+                    if e > b { ((e - b) as f64 * ns_per_tick / 1_000_000.0) as f32 } else { 0.0 }
+                };
+                self.gpu_timings.shadow_ms = to_ms(TS_SHADOW_BEGIN, TS_SHADOW_END);
+                self.gpu_timings.hdr_ms = to_ms(TS_HDR_BEGIN, TS_HDR_END);
+                let bloom_th = to_ms(TS_BLOOM_TH_BEGIN, TS_BLOOM_TH_END);
+                let bloom_h = to_ms(TS_BLOOM_H_BEGIN, TS_BLOOM_H_END);
+                let bloom_v = to_ms(TS_BLOOM_V_BEGIN, TS_BLOOM_V_END);
+                self.gpu_timings.bloom_ms = bloom_th + bloom_h + bloom_v;
+                self.gpu_timings.total_ms = self.gpu_timings.shadow_ms + self.gpu_timings.hdr_ms + self.gpu_timings.bloom_ms;
+                drop(data);
+            }
+            readback.unmap();
+            self.timestamp_pending = false;
+        }
     }
 
     pub fn end_frame(&self, frame: FrameInFlight) {
@@ -1008,6 +1395,11 @@ impl GpuRenderer {
     // ─────────────────────────── shadow pass ───────────────────────────
 
     fn encode_shadow_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+        let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::RenderPassTimestampWrites {
+            query_set: qs,
+            beginning_of_pass_write_index: Some(TS_SHADOW_BEGIN),
+            end_of_pass_write_index: Some(TS_SHADOW_END),
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("shadow_pass"),
             color_attachments: &[],
@@ -1016,11 +1408,18 @@ impl GpuRenderer {
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
         });
 
         pass.set_bind_group(0, &self.shadow_bind_group, &[]);
+
+        if let (Some(vb), Some(ib)) = (&self.rope_vertex_buffer, &self.rope_index_buffer) {
+            pass.set_pipeline(&self.shadow_rope_pipeline);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.rope_index_count, 0, 0..1);
+        }
 
         if let (Some(vb), Some(ib), Some(bg)) = (&self.hole_vertex_buffer, &self.hole_index_buffer, &self.hole_bind_group) {
             pass.set_pipeline(&self.shadow_hole_pipeline);
@@ -1035,6 +1434,11 @@ impl GpuRenderer {
     // ─────────────────────────── HDR pass ───────────────────────────
 
     fn encode_hdr_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+        let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::RenderPassTimestampWrites {
+            query_set: qs,
+            beginning_of_pass_write_index: Some(TS_HDR_BEGIN),
+            end_of_pass_write_index: Some(TS_HDR_END),
+        });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("hdr_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
@@ -1050,39 +1454,72 @@ impl GpuRenderer {
                 depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
                 stencil_ops: None,
             }),
-            timestamp_writes: None,
+            timestamp_writes: ts,
             occlusion_query_set: None,
         });
 
         pass.set_bind_group(0, &self.frame_bind_group, &[]);
 
-        pass.set_pipeline(&self.table_pipeline);
-        if let Some(bg) = &self.hole_bind_group {
-            pass.set_bind_group(1, bg, &[]);
-        }
-        pass.draw(0..6, 0..1);
-
-        if let (Some(vb), Some(ib), Some(bg)) = (&self.hole_vertex_buffer, &self.hole_index_buffer, &self.hole_bind_group) {
-            pass.set_pipeline(&self.hole_pipeline);
-            pass.set_bind_group(1, bg, &[]);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.hole_index_count, 0, 0..self.hole_instance_count);
-        }
-
-        if let (Some(vb), Some(ib)) = (&self.rope_vertex_buffer, &self.rope_index_buffer) {
-            pass.set_pipeline(&self.rope_pipeline);
-            pass.set_bind_group(0, &self.frame_bind_group, &[]);
+        if !self.draw_flags.skip_table {
+            pass.set_pipeline(&self.table_pipeline);
             if let Some(bg) = &self.hole_bind_group {
                 pass.set_bind_group(1, bg, &[]);
             }
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.rope_index_count, 0, 0..1);
+            pass.draw(0..6, 0..1);
+        }
+
+        if !self.draw_flags.skip_holes {
+            if let (Some(vb), Some(ib), Some(bg)) = (&self.hole_vertex_buffer, &self.hole_index_buffer, &self.hole_bind_group) {
+                pass.set_pipeline(&self.hole_pipeline);
+                pass.set_bind_group(1, bg, &[]);
+                pass.set_vertex_buffer(0, vb.slice(..));
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.hole_index_count, 0, 0..self.hole_instance_count);
+            }
+        }
+
+        if !self.draw_flags.skip_ropes {
+            if let (Some(vb), Some(ib)) = (&self.rope_vertex_buffer, &self.rope_index_buffer) {
+                pass.set_pipeline(&self.rope_pipeline);
+                pass.set_bind_group(0, &self.frame_bind_group, &[]);
+                if let Some(bg) = &self.hole_bind_group {
+                    pass.set_bind_group(1, bg, &[]);
+                }
+                pass.set_vertex_buffer(0, vb.slice(..));
+                pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+                pass.draw_indexed(0..self.rope_index_count, 0, 0..1);
+            }
         }
     }
 
     // ─────────────────────────── bloom pass ───────────────────────────
+
+    fn encode_planar_mask_pass(&self, encoder: &mut wgpu::CommandEncoder) {
+        let Some(bg) = &self.hole_bind_group else {
+            return;
+        };
+        let frame_bg_planar_write = build_frame_bind_group(
+            &self.device,
+            &self.frame_bind_group_layout,
+            &self.frame_uniforms_buffer,
+            &self.shadow_depth_view,
+            &self.shadow_sampler,
+            &self.linear_sampler,
+            &self.hole_mask_view,
+        );
+        let wg_x = (self.planar_mask_w + 7) / 8;
+        let wg_y = (self.planar_mask_h + 7) / 8;
+        let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+            label: Some("planar_mask"),
+            timestamp_writes: None,
+        });
+        pass.set_pipeline(&self.planar_mask_pipeline);
+        pass.set_bind_group(0, &frame_bg_planar_write, &[]);
+        pass.set_bind_group(1, bg, &[]);
+        pass.set_bind_group(2, &self.empty_bind_group, &[]);
+        pass.set_bind_group(3, &self.planar_mask_bind_group, &[]);
+        pass.dispatch_workgroups(wg_x, wg_y, 1);
+    }
 
     fn encode_bloom_pass(&self, encoder: &mut wgpu::CommandEncoder) {
         let bw = (self.width / BLOOM_DIVISOR).max(1);
@@ -1091,9 +1528,14 @@ impl GpuRenderer {
         let wg_y = (bh + 7) / 8;
 
         {
+            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(TS_BLOOM_TH_BEGIN),
+                end_of_pass_write_index: Some(TS_BLOOM_TH_END),
+            });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_threshold"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.bloom_threshold_pipeline);
             pass.set_bind_group(0, &self.empty_bind_group, &[]);
@@ -1104,9 +1546,14 @@ impl GpuRenderer {
         }
 
         {
+            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(TS_BLOOM_H_BEGIN),
+                end_of_pass_write_index: Some(TS_BLOOM_H_END),
+            });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_blur_h"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.bloom_blur_h_pipeline);
             pass.set_bind_group(0, &self.empty_bind_group, &[]);
@@ -1117,9 +1564,14 @@ impl GpuRenderer {
         }
 
         {
+            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(TS_BLOOM_V_BEGIN),
+                end_of_pass_write_index: Some(TS_BLOOM_V_END),
+            });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_blur_v"),
-                timestamp_writes: None,
+                timestamp_writes: ts,
             });
             pass.set_pipeline(&self.bloom_blur_v_pipeline);
             pass.set_bind_group(0, &self.empty_bind_group, &[]);

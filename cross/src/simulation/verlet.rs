@@ -41,6 +41,8 @@ pub struct LowerAnimation {
     pub target_hole: usize,
     pub start_pos: Vec3,
     pub timer: f32,
+    pub return_pos: Option<Vec3>,
+    pub return_duration: f32,
 }
 
 impl LowerAnimation {
@@ -153,7 +155,7 @@ impl VerletSimulator {
             lift_height: 0.30,
             rope_tension: 0.98,
             friction_coefficient: 0.8,
-            particle_count: 40,
+            particle_count: 45,
             twist_stiffness: 0.08,
             twist_damping: 0.75,
             gravity_torque_strength: 0.8,
@@ -464,6 +466,23 @@ impl VerletSimulator {
         } else {
             self.bands[bi].positions.len() - 1
         };
+
+        if let Some(return_target) = anim.return_pos {
+            let t = (anim.timer / anim.return_duration).min(1.0);
+            let eased = 1.0 - (1.0 - t) * (1.0 - t);
+            let pos = anim.start_pos + (return_target - anim.start_pos) * eased;
+            self.bands[bi].positions[idx] = pos;
+            self.bands[bi].previous_positions[idx] = pos;
+
+            if t >= 1.0 {
+                anim.start_pos = return_target;
+                anim.return_pos = None;
+                anim.timer = 0.0;
+            }
+            self.lower_animation = Some(anim);
+            return;
+        }
+
         let hole_pos = self.hole_position_3d(anim.target_hole);
 
         let t = (anim.timer / LowerAnimation::DURATION).min(1.0);
@@ -575,7 +594,8 @@ impl VerletSimulator {
 
         // Constraint + collision iterations (interleaved)
         let current_tension = self.current_tension;
-        for _ in 0..effective_iters {
+        let mut collision_pairs = collision_pairs;
+        for iter in 0..effective_iters {
             for bi in 0..self.bands.len() {
                 if !self.bands[bi].active || self.bands[bi].fade_out != 0.0 {
                     continue;
@@ -583,13 +603,16 @@ impl VerletSimulator {
                 self.band_constraints(bi, current_tension);
             }
             if collide {
+                if iter > 0 && iter % 3 == 0 {
+                    collision_pairs = self.build_collision_pairs(&active);
+                }
                 self.resolve_collision_pairs(&collision_pairs, false);
             }
         }
 
         // Post-solve: collision-only passes
         if collide {
-            for _ in 0..3 {
+            for _ in 0..1 {
                 let had_collision = self.resolve_collision_pairs(&collision_pairs, true);
                 for &bi in &active {
                     let n = self.bands[bi].positions.len();
@@ -865,10 +888,8 @@ impl VerletSimulator {
         let dist = dist2.sqrt();
         let normal = diff / dist;
 
-        let eff_radius_a = self.effective_collision_radius(bi, si, s, normal)
-            * self.latex_thinning_factor(bi, si, s);
-        let eff_radius_b = self.effective_collision_radius(bj, sj, t, normal)
-            * self.latex_thinning_factor(bj, sj, t);
+        let eff_radius_a = self.effective_collision_radius(bi, si, s, normal);
+        let eff_radius_b = self.effective_collision_radius(bj, sj, t, normal);
         let min_dist = eff_radius_a + eff_radius_b;
 
         if dist >= min_dist {
@@ -876,7 +897,7 @@ impl VerletSimulator {
         }
 
         let overlap = min_dist - dist;
-        let corr = normal * (overlap * 0.5);
+        let corr = normal * (overlap * 0.35);
 
         self.bands[bi].positions[si] += corr * (1.0 - s);
         self.bands[bi].positions[si + 1] += corr * s;
@@ -912,7 +933,7 @@ impl VerletSimulator {
         }
 
         if inject_velocity {
-            let vel_corr = corr * 0.5;
+            let vel_corr = corr * 0.15;
             self.bands[bi].previous_positions[si] -= vel_corr * (1.0 - s);
             self.bands[bi].previous_positions[si + 1] -= vel_corr * s;
             self.bands[bj].previous_positions[sj] += vel_corr * (1.0 - t);
@@ -1006,17 +1027,34 @@ impl VerletSimulator {
             Some(d) => (d.band_index, d.end_index),
             None => return,
         };
-        let idx = if end_index == 0 {
-            0
-        } else {
-            self.bands[bi].positions.len() - 1
-        };
+        let n = self.bands[bi].positions.len();
+        let idx = if end_index == 0 { 0 } else { n - 1 };
+        let anchor_idx = if end_index == 0 { n - 1 } else { 0 };
+
+        let mut target = Vec3::new(world_position.x, world_position.y, self.lift_height);
+
+        let rest_length = self.bands[bi].segment_length * (n - 1).max(1) as f32;
+        let max_stretch = rest_length * 1.8;
+        let hard_limit = rest_length * 2.2;
+
+        let anchor = self.bands[bi].positions[anchor_idx];
+        let to_target = target - anchor;
+        let dist = to_target.length();
+
+        if dist > max_stretch {
+            let dir = to_target / dist.max(1e-6);
+            if dist >= hard_limit {
+                target = anchor + dir * hard_limit;
+            } else {
+                let over = (dist - max_stretch) / (hard_limit - max_stretch);
+                let resistance = 1.0 - over * over * 0.85;
+                let effective_dist = max_stretch + (dist - max_stretch) * resistance;
+                target = anchor + dir * effective_dist;
+            }
+        }
+
         self.drag_start_pos = Some(self.bands[bi].positions[idx]);
-        self.drag_target_pos = Some(Vec3::new(
-            world_position.x,
-            world_position.y,
-            self.lift_height,
-        ));
+        self.drag_target_pos = Some(target);
     }
 
     pub fn end_drag(&mut self, target_hole_index: usize) {
@@ -1038,6 +1076,41 @@ impl VerletSimulator {
             target_hole: target_hole_index,
             start_pos: current_pos,
             timer: 0.0,
+            return_pos: None,
+            return_duration: 0.0,
+        });
+
+        self.drag_start_pos = None;
+        self.drag_target_pos = None;
+    }
+
+    pub fn cancel_drag(&mut self) {
+        let drag = match self.drag_info.take() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let idx = if drag.end_index == 0 {
+            0
+        } else {
+            self.bands[drag.band_index].positions.len() - 1
+        };
+        let current_pos = self.bands[drag.band_index].positions[idx];
+
+        let hole_xy = self.hole_positions[drag.original_hole_index];
+        let above_hole = Vec3::new(hole_xy.x, hole_xy.y, self.lift_height);
+
+        let dist = (current_pos - above_hole).length();
+        let return_duration = (dist * 0.4).clamp(0.1, 0.4);
+
+        self.lower_animation = Some(LowerAnimation {
+            band_index: drag.band_index,
+            end_index: drag.end_index,
+            target_hole: drag.original_hole_index,
+            start_pos: current_pos,
+            timer: 0.0,
+            return_pos: Some(above_hole),
+            return_duration,
         });
 
         self.drag_start_pos = None;

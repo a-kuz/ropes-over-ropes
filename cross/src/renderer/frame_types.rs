@@ -12,6 +12,7 @@ pub struct FrameUniforms {
     pub ortho_half_size_shadow_bias: [f32; 4],
     pub shadow_inv_size_unused: [f32; 4],
     pub time_drag: [f32; 4],
+    pub hole_mask_bounds: [f32; 4],
 }
 
 #[repr(C)]

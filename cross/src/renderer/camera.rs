@@ -5,6 +5,8 @@ pub struct Camera {
     pub distance: f32,
     pub ortho_half_height: f32,
     pub tilt_angle: f32,
+    pub orbit_angle: f32,
+    pub perspective_blend: f32,
 }
 
 impl Default for Camera {
@@ -13,30 +15,51 @@ impl Default for Camera {
             center: Vec3::ZERO,
             distance: 2.8,
             ortho_half_height: 2.05,
-            tilt_angle: 0.0,
+            tilt_angle: 0.35,
+            orbit_angle: 0.0,
+            perspective_blend: 1.0,
         }
     }
 }
 
 impl Camera {
     pub fn view_proj(&self, aspect: f32) -> Mat4 {
-        let y_offset = self.distance * self.tilt_angle.sin();
-        let z_offset = self.distance * self.tilt_angle.cos();
-        let eye = self.center + Vec3::new(0.0, y_offset, z_offset);
-        let view = look_at(eye, self.center, Vec3::new(0.0, 1.0, 0.0));
+        let eye = self.eye_position();
+        let view = look_at(eye, self.center, Vec3::Y);
+
         let half_h = self.ortho_half_height;
-        let half_w = self.ortho_half_height * aspect;
-        let proj = ortho(-half_w, half_w, -half_h, half_h, 0.01, 10.0);
-        proj * view
+        let half_w = half_h * aspect;
+        let ortho_proj = ortho(-half_w, half_w, -half_h, half_h, 0.01, 20.0);
+
+        if self.perspective_blend < 0.001 {
+            return ortho_proj * view;
+        }
+
+        let fov = 59.0f32.to_radians();
+        let persp_proj = Mat4::perspective_rh(fov, aspect, 0.01, 20.0);
+
+        if self.perspective_blend > 0.999 {
+            return persp_proj * view;
+        }
+
+        let t = self.perspective_blend;
+        let a = (ortho_proj * view).to_cols_array();
+        let b = (persp_proj * view).to_cols_array();
+        let mut out = [0.0f32; 16];
+        for i in 0..16 {
+            out[i] = a[i] * (1.0 - t) + b[i] * t;
+        }
+        Mat4::from_cols_array(&out)
     }
 
     pub fn eye_position(&self) -> Vec3 {
-        self.center
-            + Vec3::new(
-                0.0,
-                self.distance * self.tilt_angle.sin(),
-                self.distance * self.tilt_angle.cos(),
-            )
+        let horiz = self.distance * self.tilt_angle.sin();
+        let vert = self.distance * self.tilt_angle.cos();
+        self.center + Vec3::new(
+            horiz * self.orbit_angle.sin(),
+            horiz * self.orbit_angle.cos(),
+            vert,
+        )
     }
 }
 

@@ -119,6 +119,12 @@ pub struct LevelDefinition {
     pub actions: Option<Vec<Action>>,
 }
 
+impl LevelDefinition {
+    pub fn hole_positions(&self) -> Vec<Vec2> {
+        self.holes.iter().map(|h| h.to_vec2()).collect()
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum CrossSection {
     Circular { radius: f32 },

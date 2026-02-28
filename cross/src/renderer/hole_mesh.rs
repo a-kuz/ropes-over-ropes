@@ -45,8 +45,8 @@ pub fn build(segments: usize, inner_radius: f32, outer_radius: f32, depth: f32) 
         vertices.push(HoleVertex { position: i1, normal: up });
 
         indices.extend_from_slice(&[
-            base, base + 2, base + 1,
-            base + 1, base + 2, base + 3,
+            base, base + 1, base + 2,
+            base + 2, base + 1, base + 3,
         ]);
     }
 
@@ -69,8 +69,8 @@ pub fn build(segments: usize, inner_radius: f32, outer_radius: f32, depth: f32) 
         vertices.push(HoleVertex { position: bot1, normal: n1 });
 
         indices.extend_from_slice(&[
-            base, base + 1, base + 2,
-            base + 2, base + 1, base + 3,
+            base, base + 2, base + 1,
+            base + 1, base + 2, base + 3,
         ]);
     }
 
