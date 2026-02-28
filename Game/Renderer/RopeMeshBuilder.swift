@@ -196,7 +196,10 @@ enum RopeMeshBuilder {
             
             let latexThinning = 1.0 / sqrt(max(1.0, 1.0 + totalTension * 1.5 * centerMaskStrong))
             let relaxThickening = 1.0 + stretchRelax * 0.15
-            let scale = latexThinning * relaxThickening
+            let baseScale = latexThinning * relaxThickening
+            let flattenAmount = min(0.3, totalTension * 0.2 * centerMaskStrong)
+            let scaleNrm = baseScale * (1.0 - flattenAmount)
+            let scaleBin = baseScale * (1.0 + flattenAmount * 0.5)
             
             let lightenAmount = totalTension * centerMaskStrong * 0.35
             let baseColor: SIMD3<Float>
@@ -231,8 +234,8 @@ enum RopeMeshBuilder {
             for k in 0..<profileCount {
                 let localPos = profile.positions[k]
                 let localN = profile.normals[k]
-                let worldPos = position + nrm * (localPos.x * scale) + bin * (localPos.y * scale)
-                let worldN = simd_normalize(nrm * localN.x + bin * localN.y)
+                let worldPos = position + nrm * (localPos.x * scaleNrm) + bin * (localPos.y * scaleBin)
+                let worldN = simd_normalize(nrm * (localN.x / max(0.01, scaleNrm)) + bin * (localN.y / max(0.01, scaleBin)))
                 vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uCoord, profile.v[k]), params: params))
             }
 

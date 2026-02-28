@@ -245,7 +245,7 @@ extension Renderer {
         let aspect = Float(view.drawableSize.width / max(1, view.drawableSize.height))
         let viewProjection = camera.viewProj(aspect: aspect)
 
-        let lightDir = simd_normalize(SIMD3<Float>(-0.92, -0.18, 0.35))
+        let lightDir = simd_normalize(SIMD3<Float>(-0.65, -0.35, 0.67))
         let halfH = camera.orthoHalfHeight
         let halfW = halfH * aspect
         let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)

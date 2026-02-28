@@ -178,53 +178,43 @@ static float3 woodTexture(float2 uv, float2 worldXY, float seed) {
     return saturate(woodColor);
 }
 
-static float3 matteRubber(float3 baseColor, float3 n, float3 l, float3 v, float rough, float fiber) {
+static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
+                        float roughness, float taut, float vCoord) {
     float nl = saturate(dot(n, l));
     float nv = saturate(dot(n, v));
     float3 h = normalize(l + v);
     float nh = saturate(dot(n, h));
+    float vh = saturate(dot(v, h));
 
-    float wrap = mix(0.32, 0.68, rough);
-    float horizon = pow(1.0 - nv, 4.0);
-    float fd90 = 0.4 + 2.4 * nh * nh * rough;
-    float lightScatter = mix(1.0, fd90, pow(1.0 - nl, 5.0));
-    float viewScatter = mix(1.0, fd90, pow(1.0 - nv, 5.0));
-    float wrapTerm = saturate((nl + wrap) / (1.0 + wrap));
-    float microShadow = saturate(nl * nv * 4.0);
-    float coreDark = mix(0.18, 0.10, rough);
-    float edgeLift = mix(0.70, 0.88, rough);
-    float lobe = saturate((nl * 0.7 + nv * 0.3));
-    float3 diff = baseColor * mix(coreDark, edgeLift, wrapTerm) * lightScatter * viewScatter;
-    diff *= mix(0.82, 1.02, microShadow);
-    diff *= mix(1.0, 0.84, horizon);
-    float sheenMix = mix(0.25, 0.55, fiber);
-    diff = mix(diff, diff * float3(1.05, 1.02, 0.98), sheenMix * pow(1.0 - nv, 2.5));
+    float radial = abs(vCoord - 0.5) * 2.0;
+    float coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * 0.25;
+    float edgeBrighten = pow(radial, 2.5) * 0.12;
+    float3 albedo = baseColor * coreDarken + float3(edgeBrighten);
 
-    float sheen = pow(1.0 - nh, 4.2) * (0.06 + 0.24 * fiber);
-    float3 sheenCol = mix(baseColor, float3(1.0), 0.26) * sheen;
+    float wrap = 0.25;
+    float wrapDiff = saturate((nl + wrap) / (1.0 + wrap));
+    float3 diff = albedo * (0.28 + 0.72 * wrapDiff);
 
-    float alpha = max(0.08, rough * rough);
+    float rough = mix(0.22, 0.42, roughness);
+    rough = mix(rough, rough * 0.75, taut);
+    float alpha = rough * rough;
     float alpha2 = alpha * alpha;
     float denom = nh * nh * (alpha2 - 1.0) + 1.0;
-    float d = alpha2 / (3.14159265 * denom * denom + 1e-5);
-    float k = alpha * 0.5 + 1e-4;
-    float gl = nl / (nl * (1.0 - k) + k);
-    float gv = nv / (nv * (1.0 - k) + k);
-    float spec = d * gl * gv;
-    float fres = pow(1.0 - nv, 5.0);
-    float3 spTint = mix(float3(0.05, 0.05, 0.04), baseColor, 0.35);
-    float grazeFres = pow(1.0 - nv, 2.5);
-    float3 sp = spTint * spec * (0.06 + 0.36 * fiber) * (0.08 + 0.90 * fres);
-    float forward = pow(saturate(dot(h, v)), 8.0) * (0.08 + 0.12 * fiber);
-    sp += spTint * forward;
+    float D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+    float k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    float G1l = nl / (nl * (1.0 - k) + k);
+    float G1v = nv / (nv * (1.0 - k) + k);
+    float G = G1l * G1v;
+    float F0 = 0.04;
+    float F = F0 + (1.0 - F0) * pow(1.0 - vh, 5.0);
+    float spec = D * G * F / max(4.0 * nl * nv, 0.001);
+    float specBoost = 1.0 + taut * 0.6;
+    float3 specColor = float3(1.0) * spec * 0.65 * specBoost;
 
-    float subsurface = (1.0 - nl) * (0.14 + 0.12 * (1.0 - rough));
-    float rim = pow(1.0 - nv, 3.2) * (0.08 + 0.16 * fiber);
-    float graze = pow(1.0 - nv, 3.6) * (0.06 + 0.12 * (1.0 - rough));
-    diff *= 1.0 + subsurface;
-    diff += baseColor * rim;
-    diff += baseColor * graze;
-    return diff + sheenCol + sp;
+    float rim = pow(1.0 - nv, 4.0) * 0.08;
+    diff += albedo * rim;
+
+    return diff + specColor;
 }
 
 struct HoleInstance {
@@ -515,25 +505,6 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     return o;
 }
 
-static float3 rubberShading(float3 baseColor, float3 n, float3 l, float3 v) {
-    float ndl = saturate(dot(n, l));
-    float3 h = normalize(l + v);
-    float ndh = saturate(dot(n, h));
-
-    float wrap = saturate((ndl + 0.48) / 1.48);
-    float3 diff = baseColor * (0.18 + 0.82 * wrap);
-
-    float nv = saturate(dot(n, v));
-    float fres = pow(1.0 - nv, 6.0);
-
-    float specPow = 2.2;
-    float spec = pow(ndh, specPow) * 0.018;
-    float3 sp = float3(spec) * (0.15 + 0.85 * fres);
-
-    float subsurface = (1.0 - ndl) * 0.06;
-    return diff * (1.0 + subsurface) + sp;
-}
-
 fragment float4 ropeFragment(RopeOut in [[stage_in]],
                              constant FrameUniforms& frame [[buffer(1)]],
                              depth2d<float> shadowMap [[texture(2)]]) {
@@ -544,41 +515,39 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float pinch = saturate(in.params.y);
     float repel = saturate(in.params.z);
 
-    float2 p = in.worldPos.xy * 42.0 + in.uv.x * 13.0;
-    float n0 = hash21(p);
-    float n1 = hash21(p.yx + 17.3);
-    float roughNoise = hash21(p * 1.7 + in.uv.xy * 5.3);
-    float rough = mix(0.28, 0.64, roughNoise);
-    rough = saturate(rough - taut * 0.04 + pinch * 0.06 + repel * 0.03);
-    float fiber = saturate(abs(n0 - n1) * 2.2 + pinch * 0.25);
-    float3 t = cross(n, float3(0.0, 0.0, 1.0));
-    if (length(t) < 1e-3) {
-        t = cross(n, float3(0.0, 1.0, 0.0));
-    }
-    t = normalize(t);
-    float3 b = normalize(cross(n, t));
-    float microAmp = mix(0.05, 0.12, rough);
-    float3 micro = (t * (n0 - 0.5) + b * (n1 - 0.5)) * microAmp;
-    n = normalize(n + micro);
+    float2 noiseP = in.worldPos.xy * 48.0 + in.uv.x * 11.0;
+    float n0 = hash21(noiseP);
+    float n1 = hash21(noiseP.yx + 17.3);
+    float3 tVec = cross(n, float3(0.0, 0.0, 1.0));
+    if (length(tVec) < 1e-3) tVec = cross(n, float3(0.0, 1.0, 0.0));
+    tVec = normalize(tVec);
+    float3 bVec = normalize(cross(n, tVec));
+    float microAmp = 0.03 + pinch * 0.04;
+    n = normalize(n + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * microAmp);
 
     float3 base = in.color;
-    base = mix(base, float3(1.0), pinch * 0.22 + repel * 0.08);
-    base *= 1.0 + pinch * 0.10;
+    base = mix(base, base * 1.3, pinch * 0.15);
 
-    float ao = mix(0.78, 1.0, saturate(taut * 0.5 + (1.0 - pinch) * 0.3));
-    float3 c = matteRubber(base, n, l, v, rough, fiber);
+    float roughNoise = hash21(noiseP * 1.7 + in.uv.xy * 5.3);
+    float rough = mix(0.08, 0.22, roughNoise);
+    rough += pinch * 0.08 + repel * 0.05;
 
-    float h = saturate(in.worldPos.z / 0.35);
-    c += float3(0.08, 0.10, 0.16) * h * 0.6;
-    c *= ao;
+    float contactAO = 1.0 - repel * 0.35 - pinch * 0.15;
+
+    float3 c = rubberPBR(base, n, l, v, rough, taut, in.uv.y);
+    c *= contactAO;
+
+    float liftGlow = saturate(in.worldPos.z / 0.35);
+    c += float3(0.04, 0.05, 0.08) * liftGlow * 0.4;
 
     float shadow = 1.0;
     if (shadowMap.get_width() > 0) {
         shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
     }
-    shadow = pow(shadow, 1.85);
-    float lift = 0.22 + 0.06 * taut;
-    c *= mix(lift, 1.0, shadow);
+    shadow = pow(shadow, 1.6);
+    float ambient = 0.18 + 0.05 * taut;
+    c *= mix(ambient, 1.0, shadow);
+
     return float4(c, 1.0);
 }
 
@@ -798,7 +767,7 @@ fragment float4 postFragment(VSOut in [[stage_in]],
     float3 c = hdr.sample(s, uv).xyz;
     float3 b = bloom.sample(s, uv).xyz;
     c += b * 0.18;
-    float exposure = 1.35;
+    float exposure = 1.05;
     float3 mapped = 1.0 - exp(-c * exposure);
     mapped = pow(saturate(mapped), float3(1.0 / 2.2));
     return float4(mapped, 1.0);

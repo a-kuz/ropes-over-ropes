@@ -5,16 +5,16 @@ enum LevelGenerator {
     // MARK: - Pastel colors
 
     private static let colors: [LevelDefinition.Color] = [
-        .init(redChannel: 0.95, greenChannel: 0.90, blueChannel: 0.35),  // yellow
-        .init(redChannel: 0.95, greenChannel: 0.55, blueChannel: 0.65),  // pink
-        .init(redChannel: 0.55, greenChannel: 0.85, blueChannel: 0.95),  // light blue
-        .init(redChannel: 0.75, greenChannel: 0.60, blueChannel: 0.90),  // purple
-        .init(redChannel: 0.55, greenChannel: 0.92, blueChannel: 0.60),  // green
-        .init(redChannel: 0.95, greenChannel: 0.70, blueChannel: 0.40),  // orange
-        .init(redChannel: 0.85, greenChannel: 0.45, blueChannel: 0.85),  // magenta
-        .init(redChannel: 0.45, greenChannel: 0.90, blueChannel: 0.85),  // teal
-        .init(redChannel: 0.90, greenChannel: 0.80, blueChannel: 0.60),  // sand
-        .init(redChannel: 0.65, greenChannel: 0.75, blueChannel: 0.95),  // periwinkle
+        .init(redChannel: 0.95, greenChannel: 0.30, blueChannel: 0.05),  // orange
+        .init(redChannel: 0.10, greenChannel: 0.35, blueChannel: 0.92),  // blue
+        .init(redChannel: 0.90, greenChannel: 0.12, blueChannel: 0.25),  // red
+        .init(redChannel: 0.15, greenChannel: 0.75, blueChannel: 0.30),  // green
+        .init(redChannel: 0.92, greenChannel: 0.78, blueChannel: 0.05),  // yellow
+        .init(redChannel: 0.60, greenChannel: 0.10, blueChannel: 0.72),  // purple
+        .init(redChannel: 0.05, greenChannel: 0.65, blueChannel: 0.72),  // teal
+        .init(redChannel: 0.85, greenChannel: 0.15, blueChannel: 0.55),  // magenta
+        .init(redChannel: 0.20, greenChannel: 0.55, blueChannel: 0.90),  // sky blue
+        .init(redChannel: 0.80, greenChannel: 0.50, blueChannel: 0.05),  // amber
     ]
 
     // MARK: - Difficulty

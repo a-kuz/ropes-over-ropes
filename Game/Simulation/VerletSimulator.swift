@@ -225,8 +225,10 @@ final class VerletSimulator {
         let bandIndex: Int
         let endIndex: Int
         let targetHole: Int
-        let startPos: SIMD3<Float>
+        var startPos: SIMD3<Float>
         var timer: Float = 0
+        var returnPos: SIMD3<Float>?
+        var returnDuration: Float = 0
         static let duration: Float = 0.3
     }
 
@@ -433,16 +435,31 @@ final class VerletSimulator {
 
         let bi = anim.bandIndex
         let idx = anim.endIndex == 0 ? 0 : bands[bi].positions.count - 1
-        let holePos = holePosition3D(anim.targetHole)
 
+        if let returnTarget = anim.returnPos {
+            let t = min(anim.timer / anim.returnDuration, 1.0)
+            let eased = 1.0 - (1.0 - t) * (1.0 - t)
+            let pos = anim.startPos + (returnTarget - anim.startPos) * eased
+            bands[bi].positions[idx] = pos
+            bands[bi].previousPositions[idx] = pos
+
+            if t >= 1.0 {
+                anim.startPos = returnTarget
+                anim.returnPos = nil
+                anim.timer = 0
+            }
+            lowerAnimation = anim
+            return
+        }
+
+        let holePos = holePosition3D(anim.targetHole)
         let t = min(anim.timer / LowerAnimation.duration, 1.0)
-        let eased = 1.0 - (1.0 - t) * (1.0 - t)  // ease-out
+        let eased = 1.0 - (1.0 - t) * (1.0 - t)
         let pos = anim.startPos + (holePos - anim.startPos) * eased
         bands[bi].positions[idx] = pos
         bands[bi].previousPositions[idx] = pos
 
         if t >= 1.0 {
-            // Pin it
             if anim.endIndex == 0 {
                 bands[bi].pinStart = anim.targetHole
             } else {
@@ -1089,13 +1106,18 @@ final class VerletSimulator {
 
         let idx = drag.endIndex == 0 ? 0 : bands[drag.bandIndex].positions.count - 1
         let currentPos = bands[drag.bandIndex].positions[idx]
+        let holeXY = holePositions[targetHoleIndex]
+        let aboveHole = SIMD3<Float>(holeXY.x, holeXY.y, liftHeight)
+        let dist = simd_length(currentPos - aboveHole)
+        let returnDuration = min(max(dist * 0.4, 0.1), 0.4)
 
-        // Start lower animation: slowly bring endpoint into hole
         lowerAnimation = LowerAnimation(
             bandIndex: drag.bandIndex,
             endIndex: drag.endIndex,
             targetHole: targetHoleIndex,
-            startPos: currentPos
+            startPos: currentPos,
+            returnPos: aboveHole,
+            returnDuration: returnDuration
         )
 
         dragInfo = nil
