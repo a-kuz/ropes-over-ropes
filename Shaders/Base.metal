@@ -16,6 +16,8 @@ struct FrameUniforms {
     float4 orthoHalfSize_shadowBias;
     float4 shadowInvSize_unused;
     float4 timeDrag;
+    float4 woodBoundsMin;
+    float4 woodBoundsMax;
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
@@ -262,11 +264,35 @@ struct HoleCountBuf {
     uint count;
 };
 
+struct BakeWoodParams {
+    float2 worldMin;
+    float2 worldMax;
+    float seed;
+    float _pad;
+};
+
+kernel void bakeWoodKernel(texture2d<float, access::write> dst [[texture(0)]],
+                           constant BakeWoodParams& params [[buffer(0)]],
+                           uint2 gid [[thread_position_in_grid]]) {
+    uint w = dst.get_width();
+    uint h = dst.get_height();
+    if (gid.x >= w || gid.y >= h) return;
+
+    float2 uv = (float2(gid) + 0.5) / float2(w, h);
+    float2 worldXY = mix(params.worldMin, params.worldMax, uv);
+
+    float3 col = woodTexture(uv, worldXY, params.seed);
+    dst.write(float4(col, 1.0), gid);
+}
+
 fragment TableOut tableFragment(VSOut in [[stage_in]],
                               constant FrameUniforms& frame [[buffer(1)]],
                               constant HoleCountBuf& holeCounts [[buffer(3)]],
                               const device HoleInstance* holes [[buffer(4)]],
-                              depth2d<float> shadowMap [[texture(2)]]) {
+                              depth2d<float> shadowMap [[texture(2)]],
+                              texture2d<float> woodTex [[texture(3)]]) {
+    constexpr sampler woodSampler(address::clamp_to_edge, filter::linear);
+
     float2 uv = in.uv;
     float2 ndc = uv * 2.0 - 1.0;
 
@@ -293,22 +319,28 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
         }
     }
 
-    float levelSeed = frame.timeDrag.z;
     float3 worldN = float3(0.0, 0.0, 1.0);
-    
-    float3 baseColor = woodTexture(uv, worldXY, levelSeed);
-    
+
+    float3 baseColor;
+    if (woodTex.get_width() > 1) {
+        float2 woodUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
+        baseColor = woodTex.sample(woodSampler, woodUV).rgb;
+    } else {
+        float levelSeed = frame.timeDrag.z;
+        baseColor = woodTexture(uv, worldXY, levelSeed);
+    }
+
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - worldPos);
     float nl = saturate(dot(worldN, l));
     float nv = saturate(dot(worldN, v));
     float3 h = normalize(l + v);
     float nh = saturate(dot(worldN, h));
-    
+
     float wrap = 0.4;
     float wrapTerm = saturate((nl + wrap) / (1.0 + wrap));
     float3 diff = baseColor * mix(0.25, 0.95, wrapTerm);
-    
+
     float fresnel = pow(1.0 - nv, 3.0);
     float roughness = 0.75;
     float alpha = roughness * roughness;
@@ -320,19 +352,19 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
     float gv = nv / (nv * (1.0 - k) + k);
     float spec = d * gl * gv;
     float3 specColor = float3(0.9, 0.85, 0.75) * spec * 0.12 * (0.2 + 0.8 * fresnel);
-    
+
     float3 c = diff + specColor;
-    
+
     float shadow = 1.0;
     if (shadowMap.get_width() > 0) {
         shadow = shadowVisibility(worldPos, worldN, frame, shadowMap);
     }
     shadow = pow(shadow, 2.0);
     c *= mix(0.22, 1.0, shadow);
-    
+
     float ambient = 0.15;
     c += baseColor * ambient;
-    
+
     TableOut out;
     out.color = float4(c, 1.0);
     out.depth = tableDepth;

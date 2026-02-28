@@ -117,3 +117,5 @@ UzlsFour.xcodeproj
 UzlsFour.xcodeproj/xcuserdata/alexsandrkuznetsov.xcuserdatad/xcschemes/xcschememanagement.plist
 cross/target
 cross/node_modules
+cross/profile_*
+cross/shader*

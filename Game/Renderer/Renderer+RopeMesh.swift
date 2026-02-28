@@ -31,7 +31,7 @@ extension Renderer {
 
             let ropeColor = ropes[ropeIndex].color
             let fadeOut = sim.bands[ropeIndex].fadeOut
-            let ropeRadius = ropes[ropeIndex].radius
+            let ropeRadius = ropes[ropeIndex].radius * 1.3
             let cs = ropes[ropeIndex].crossSection
 
             let band = sim.bands[ropeIndex]

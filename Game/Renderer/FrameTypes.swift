@@ -10,6 +10,15 @@ struct FrameUniforms {
     var orthoHalfSizeShadowBias: SIMD4<Float>
     var shadowInvSizeUnused: SIMD4<Float>
     var timeDrag: SIMD4<Float>
+    var woodBoundsMin: SIMD4<Float>
+    var woodBoundsMax: SIMD4<Float>
+}
+
+struct BakeWoodParams {
+    var worldMin: SIMD2<Float>
+    var worldMax: SIMD2<Float>
+    var seed: Float
+    var _pad: Float = 0
 }
 
 struct HoleInstance {

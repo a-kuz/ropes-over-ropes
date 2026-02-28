@@ -15,6 +15,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     let bloomThreshold: MTLComputePipelineState
     let bloomBlurH: MTLComputePipelineState
     let bloomBlurV: MTLComputePipelineState
+    let bakeWoodPipeline: MTLComputePipelineState
 
     var depthStateScene: MTLDepthStencilState
     var depthStateBackground: MTLDepthStencilState
@@ -76,6 +77,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var hdrTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
+    var bakedWoodTex: MTLTexture?
+    var woodBoundsMin: SIMD2<Float> = .zero
+    var woodBoundsMax: SIMD2<Float> = .zero
     var lastViewSize: CGSize = CGSize(width: 400, height: 600)
     
     var ropePhysicsLogger = RopePhysics()
@@ -174,6 +178,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.shadowRopePipeline = Self.makeShadowRopePipeline(device: device, library: library)
         self.shadowHolePipeline = Self.makeShadowHolePipeline(device: device, library: library)
         (self.bloomThreshold, self.bloomBlurH, self.bloomBlurV) = Self.makeBloomPipelines(device: device, library: library)
+        self.bakeWoodPipeline = Self.makeComputePipeline(device: device, function: library.makeFunction(name: "bakeWoodKernel")!)
         (self.depthStateScene, self.depthStateBackground, self.depthStateShadow) = Self.makeDepthStates(device: device)
 
         self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
@@ -287,6 +292,8 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let aspect = Float(lastViewSize.width / max(1, lastViewSize.height))
         camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect)
+
+        bakeWoodTexture()
     }
 
     private static func makePipeline(device: MTLDevice, descriptor: MTLRenderPipelineDescriptor) -> MTLRenderPipelineState {
@@ -447,6 +454,56 @@ final class Renderer: NSObject, MTKViewDelegate {
         indexCount = mesh.indices.count
         vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
         indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])
+    }
+
+    func bakeWoodTexture() {
+        guard !holePositions.isEmpty else { return }
+
+        var minP = SIMD2<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
+        var maxP = SIMD2<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
+        for h in holePositions {
+            minP = min(minP, h)
+            maxP = max(maxP, h)
+        }
+        let boardSize = max(maxP.x - minP.x, maxP.y - minP.y)
+        let padding = max(boardSize * 3.0, 10.0)
+        let center = (minP + maxP) * 0.5
+        let half = (maxP - minP) * 0.5 + SIMD2<Float>(padding, padding)
+        let minBake = center - half
+        let maxBake = center + half
+
+        woodBoundsMin = minBake
+        woodBoundsMax = maxBake
+
+        let texSize = 2048
+        let desc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float,
+            width: texSize,
+            height: texSize,
+            mipmapped: false
+        )
+        desc.usage = [.shaderRead, .shaderWrite]
+        guard let tex = device.makeTexture(descriptor: desc) else { return }
+        bakedWoodTex = tex
+
+        guard let cmdBuf = commandQueue.makeCommandBuffer(),
+              let encoder = cmdBuf.makeComputeCommandEncoder() else { return }
+
+        var params = BakeWoodParams(worldMin: minBake, worldMax: maxBake, seed: Float(currentLevelId))
+        encoder.setComputePipelineState(bakeWoodPipeline)
+        encoder.setTexture(tex, index: 0)
+        encoder.setBytes(&params, length: MemoryLayout<BakeWoodParams>.stride, index: 0)
+
+        let threadWidth = bakeWoodPipeline.threadExecutionWidth
+        let threadHeight = max(1, bakeWoodPipeline.maxTotalThreadsPerThreadgroup / threadWidth)
+        let threadsPerGroup = MTLSize(width: threadWidth, height: threadHeight, depth: 1)
+        let groupsW = (texSize + threadWidth - 1) / threadWidth
+        let groupsH = (texSize + threadHeight - 1) / threadHeight
+        encoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1), threadsPerThreadgroup: threadsPerGroup)
+        encoder.endEncoding()
+
+        cmdBuf.commit()
+        cmdBuf.waitUntilCompleted()
     }
 
     /// Resolves a HookRopeRef to a rope index.

@@ -113,6 +113,9 @@ extension Renderer {
         if let shadowDepthTex {
             encoder.setFragmentTexture(shadowDepthTex, index: 2)
         }
+        if let bakedWoodTex {
+            encoder.setFragmentTexture(bakedWoodTex, index: 3)
+        }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         encoder.setDepthStencilState(depthStateScene)
@@ -259,7 +262,9 @@ extension Renderer {
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
             orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, 0.0012, 0),
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, camera.center.x, camera.center.y),
-            timeDrag: SIMD4<Float>(time, 0, Float(currentLevelId), dragState != nil ? 1 : 0)
+            timeDrag: SIMD4<Float>(time, 0, Float(currentLevelId), dragState != nil ? 1 : 0),
+            woodBoundsMin: SIMD4<Float>(woodBoundsMin.x, woodBoundsMin.y, 0, 0),
+            woodBoundsMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, 0, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
     }
