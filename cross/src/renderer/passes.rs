@@ -1,6 +1,6 @@
 use glam::{Mat4, Vec3};
 use super::camera::{Camera, ortho, look_at};
-use super::frame_types::FrameUniforms;
+use super::frame_types::{FrameUniforms, RopeMaterialSettings, LightingSettings};
 
 fn hash01(x: f32) -> f32 {
     let v = (x.sin() * 43_758.547).fract();
@@ -20,17 +20,26 @@ pub fn build_frame_uniforms(
     cel_mode: bool,
     hole_mask_bounds: [f32; 4],
     table_shadow_mode: u8,
+    rope_mat: &RopeMaterialSettings,
+    lighting: &LightingSettings,
 ) -> FrameUniforms {
     let view_proj = camera.view_proj(aspect);
     let inv_view_proj = view_proj.inverse();
-    let azimuth = hash01(level_seed * 13.17 + 1.91) * std::f32::consts::TAU;
-    let elevation = 0.18 + hash01(level_seed * 7.73 + 9.41) * 0.92;
-    let light_dir = Vec3::new(
-        azimuth.cos() * elevation.cos(),
-        azimuth.sin() * elevation.cos(),
-        elevation.sin(),
-    )
-    .normalize();
+
+    let ld = lighting.light_dir;
+    let ld_vec = Vec3::new(ld[0], ld[1], ld[2]);
+    let light_dir = if ld_vec.length_squared() < 1e-6 {
+        let azimuth = hash01(level_seed * 13.17 + 1.91) * std::f32::consts::TAU;
+        let elevation = 0.18 + hash01(level_seed * 7.73 + 9.41) * 0.92;
+        Vec3::new(
+            azimuth.cos() * elevation.cos(),
+            azimuth.sin() * elevation.cos(),
+            elevation.sin(),
+        ).normalize()
+    } else {
+        ld_vec.normalize()
+    };
+
     let half_h = camera.ortho_half_height;
     let half_w = half_h * aspect;
     let light_view_proj = make_light_view_proj(light_dir, camera, aspect);
@@ -41,13 +50,17 @@ pub fn build_frame_uniforms(
         view_proj: view_proj.to_cols_array_2d(),
         inv_view_proj: inv_view_proj.to_cols_array_2d(),
         light_view_proj: light_view_proj.to_cols_array_2d(),
-        light_dir_intensity: [light_dir.x, light_dir.y, light_dir.z, 5.2],
+        light_dir_intensity: [light_dir.x, light_dir.y, light_dir.z, lighting.light_intensity],
         ambient_color: [table_shadow_mode as f32, 0.0, 0.0, highlight_hole as f32],
         camera_pos: [eye.x, eye.y, eye.z, 1.0],
-        ortho_half_size_shadow_bias: [half_w, half_h, 0.0012, 0.0],
+        ortho_half_size_shadow_bias: [half_w, half_h, lighting.shadow_bias, lighting.shadow_type as f32],
         shadow_inv_size_unused: [inv_shadow, inv_shadow, if cel_mode { 1.0 } else { 0.0 }, render_mode as f32],
         time_drag: [time, victory_time, level_seed, if drag_active { 1.0 } else { 0.0 }],
         hole_mask_bounds,
+        rope_mat_params: [rope_mat.matte, rope_mat.gloss, rope_mat.diffuse_wrap, rope_mat.subsurface],
+        rope_mat_params2: [rope_mat.edge_light, rope_mat.saturation, rope_mat.micro_bump, rope_mat.contact_ao],
+        rope_mat_params3: [rope_mat.lift_glow, rope_mat.bump_scale, rope_mat.stretch_gloss, rope_mat.stretch_spec],
+        lighting_params: [lighting.ambient, lighting.shadow_darkness, 0.0, lighting.exposure],
     }
 }
 

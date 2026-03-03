@@ -11,6 +11,10 @@ struct FrameUniforms {
     shadowInvSize_unused: vec4<f32>,
     timeDrag: vec4<f32>,
     holeMaskBounds: vec4<f32>,
+    ropeMatParams: vec4<f32>,
+    ropeMatParams2: vec4<f32>,
+    ropeMatParams3: vec4<f32>,
+    lightingParams: vec4<f32>,
 };
 
 struct HoleInstance {
@@ -120,76 +124,67 @@ fn celHoleShading(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>) -> vec3<f32>
     return baseColor * lit;
 }
 
-// ── Matte rubber ──
+// ── Rubber PBR (ported from Metal) ──
 
-fn matteRubber(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, rough: f32, fiber: f32) -> vec3<f32> {
+fn rubberPBR(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>,
+             roughness: f32, taut: f32, vCoord: f32,
+             matP: vec4<f32>, matP2: vec4<f32>, stretchGloss: f32, stretchSpec: f32) -> vec3<f32> {
+    let matteAmount = matP.x;
+    let glossAmount = matP.y;
+    let diffuseWrap = matP.z;
+    let subsurface = matP.w;
+    let edgeLight = matP2.x;
+    let saturation = matP2.y;
+
     let nl = clamp(dot(n, l), 0.0, 1.0);
     let nv = clamp(dot(n, v), 0.0, 1.0);
     let h = normalize(l + v);
     let nh = clamp(dot(n, h), 0.0, 1.0);
+    let vh = clamp(dot(v, h), 0.0, 1.0);
 
-    let wrap = mix(0.32, 0.68, rough);
-    let horizon = pow(1.0 - nv, 4.0);
-    let fd90 = 0.4 + 2.4 * nh * nh * rough;
-    let lightScatter = mix(1.0, fd90, pow(1.0 - nl, 5.0));
-    let viewScatter = mix(1.0, fd90, pow(1.0 - nv, 5.0));
-    let wrapTerm = clamp((nl + wrap) / (1.0 + wrap), 0.0, 1.0);
-    let microShadow = clamp(nl * nv * 4.0, 0.0, 1.0);
-    let coreDark = mix(0.18, 0.10, rough);
-    let edgeLift = mix(0.70, 0.88, rough);
-    let lobe = clamp(nl * 0.7 + nv * 0.3, 0.0, 1.0);
-    var diff = baseColor * mix(coreDark, edgeLift, wrapTerm) * lightScatter * viewScatter;
-    diff *= mix(0.82, 1.02, microShadow);
-    diff *= mix(1.0, 0.84, horizon);
-    let sheenMix = mix(0.25, 0.55, fiber);
-    diff = mix(diff, diff * vec3<f32>(1.05, 1.02, 0.98), vec3<f32>(sheenMix * pow(1.0 - nv, 2.5)));
+    let radial = abs(vCoord - 0.5) * 2.0;
+    let coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount);
+    let edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount);
+    var albedo = baseColor * coreDarken + vec3<f32>(edgeBrighten);
 
-    let sheen = pow(1.0 - nh, 4.2) * (0.06 + 0.24 * fiber);
-    let sheenCol = mix(baseColor, vec3<f32>(1.0), vec3<f32>(0.26)) * sheen;
+    let grey = dot(albedo, vec3<f32>(0.299, 0.587, 0.114));
+    albedo = mix(vec3<f32>(grey), albedo, vec3<f32>(saturation));
 
-    let alpha = max(0.08, rough * rough);
+    let wrapDiff = clamp((nl + diffuseWrap) / (1.0 + diffuseWrap), 0.0, 1.0);
+
+    let sssNL = clamp(dot(-n, l), 0.0, 1.0);
+    let sssWrap = clamp((sssNL + 0.3) / 1.3, 0.0, 1.0);
+    let sssContrib = sssWrap * subsurface * 0.3;
+
+    let ambientBase = mix(0.20, 0.45, matteAmount);
+    var diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff + sssContrib);
+
+    var rough = mix(0.18, 0.92, matteAmount) + roughness * 0.1;
+    let taut2 = taut * taut;
+    let roughFloor = mix(0.85, 0.25, taut) * stretchGloss + 0.85 * (1.0 - stretchGloss);
+    rough = mix(rough, rough * roughFloor, taut);
+    rough = clamp(rough, 0.05, 0.99);
+    let alpha = rough * rough;
     let alpha2 = alpha * alpha;
     let denom = nh * nh * (alpha2 - 1.0) + 1.0;
-    let d = alpha2 / (3.14159265 * denom * denom + 1e-5);
-    let k = alpha * 0.5 + 1e-4;
-    let gl = nl / (nl * (1.0 - k) + k);
-    let gv = nv / (nv * (1.0 - k) + k);
-    let spec = d * gl * gv;
-    let fres = pow(1.0 - nv, 5.0);
-    let spTint = mix(vec3<f32>(0.05, 0.05, 0.04), baseColor, vec3<f32>(0.35));
-    let grazeFres = pow(1.0 - nv, 2.5);
-    var sp = spTint * spec * (0.06 + 0.36 * fiber) * (0.08 + 0.90 * fres);
-    let forward = pow(clamp(dot(h, v), 0.0, 1.0), 8.0) * (0.08 + 0.12 * fiber);
-    sp += spTint * forward;
+    let D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+    let k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    let G1l = nl / (nl * (1.0 - k) + k);
+    let G1v = nv / (nv * (1.0 - k) + k);
+    let G = G1l * G1v;
+    let F0base = mix(0.08, 0.01, matteAmount);
+    let F0 = F0base + taut2 * 0.12 * stretchSpec;
+    let F = F0 + (1.0 - F0) * pow(1.0 - vh, 5.0);
+    let spec = D * G * F / max(4.0 * nl * nv, 0.001);
+    let specBoost = 1.0 + (taut * 1.5 + taut2 * 3.0) * stretchSpec;
+    let specIntensity = glossAmount * mix(1.2, 0.08, matteAmount);
+    var specColor = vec3<f32>(1.0) * spec * specIntensity * specBoost;
 
-    let subsurface = (1.0 - nl) * (0.14 + 0.12 * (1.0 - rough));
-    let rim = pow(1.0 - nv, 3.2) * (0.08 + 0.16 * fiber);
-    let graze = pow(1.0 - nv, 3.6) * (0.06 + 0.12 * (1.0 - rough));
-    diff *= 1.0 + subsurface;
-    diff += baseColor * rim;
-    diff += baseColor * graze;
-    return diff + sheenCol + sp;
-}
+    let rimPow = max(1.5, mix(3.0, 6.0, matteAmount) - taut * 1.5 * stretchGloss);
+    let rim = pow(1.0 - nv, rimPow) * edgeLight * (1.0 + taut2 * 2.0 * stretchSpec);
+    diff += albedo * rim;
 
-// ── Rubber shading (simple) ──
-
-fn rubberShading(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>) -> vec3<f32> {
-    let ndl = clamp(dot(n, l), 0.0, 1.0);
-    let h = normalize(l + v);
-    let ndh = clamp(dot(n, h), 0.0, 1.0);
-
-    let wrap = clamp((ndl + 0.48) / 1.48, 0.0, 1.0);
-    let diff = baseColor * (0.18 + 0.82 * wrap);
-
-    let nv = clamp(dot(n, v), 0.0, 1.0);
-    let fres = pow(1.0 - nv, 6.0);
-
-    let specPow = 2.2;
-    let spec = pow(ndh, specPow) * 0.018;
-    let sp = vec3<f32>(spec) * (0.15 + 0.85 * fres);
-
-    let subsurface = (1.0 - ndl) * 0.06;
-    return diff * (1.0 + subsurface) + sp;
+    return diff + specColor;
 }
 
 // ── SDF Shadow ──
@@ -264,17 +259,58 @@ fn shadowMapPCF(worldPos: vec3<f32>) -> f32 {
     let smBias = frame.orthoHalfSize_shadowBias.z;
     let refD = ndc3.z - smBias;
     let smInv = frame.shadowInvSize_unused.x;
+    let shadowType = frame.orthoHalfSize_shadowBias.w;
+
     var smVis = 0.0;
     let a = hash21(worldPos.xy * 1.731) * 6.2831853;
     let ca = cos(a);
     let sa = sin(a);
-    let radius = smInv * 1.85;
-    for (var i = 0u; i < 12u; i = i + 1u) {
+
+    if (shadowType < 0.5) {
+        smVis = textureSampleCompare(shadow_map, shadow_sampler, suv2, refD);
+        return select(smVis, 1.0, outOfBounds);
+    }
+
+    if (shadowType < 1.5) {
+        let radius = smInv * 4.0;
+        for (var i = 0u; i < 24u; i = i + 1u) {
+            let p = POISSON_DISK[i];
+            let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
+            smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * radius, refD);
+        }
+        let shadow = smVis / 24.0;
+        return select(smoothstep(0.0, 1.0, shadow), 1.0, outOfBounds);
+    }
+
+    let searchRadius = smInv * 6.0;
+    let smDims = textureDimensions(shadow_map);
+    var blockerSum = 0.0;
+    var blockerCount = 0.0;
+    for (var i = 0u; i < 16u; i = i + 1u) {
         let p = POISSON_DISK[i];
         let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
-        smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * radius, refD);
+        let sampleUV = clamp(suv2 + rot * searchRadius, vec2<f32>(0.0), vec2<f32>(1.0));
+        let tc = vec2<i32>(i32(sampleUV.x * f32(smDims.x)), i32(sampleUV.y * f32(smDims.y)));
+        let sampleDepth = textureLoad(shadow_map, tc, 0);
+        let isBlocker = select(0.0, 1.0, sampleDepth < refD);
+        blockerSum += sampleDepth * isBlocker;
+        blockerCount += isBlocker;
     }
-    return select(smVis / 12.0, 1.0, outOfBounds);
+
+    var filterRadius = smInv * 4.0;
+    if (blockerCount >= 1.0) {
+        let avgBlocker = blockerSum / blockerCount;
+        let penumbra = (refD - avgBlocker) / max(avgBlocker, 0.001);
+        filterRadius = clamp(penumbra * smInv * 80.0, smInv * 3.0, smInv * 20.0);
+    }
+
+    for (var i = 0u; i < 32u; i = i + 1u) {
+        let p = POISSON_DISK[i];
+        let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
+        smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * filterRadius, refD);
+    }
+    let shadow = smoothstep(0.0, 1.0, smVis / 32.0);
+    return select(pow(shadow, 1.2), 1.0, outOfBounds);
 }
 
 fn planarCapsuleShadowAt(worldXY: vec2<f32>) -> f32 {
@@ -482,9 +518,10 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
         let h = normalize(l + v);
         let nh = clamp(dot(worldN, h), 0.0, 1.0);
 
+        let lightI = frame.lightDir_intensity.w;
         let wrap = 0.4;
         let wrapTerm = clamp((nl + wrap) / (1.0 + wrap), 0.0, 1.0);
-        let diff = baseColor * mix(0.25, 0.95, wrapTerm);
+        let diff = baseColor * mix(0.25, 0.95, wrapTerm) * lightI;
 
         let fresnel = pow(1.0 - nv, 3.0);
         let roughness = 0.75;
@@ -496,7 +533,7 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
         let gl = nl / (nl * (1.0 - k) + k);
         let gv = nv / (nv * (1.0 - k) + k);
         let spec = d * gl * gv;
-        let specColor = vec3<f32>(0.9, 0.85, 0.75) * spec * 0.12 * (0.2 + 0.8 * fresnel);
+        let specColor = vec3<f32>(0.9, 0.85, 0.75) * spec * 0.12 * (0.2 + 0.8 * fresnel) * lightI;
 
         c = diff + specColor;
 
@@ -507,11 +544,12 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
         } else if (tsMode < 1.5) {
             shadow = planarMaskShadow(worldXY);
         }
-        c *= mix(0.25, 1.0, shadow);
+        shadow = pow(shadow, 2.2);
+        let shadowDark = frame.lightingParams.y;
+        c *= mix(shadowDark, 1.0, shadow);
 
-        let ambient = 0.10;
+        let ambient = frame.lightingParams.x;
         c += baseColor * ambient;
-        c *= 0.85;
     }
 
     let clipPos = frame.viewProj * vec4<f32>(worldPos, 1.0);
@@ -641,9 +679,19 @@ fn rope_vertex(
     @location(4) params: vec4<f32>,
 ) -> RopeVSOut {
     var o: RopeVSOut;
+    let time = frame.timeDrag.x;
+    let dragActive = frame.timeDrag.w;
+    let u = uv.x;
+    let pinch = params.y;
 
-    o.worldPos = position;
-    o.position = frame.viewProj * vec4<f32>(position, 1.0);
+    let w = sin(u * 3.14159265) * sin(u * 3.14159265);
+    let energy = 0.6;
+    let amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
+    let wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
+    let displaced = position + normalize(normal) * (wave * amp);
+
+    o.worldPos = displaced;
+    o.position = frame.viewProj * vec4<f32>(displaced, 1.0);
     o.normal = normal;
     o.color = color;
     o.uv = uv;
@@ -660,15 +708,22 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     let celMode = frame.shadowInvSize_unused.z > 0.5;
 
     let l = normalize(frame.lightDir_intensity.xyz);
+    let lightI = frame.lightDir_intensity.w;
     let v = normalize(frame.cameraPos.xyz - in.worldPos);
     var n = normalize(in.normal);
     let taut = clamp(in.params.x, 0.0, 1.0);
     let pinch = clamp(in.params.y, 0.0, 1.0);
+    let repel = clamp(in.params.z / 1000.0, 0.0, 1.0);
     let fadeOut = clamp(in.params.w, 0.0, 1.0);
+
+    let microBump = frame.ropeMatParams2.z;
+    let contactAOStr = frame.ropeMatParams2.w;
+    let liftGlowStr = frame.ropeMatParams3.x;
+    let bumpScale = max(frame.ropeMatParams3.y, 0.5);
 
     let stretchDamp = 1.0 / (1.0 + taut * 2.5);
 
-    let baseUV = in.uv * vec2<f32>(3.0, 0.8);
+    let baseUV = in.uv * vec2<f32>(bumpScale, bumpScale * 0.27);
     let ns1 = textureSample(noise_tex, noise_sampler, baseUV).rg;
     let ns2 = textureSample(noise_tex, noise_sampler, baseUV * 2.7 + vec2<f32>(0.31, 0.73)).rg;
     let ns3 = textureSample(noise_tex, noise_sampler, baseUV * 5.3 + vec2<f32>(0.67, 0.19)).rg;
@@ -681,12 +736,11 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     tVec = normalize(tVec);
     let bVec = normalize(cross(n, tVec));
 
-    let microBump = 0.10 * stretchDamp;
-    let microAmp = microBump + pinch * 0.03 * stretchDamp;
+    let microAmp = (microBump + pinch * 0.12) * stretchDamp;
     n = normalize(n + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * microAmp);
 
     var base = in.color;
-    let microAO = (n0 + n1 - 1.0) * microBump * 2.0;
+    let microAO = (n0 + n1 - 1.0) * microBump * stretchDamp * 3.0;
     base *= 1.0 + microAO;
     base = mix(base, base * 1.3, vec3<f32>(pinch * 0.15));
 
@@ -694,35 +748,28 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     base = mix(base, vec3<f32>(1.0, 1.0, 0.95), vec3<f32>(glowT * 0.7));
 
     let roughNoise = textureSample(noise_tex, noise_sampler, baseUV * 1.7 + 0.37).r;
-    let rough = roughNoise + pinch * 0.06;
+    let rough = roughNoise + pinch * 0.06 + repel * 0.04;
+
+    let repelAO = smoothstep(0.0, 0.5, repel) * contactAOStr;
+    let pinchAO = smoothstep(0.0, 0.3, pinch) * contactAOStr * 0.6;
+    let contactAO = 1.0 - clamp(repelAO + pinchAO, 0.0, 1.0);
 
     var c: vec3<f32>;
     if (celMode) {
         c = celShading(base, n, l, v);
     } else {
-        let ao = mix(0.80, 1.0, clamp(taut * 0.5 + (1.0 - pinch) * 0.3, 0.0, 1.0));
-        let fiber = 0.15;
-        c = matteRubber(base, n, l, v, rough, fiber);
+        c = rubberPBR(base, n, l, v, rough, taut, in.uv.y,
+                      frame.ropeMatParams, frame.ropeMatParams2,
+                      frame.ropeMatParams3.z, frame.ropeMatParams3.w) * lightI;
+        c *= contactAO;
 
-        let heightLift = clamp(in.worldPos.z / 0.35, 0.0, 1.0);
-        c += vec3<f32>(0.03, 0.04, 0.06) * heightLift * 0.5;
-        c *= ao;
+        let liftGlow = clamp(in.worldPos.z / 0.35, 0.0, 1.0);
+        c += vec3<f32>(0.03, 0.04, 0.06) * liftGlow * liftGlowStr;
 
-        let renderMode = u32(frame.shadowInvSize_unused.w);
-        if (renderMode > 0u) {
-            let lp4 = frame.lightViewProj * vec4<f32>(in.worldPos, 1.0);
-            let ndc3 = lp4.xyz / lp4.w;
-            let suv2 = vec2<f32>(ndc3.x * 0.5 + 0.5, 1.0 - (ndc3.y * 0.5 + 0.5));
-            let refD = ndc3.z - frame.orthoHalfSize_shadowBias.z;
-            let interShadow = textureSampleCompare(shadow_map, shadow_sampler, clamp(suv2, vec2<f32>(0.001), vec2<f32>(0.999)), refD);
-            let inBounds = suv2.x >= 0.0 && suv2.x <= 1.0 && suv2.y >= 0.0 && suv2.y <= 1.0;
-            c *= mix(0.38, 1.0, select(1.0, interShadow, inBounds));
-        } else {
-            let lift = 0.22 + 0.06 * taut;
-            c *= lift;
-        }
-
-        c *= 0.65;
+        var shadow = shadowMapPCF(in.worldPos);
+        shadow = pow(shadow, 2.0);
+        let ambient = frame.lightingParams.x + 0.04 * taut;
+        c *= mix(ambient, 1.0, shadow);
     }
 
     c += c * glowT * 2.5;
@@ -741,8 +788,18 @@ fn rope_shadow_vertex(
     @location(3) uv: vec2<f32>,
     @location(4) params: vec4<f32>,
 ) -> ShadowVSOut {
+    let time = frame.timeDrag.x;
+    let dragActive = frame.timeDrag.w;
+    let u = uv.x;
+    let pinch = params.y;
+    let w = sin(u * 3.14159265) * sin(u * 3.14159265);
+    let energy = 0.6;
+    let amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
+    let wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
+    let displaced = position + normalize(normal) * (wave * amp);
+
     var o: ShadowVSOut;
-    o.position = frame.lightViewProj * vec4<f32>(position, 1.0);
+    o.position = frame.lightViewProj * vec4<f32>(displaced, 1.0);
     return o;
 }
 
@@ -874,7 +931,7 @@ fn post_fragment(in: FullscreenVSOut) -> @location(0) vec4<f32> {
         exposure = 0.75;
     } else {
         combined = c + b * 0.18;
-        exposure = 1.1;
+        exposure = max(frame.lightingParams.w, 0.5);
     }
     var mapped = vec3<f32>(1.0) - exp(-combined * exposure);
     mapped = pow(clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));

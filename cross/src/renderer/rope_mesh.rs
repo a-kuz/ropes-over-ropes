@@ -115,6 +115,27 @@ fn rectangular_profile(width: f32, height: f32) -> Profile2D {
     Profile2D { positions, normals, v }
 }
 
+fn square_profile(width: f32, height: f32) -> Profile2D {
+    let hw = (width * 0.5).max(0.0005);
+    let hh = (height * 0.5).max(0.0005);
+
+    let right  = Vec2::new( 1.0,  0.0);
+    let top    = Vec2::new( 0.0,  1.0);
+    let left   = Vec2::new(-1.0,  0.0);
+    let bottom = Vec2::new( 0.0, -1.0);
+
+    let tr = Vec2::new( hw,  hh);
+    let tl = Vec2::new(-hw,  hh);
+    let bl = Vec2::new(-hw, -hh);
+    let br = Vec2::new( hw, -hh);
+
+    let positions = vec![tr, tl, tl, bl, bl, br, br, tr];
+    let normals = vec![top, top, left, left, bottom, bottom, right, right];
+    let v = (0..8).map(|i| i as f32 / 8.0).collect();
+
+    Profile2D { positions, normals, v }
+}
+
 fn segment_index(point_index: usize, segment_starts: &[usize]) -> usize {
     if segment_starts.is_empty() {
         return 0;
@@ -147,20 +168,28 @@ pub fn build_rect(
     fade_out: f32,
     rope_index: usize,
     profile_segments: usize,
+    force_square: bool,
+    rope_contact_points: &[Vec2],
+    rope_contact_radius: f32,
 ) -> RopeMesh {
     let point_count = points.len();
     if point_count < 2 {
         return RopeMesh { vertices: Vec::new(), indices: Vec::new() };
     }
 
-    let use_physics_frames = cross_section.is_rectangular()
+    let use_physics_frames = (cross_section.is_rectangular() || force_square)
         && material_frames.is_some()
         && material_frames.unwrap().len() == point_count;
 
     let r = radius.max(0.0005);
-    let profile = match cross_section {
-        CrossSection::Rectangular { width, height } => rectangular_profile(width, height),
-        _ => circular_profile(r, profile_segments),
+    let profile = if force_square {
+        let side = r * 2.0;
+        square_profile(side, side)
+    } else {
+        match cross_section {
+            CrossSection::Rectangular { width, height } => rectangular_profile(width, height),
+            _ => circular_profile(r, profile_segments),
+        }
     };
     let profile_count = profile.positions.len();
     let faceted_profile = !cross_section.is_rectangular() && profile_segments <= 4;
@@ -320,9 +349,23 @@ pub fn build_rect(
             fade_out,
         );
 
+        let mut contact_deform: f32 = 0.0;
+        if !rope_contact_points.is_empty() && rope_contact_radius > 1e-6 {
+            let p2 = Vec2::new(position.x, position.y);
+            let inner = rope_contact_radius * 0.4;
+            let outer = rope_contact_radius * 1.3;
+            for &cp in rope_contact_points {
+                let dist = (p2 - cp).length();
+                let w = smoothstep(outer, inner, dist);
+                if w > 0.0 {
+                    contact_deform = contact_deform.max(w * 0.1);
+                }
+            }
+        }
+
         let latex_thinning = 1.0 / (1.0 + total_tension * 1.5 * center_mask_strong).max(1.0).sqrt();
         let relax_thickening = 1.0 + stretch_relax * 0.15;
-        let scale = latex_thinning * relax_thickening;
+        let scale = latex_thinning * relax_thickening * (1.0 - contact_deform);
 
         let lighten_amount = total_tension * center_mask_strong * 0.35;
         let base_color = if !segment_starts.is_empty() {
@@ -512,6 +555,71 @@ pub fn build_plug(
         let next = (prev_ring + (s + 1) % seg) as u32;
         indices.extend_from_slice(&[curr, tip_idx, next]);
     }
+
+    RopeMesh { vertices, indices }
+}
+
+pub fn build_square_cap(
+    center: Vec3,
+    half_size: f32,
+    depth: f32,
+    color: Vec3,
+    darken: f32,
+    rope_index: usize,
+    fade_out: f32,
+) -> RopeMesh {
+    let h = half_size.max(0.001);
+    let d = depth.max(0.001);
+    let params = Vec4::new(0.0, 0.0, rope_index as f32, fade_out);
+
+    let mut vertices = Vec::new();
+    let mut indices: Vec<u32> = Vec::new();
+
+    let top_n = Vec3::Z;
+    let corners = [
+        Vec2::new( h,  h),
+        Vec2::new(-h,  h),
+        Vec2::new(-h, -h),
+        Vec2::new( h, -h),
+    ];
+
+    let pos3 = |c: Vec2, z: f32| Vec3::new(center.x + c.x, center.y + c.y, z);
+
+    let mut quad = |p0: Vec3, p1: Vec3, p2: Vec3, p3: Vec3, n: Vec3, c: Vec3| {
+        let base = vertices.len() as u32;
+        vertices.push(rv(p0, n, c, Vec2::new(0.5, 0.5), params));
+        vertices.push(rv(p1, n, c, Vec2::new(0.5, 0.5), params));
+        vertices.push(rv(p2, n, c, Vec2::new(0.5, 0.5), params));
+        vertices.push(rv(p3, n, c, Vec2::new(0.5, 0.5), params));
+        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+    };
+
+    let top_z = center.z;
+    let bot_z = center.z - d;
+
+    quad(pos3(corners[0], top_z), pos3(corners[1], top_z),
+         pos3(corners[2], top_z), pos3(corners[3], top_z),
+         top_n, color);
+
+    let side_color = color * (1.0 - darken * 0.4);
+    let wall_normals = [
+        Vec3::new( 0.0,  1.0, 0.0),
+        Vec3::new(-1.0,  0.0, 0.0),
+        Vec3::new( 0.0, -1.0, 0.0),
+        Vec3::new( 1.0,  0.0, 0.0),
+    ];
+    let wall_edges: [(usize, usize); 4] = [(0, 1), (1, 2), (2, 3), (3, 0)];
+    for (ei, &(a, b)) in wall_edges.iter().enumerate() {
+        let n = wall_normals[ei];
+        quad(pos3(corners[a], top_z), pos3(corners[b], top_z),
+             pos3(corners[b], bot_z), pos3(corners[a], bot_z),
+             n, side_color);
+    }
+
+    let bottom_color = color * (1.0 - darken);
+    quad(pos3(corners[3], bot_z), pos3(corners[2], bot_z),
+         pos3(corners[1], bot_z), pos3(corners[0], bot_z),
+         Vec3::new(0.0, 0.0, -1.0), bottom_color);
 
     RopeMesh { vertices, indices }
 }

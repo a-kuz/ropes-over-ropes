@@ -6,6 +6,7 @@ import AppKit
 import MetalKit
 import SwiftUI
 
+@MainActor
 class GameController: ObservableObject {
     weak var renderer: Renderer?
 
@@ -344,14 +345,16 @@ class GameController: ObservableObject {
 
     init() {
         loadSaved()
-        fpsTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { [weak self] _ in
-            guard let self, let r = self.renderer else { return }
-            self.fps = r.currentFPS
-            if self.currentLevel != r.currentLevelId {
-                self.currentLevel = r.currentLevelId
-            }
-            if self.profilerActive {
-                self.profilerSummary = PhysicsProfiler.shared.summaryString()
+        fpsTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
+            Task { @MainActor [weak self] in
+                guard let self, let r = self.renderer else { return }
+                self.fps = r.currentFPS
+                if self.currentLevel != r.currentLevelId {
+                    self.currentLevel = r.currentLevelId
+                }
+                if self.profilerActive {
+                    self.profilerSummary = PhysicsProfiler.shared.summaryString()
+                }
             }
         }
     }

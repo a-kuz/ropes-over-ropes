@@ -125,6 +125,8 @@ pub struct VerletSimulator {
     pub twist_stiffness: f32,
     pub twist_damping: f32,
     pub gravity_torque_strength: f32,
+    pub bend_compliance: f32,
+    pub bend_velocity_coupling: f32,
 
     current_tension: f32,
     tension_speed: f32,
@@ -159,6 +161,8 @@ impl VerletSimulator {
             twist_stiffness: 0.08,
             twist_damping: 0.75,
             gravity_torque_strength: 0.8,
+            bend_compliance: 0.0029,
+            bend_velocity_coupling: 0.364,
             current_tension: 1.0,
             tension_speed: 0.5,
             dt: 1.0 / 60.0,
@@ -600,7 +604,7 @@ impl VerletSimulator {
                 if !self.bands[bi].active || self.bands[bi].fade_out != 0.0 {
                     continue;
                 }
-                self.band_constraints(bi, current_tension);
+                self.band_constraints(bi, current_tension, dt);
             }
             if collide {
                 if iter > 0 && iter % 3 == 0 {
@@ -682,7 +686,7 @@ impl VerletSimulator {
 
     // --- Constraints ---
 
-    fn band_constraints(&mut self, bi: usize, current_tension: f32) {
+    fn band_constraints(&mut self, bi: usize, current_tension: f32, dt: f32) {
         let n = self.bands[bi].positions.len();
         let seg_len = self.bands[bi].segment_length * current_tension;
         let pin_s = self.bands[bi].pin_start;
@@ -716,6 +720,45 @@ impl VerletSimulator {
                     }
                 }
                 idx += 2;
+            }
+        }
+
+        // Bend constraint (XPBD curvature minimization)
+        if n >= 3 {
+            let alpha = self.bend_compliance.max(0.0) / (dt * dt).max(1e-8);
+            let bend_coupling = self.bend_velocity_coupling.clamp(0.0, 1.0);
+            let denom = 6.0 + alpha;
+            for i in 1..(n - 1) {
+                let p0 = self.bands[bi].positions[i - 1];
+                let p1 = self.bands[bi].positions[i];
+                let p2 = self.bands[bi].positions[i + 1];
+                let curvature = p0 - p1 * 2.0 + p2;
+                if curvature.dot(curvature) < 1e-14 {
+                    continue;
+                }
+                let lambda = curvature / denom;
+                let mut d0 = -lambda;
+                let mut d1 = lambda * 2.0;
+                let mut d2 = -lambda;
+
+                if i - 1 == 0 {
+                    d1 += d0 * 0.5;
+                    d2 += d0 * 0.5;
+                    d0 = Vec3::ZERO;
+                }
+                if i + 1 == n - 1 {
+                    d0 += d2 * 0.5;
+                    d1 += d2 * 0.5;
+                    d2 = Vec3::ZERO;
+                }
+
+                self.bands[bi].positions[i - 1] += d0;
+                self.bands[bi].positions[i] += d1;
+                self.bands[bi].positions[i + 1] += d2;
+
+                self.bands[bi].previous_positions[i - 1] += d0 * bend_coupling;
+                self.bands[bi].previous_positions[i] += d1 * bend_coupling;
+                self.bands[bi].previous_positions[i + 1] += d2 * bend_coupling;
             }
         }
 

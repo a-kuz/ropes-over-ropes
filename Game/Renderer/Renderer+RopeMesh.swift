@@ -145,7 +145,49 @@ extension Renderer {
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
 
-            if !squareCrossSection {
+            if squareCrossSection {
+                if visiblePoints.count >= 2 {
+                    let isSucking = fadeOut > 0 && band.suckHole != nil
+                    let bandHalf = scaledRadius
+                    let hr = holeRadius * holeRadiusScale
+
+                    func swivelFrame(at idx: Int) -> (d1: SIMD3<Float>, d2: SIMD3<Float>) {
+                        if let fr = visibleFrames, fr.count > idx {
+                            return (fr[idx].d1, fr[idx].d2)
+                        }
+                        return (SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0))
+                    }
+
+                    if !isSucking || band.suckFromEnd == 0 {
+                        let pos = visiblePoints[0]
+                        let tan = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                        let (d1, d2) = swivelFrame(at: 0)
+                        let swivel = RopeMeshBuilder.buildSwivel(
+                            center: pos, tangent: -tan,
+                            holeRadius: hr, bandHalf: bandHalf,
+                            d1: d1, d2: d2, color: ropeColor
+                        )
+                        allVertices.append(contentsOf: swivel.vertices)
+                        allIndices.append(contentsOf: swivel.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(swivel.vertices.count)
+                    }
+
+                    if !isSucking || band.suckFromEnd == 1 {
+                        let lastIdx = visiblePoints.count - 1
+                        let pos = visiblePoints[lastIdx]
+                        let tan = simd_normalize(visiblePoints[lastIdx] - visiblePoints[lastIdx - 1])
+                        let (d1, d2) = swivelFrame(at: lastIdx)
+                        let swivel = RopeMeshBuilder.buildSwivel(
+                            center: pos, tangent: tan,
+                            holeRadius: hr, bandHalf: bandHalf,
+                            d1: d1, d2: d2, color: ropeColor
+                        )
+                        allVertices.append(contentsOf: swivel.vertices)
+                        allIndices.append(contentsOf: swivel.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(swivel.vertices.count)
+                    }
+                }
+            } else {
                 let sphereRadius = holeRadius * holeRadiusScale * capRadiusScale
                 if visiblePoints.count >= 2 {
                     let isSucking = fadeOut > 0 && band.suckHole != nil

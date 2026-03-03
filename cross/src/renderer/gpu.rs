@@ -9,7 +9,7 @@ use super::frame_types::*;
 use super::hole_mesh;
 use super::passes::build_frame_uniforms;
 
-const SHADOW_MAP_SIZE: u32 = 512;
+const SHADOW_MAP_SIZE: u32 = 2048;
 const BLOOM_DIVISOR: u32 = 16;
 
 pub struct FrameInFlight {
@@ -119,6 +119,8 @@ pub struct GpuRenderer {
     pub camera: Camera,
     pub highlight_hole: i32,
     pub render_scale: f32,
+    pub rope_material: RopeMaterialSettings,
+    pub lighting: LightingSettings,
     width: u32,
     height: u32,
 
@@ -657,7 +659,7 @@ impl GpuRenderer {
         });
 
         let noise_view = {
-            const NOISE_SIZE: u32 = 1024;
+            const NOISE_SIZE: u32 = 2048;
             const GRID: u32 = 128;
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("noise_texture"),
@@ -1025,6 +1027,8 @@ impl GpuRenderer {
             camera: Camera::default(),
             highlight_hole: -1,
             render_scale,
+            rope_material: RopeMaterialSettings::default(),
+            lighting: LightingSettings::default(),
             width,
             height,
 
@@ -1166,7 +1170,19 @@ impl GpuRenderer {
     // ─────────────────────────── data uploads ───────────────────────────
 
     pub fn update_hole_instances(&mut self, positions: &[glam::Vec2], radius: f32) {
-        let mesh = hole_mesh::build(48, 0.76, 1.0, 1.25);
+        self.update_hole_instances_with_shape(positions, radius, false);
+    }
+
+    pub fn update_hole_instances_square(&mut self, positions: &[glam::Vec2], radius: f32) {
+        self.update_hole_instances_with_shape(positions, radius, true);
+    }
+
+    fn update_hole_instances_with_shape(&mut self, positions: &[glam::Vec2], radius: f32, square: bool) {
+        let mesh = if square {
+            hole_mesh::build_square(0.76, 1.0, 1.25, 4)
+        } else {
+            hole_mesh::build(48, 0.76, 1.0, 1.25)
+        };
 
         let gpu_verts: Vec<HoleVertex> = mesh
             .vertices
@@ -1204,7 +1220,11 @@ impl GpuRenderer {
             usage: wgpu::BufferUsages::STORAGE,
         });
 
-        self.bake_hole_mask(positions, radius);
+        if square {
+            self.bake_hole_mask_square(positions, radius);
+        } else {
+            self.bake_hole_mask(positions, radius);
+        }
 
         self.hole_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("hole_bind_group"),
@@ -1228,6 +1248,14 @@ impl GpuRenderer {
     }
 
     fn bake_hole_mask(&mut self, positions: &[glam::Vec2], radius: f32) {
+        self.bake_hole_mask_impl(positions, radius, false);
+    }
+
+    fn bake_hole_mask_square(&mut self, positions: &[glam::Vec2], radius: f32) {
+        self.bake_hole_mask_impl(positions, radius, true);
+    }
+
+    fn bake_hole_mask_impl(&mut self, positions: &[glam::Vec2], radius: f32, square: bool) {
         if positions.is_empty() { return; }
         let inner_r = radius * 0.76;
         let margin = radius * 2.0;
@@ -1261,9 +1289,13 @@ impl GpuRenderer {
                 let wy = (y as f32 + 0.5) / th as f32 * world_h + min_y;
                 let mut min_dist = f32::MAX;
                 for p in positions {
-                    let dx = wx - p.x;
-                    let dy = wy - p.y;
-                    let dist = (dx * dx + dy * dy).sqrt() - inner_r;
+                    let dx = (wx - p.x).abs();
+                    let dy = (wy - p.y).abs();
+                    let dist = if square {
+                        dx.max(dy) - inner_r
+                    } else {
+                        (dx * dx + dy * dy).sqrt() - inner_r
+                    };
                     if dist < min_dist { min_dist = dist; }
                 }
                 let norm = ((min_dist / sdf_range) * 0.5 + 0.5).clamp(0.0, 1.0);
@@ -1402,6 +1434,8 @@ impl GpuRenderer {
             cel_mode,
             self.hole_mask_bounds,
             self.draw_flags.table_shadow_mode,
+            &self.rope_material,
+            &self.lighting,
         );
         self.queue.write_buffer(&self.frame_uniforms_buffer, 0, bytemuck::bytes_of(&uniforms));
 

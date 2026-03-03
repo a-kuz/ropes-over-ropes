@@ -71,6 +71,7 @@ struct App {
     cel_mode: bool,
     downscaled: bool,
     low_fps_frames: u32,
+    square_cross_section: bool,
     active_touches: HashMap<u64, (f32, f32)>,
     touch_camera_active: bool,
     #[cfg(target_arch = "wasm32")]
@@ -92,6 +93,7 @@ struct App {
     prof_writer: Option<std::io::BufWriter<std::fs::File>>,
     prof_frame_num: u64,
     prof_events: Vec<&'static str>,
+    settings_open: bool,
 }
 
 impl App {
@@ -136,6 +138,7 @@ impl App {
             cel_mode: false,
             downscaled: false,
             low_fps_frames: 0,
+            square_cross_section: true,
             active_touches: HashMap::new(),
             touch_camera_active: false,
             #[cfg(target_arch = "wasm32")]
@@ -157,6 +160,7 @@ impl App {
             prof_writer: None,
             prof_frame_num: 0,
             prof_events: Vec::new(),
+            settings_open: false,
         }
     }
 
@@ -233,7 +237,11 @@ impl App {
         }
 
         if let Some(renderer) = &mut self.renderer {
-            renderer.update_hole_instances(&hole_positions, level.hole_radius);
+            if self.square_cross_section {
+                renderer.update_hole_instances_square(&hole_positions, level.hole_radius);
+            } else {
+                renderer.update_hole_instances(&hole_positions, level.hole_radius);
+            }
 
             let (sw, sh) = renderer.surface_size();
             let aspect = sw as f32 / sh.max(1) as f32;
@@ -552,9 +560,20 @@ impl App {
             let raw_input = egui_state.take_egui_input(&window);
             let mut hud_action = HudAction::default();
             let min_moves = self.min_moves;
+            let settings_open = self.settings_open;
+            let (mut rope_mat, mut lighting_settings) = self.renderer.as_ref()
+                .map(|r| (r.rope_material.clone(), r.lighting.clone()))
+                .unwrap_or_default();
+            let mut sq_cross = self.square_cross_section;
+            let move_count = self.move_count;
             let full_output = ctx.run(raw_input, |ctx| {
-                hud_action = hud::draw_hud(ctx, level, fps, active_ropes, total_ropes, victory_time, can_undo, render_mode, self.move_count, min_moves, cel_mode, prof_show, &prof_data);
+                hud_action = hud::draw_hud(ctx, level, fps, active_ropes, total_ropes, victory_time, can_undo, render_mode, move_count, min_moves, cel_mode, prof_show, &prof_data, settings_open, &mut rope_mat, &mut lighting_settings, &mut sq_cross);
             });
+            if let Some(r) = &mut self.renderer {
+                r.rope_material = rope_mat;
+                r.lighting = lighting_settings;
+            }
+            self.square_cross_section = sq_cross;
             egui_state.handle_platform_output(&window, full_output.platform_output.clone());
             if let Some(lvl) = hud_action.go_to_level {
                 self.pending_level = Some(lvl);
@@ -586,6 +605,9 @@ impl App {
                 self.prof_show = !self.prof_show;
                 #[cfg(not(target_arch = "wasm32"))]
                 self.toggle_prof_file();
+            }
+            if hud_action.toggle_settings {
+                self.settings_open = !self.settings_open;
             }
             Some((full_output, ctx))
         } else {
@@ -760,6 +782,26 @@ impl App {
         let mut all_indices: Vec<u32> = Vec::new();
         let mut base_vertex: u32 = 0;
 
+        let rope_scale = self.renderer.as_ref()
+            .map(|r| r.lighting.rope_radius_scale)
+            .unwrap_or(0.871);
+        let rope_visual_mul = 1.3 * rope_scale;
+
+        let mut all_rope_points: Vec<&[glam::Vec3]> = Vec::new();
+        let mut all_rope_radii_scaled: Vec<f32> = Vec::new();
+        for rope_index in 0..self.rope_endpoints.len() {
+            if rope_index >= sim.bands.len() || !sim.bands[rope_index].active
+                || (sim.bands[rope_index].fade_out == 0.0 && self.rope_endpoints[rope_index].0 == usize::MAX)
+            {
+                all_rope_points.push(&[]);
+                all_rope_radii_scaled.push(0.0);
+                continue;
+            }
+            all_rope_points.push(&sim.bands[rope_index].positions);
+            let r = if rope_index < self.rope_radii.len() { self.rope_radii[rope_index] } else { 0.038 };
+            all_rope_radii_scaled.push(r * rope_visual_mul);
+        }
+
         for rope_index in 0..self.rope_endpoints.len() {
             if rope_index >= sim.bands.len() || !sim.bands[rope_index].active {
                 continue;
@@ -779,7 +821,28 @@ impl App {
             } else {
                 0.038
             };
-            let visual_radius = radius * 1.3;
+            let visual_radius = radius * rope_visual_mul;
+
+            let mut contact_points: Vec<glam::Vec2> = Vec::new();
+            for other_idx in 0..all_rope_points.len() {
+                if other_idx == rope_index || all_rope_points[other_idx].is_empty() { continue; }
+                let other_pts = all_rope_points[other_idx];
+                let rj = all_rope_radii_scaled[other_idx];
+                let threshold = (visual_radius + rj) * 1.5;
+                let threshold_sq = threshold * threshold;
+                for s in 0..other_pts.len().saturating_sub(1) {
+                    let mid = (other_pts[s] + other_pts[s + 1]) * 0.5;
+                    let mid2 = glam::Vec2::new(mid.x, mid.y);
+                    let mut min_d2 = f32::MAX;
+                    for p in &band.positions {
+                        let d2 = (glam::Vec2::new(p.x, p.y) - mid2).length_squared();
+                        if d2 < min_d2 { min_d2 = d2; }
+                    }
+                    if min_d2 < threshold_sq {
+                        contact_points.push(mid2);
+                    }
+                }
+            }
 
             let rest_length = band.segment_length * (band.positions.len() as f32 - 1.0).max(1.0);
 
@@ -800,6 +863,9 @@ impl App {
                 band.fade_out,
                 rope_index,
                 prof_segs,
+                self.square_cross_section,
+                &contact_points,
+                visual_radius,
             );
 
             for idx in &mesh.indices {
@@ -817,39 +883,41 @@ impl App {
                 let hole_r = level.hole_radius;
                 let holes = &level.holes;
 
-                let start_pos = if dragging_start {
-                    band.positions.first().copied().unwrap_or(glam::Vec3::ZERO)
-                } else if start_hole < holes.len() {
-                    let hc = holes[start_hole].to_vec2();
-                    glam::Vec3::new(hc.x, hc.y, 0.0)
-                } else {
-                    glam::Vec3::ZERO
-                };
-                let plug_segs = if self.cel_mode { 8 } else { 20 };
-                if start_hole < holes.len() || dragging_start {
-                    let plug = rope_mesh::build_plug(
-                        start_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
-                    );
-                    for idx in &plug.indices { all_indices.push(idx + base_vertex); }
-                    all_vertices.extend_from_slice(&plug.vertices);
-                    base_vertex += plug.vertices.len() as u32;
-                }
+                if !self.square_cross_section {
+                    let start_pos = if dragging_start {
+                        band.positions.first().copied().unwrap_or(glam::Vec3::ZERO)
+                    } else if start_hole < holes.len() {
+                        let hc = holes[start_hole].to_vec2();
+                        glam::Vec3::new(hc.x, hc.y, 0.0)
+                    } else {
+                        glam::Vec3::ZERO
+                    };
+                    let plug_segs = if self.cel_mode { 8 } else { 20 };
+                    if start_hole < holes.len() || dragging_start {
+                        let plug = rope_mesh::build_plug(
+                            start_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                        );
+                        for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                        all_vertices.extend_from_slice(&plug.vertices);
+                        base_vertex += plug.vertices.len() as u32;
+                    }
 
-                let end_pos = if dragging_end {
-                    band.positions.last().copied().unwrap_or(glam::Vec3::ZERO)
-                } else if end_hole < holes.len() {
-                    let hc = holes[end_hole].to_vec2();
-                    glam::Vec3::new(hc.x, hc.y, 0.0)
-                } else {
-                    glam::Vec3::ZERO
-                };
-                if end_hole < holes.len() || dragging_end {
-                    let plug = rope_mesh::build_plug(
-                        end_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
-                    );
-                    for idx in &plug.indices { all_indices.push(idx + base_vertex); }
-                    all_vertices.extend_from_slice(&plug.vertices);
-                    base_vertex += plug.vertices.len() as u32;
+                    let end_pos = if dragging_end {
+                        band.positions.last().copied().unwrap_or(glam::Vec3::ZERO)
+                    } else if end_hole < holes.len() {
+                        let hc = holes[end_hole].to_vec2();
+                        glam::Vec3::new(hc.x, hc.y, 0.0)
+                    } else {
+                        glam::Vec3::ZERO
+                    };
+                    if end_hole < holes.len() || dragging_end {
+                        let plug = rope_mesh::build_plug(
+                            end_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                        );
+                        for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                        all_vertices.extend_from_slice(&plug.vertices);
+                        base_vertex += plug.vertices.len() as u32;
+                    }
                 }
             }
         }
@@ -878,6 +946,9 @@ impl App {
                 0.0,
                 1000 + ci,
                 prof_segs,
+                false,
+                &[],
+                0.0,
             );
 
             for idx in &mesh.indices {

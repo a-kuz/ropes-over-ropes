@@ -130,8 +130,6 @@ enum RopeMeshBuilder {
             let centerMask = center * center
             let centerMaskStrong = centerMask * centerMask
             
-            let baseLatexScale: Float = 0.90
-            
             let stretchFromRest = max(0, globalStretchFactor - 1.0)
             
             let stretchEffect = stretchRatio - 1.0
@@ -381,6 +379,91 @@ enum RopeMeshBuilder {
         quad(pos3(corners[3], z: botZ), pos3(corners[2], z: botZ),
              pos3(corners[1], z: botZ), pos3(corners[0], z: botZ),
              n: SIMD3<Float>(0, 0, -1), c: bottomColor)
+
+        return RopeMesh(vertices: vertices, indices: indices)
+    }
+
+    static func buildSwivel(
+        center: SIMD3<Float>,
+        tangent: SIMD3<Float>,
+        holeRadius: Float,
+        bandHalf: Float,
+        d1: SIMD3<Float>,
+        d2: SIMD3<Float>,
+        color: SIMD3<Float>,
+        segments: Int = 16
+    ) -> RopeMesh {
+        var vertices: [RopeVertex] = []
+        var indices: [UInt32] = []
+        let params = SIMD4<Float>(0, 0, 0, 0)
+        let uv = SIMD2<Float>(0.5, 0.5)
+
+        let t = simd_normalize(tangent)
+        let baseR = holeRadius * 1.1
+        let baseDepth: Float = holeRadius * 0.2
+        let baseColor = SIMD3<Float>(0.45, 0.45, 0.48)
+
+        let seg = max(8, segments)
+        let frontCenter = center + t * baseDepth * 0.5
+        let backCenter = center - t * baseDepth * 0.5
+
+        for s in 0..<seg {
+            let a0 = Float(s) / Float(seg) * Float.pi * 2
+            let a1 = Float(s + 1) / Float(seg) * Float.pi * 2
+            let p0dir = d1 * cos(a0) + d2 * sin(a0)
+            let p1dir = d1 * cos(a1) + d2 * sin(a1)
+
+            let pf0 = frontCenter + p0dir * baseR
+            let pf1 = frontCenter + p1dir * baseR
+            let pb0 = backCenter + p0dir * baseR
+            let pb1 = backCenter + p1dir * baseR
+
+            let base = UInt32(vertices.count)
+            vertices.append(RopeVertex(position: pf0, normal: p0dir, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pb0, normal: p0dir, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pf1, normal: p1dir, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pb1, normal: p1dir, color: baseColor, texCoord: uv, params: params))
+            indices.append(contentsOf: [base, base+1, base+2, base+2, base+1, base+3])
+
+            let capBase = UInt32(vertices.count)
+            vertices.append(RopeVertex(position: frontCenter, normal: t, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pf0, normal: t, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pf1, normal: t, color: baseColor, texCoord: uv, params: params))
+            indices.append(contentsOf: [capBase, capBase+1, capBase+2])
+        }
+
+        let clampH = bandHalf * 1.3
+        let clampFront: Float = holeRadius * 0.1
+        let clampBack: Float = holeRadius * 1.0
+        let clampColor = SIMD3<Float>(0.52, 0.52, 0.55)
+
+        let cf = center + t * clampFront
+        let cb = center - t * clampBack
+        let cd0: SIMD3<Float> = d1 * clampH + d2 * clampH
+        let cd1: SIMD3<Float> = d2 * clampH - d1 * clampH
+        let cd2: SIMD3<Float> = -d1 * clampH - d2 * clampH
+        let cd3: SIMD3<Float> = d1 * clampH - d2 * clampH
+        let corners_d = [cd0, cd1, cd2, cd3]
+
+        func clampQuad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, n: SIMD3<Float>, c: SIMD3<Float>) {
+            let base = UInt32(vertices.count)
+            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: uv, params: params))
+            indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
+        }
+
+        clampQuad(cf + corners_d[0], cf + corners_d[1], cf + corners_d[2], cf + corners_d[3],
+                  n: t, c: clampColor)
+
+        let wallNormals = [d2, -d1, -d2, d1]
+        let wallEdges: [(Int, Int)] = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        for (ei, (a, b)) in wallEdges.enumerated() {
+            clampQuad(cf + corners_d[a], cf + corners_d[b],
+                      cb + corners_d[b], cb + corners_d[a],
+                      n: wallNormals[ei], c: clampColor * 0.85)
+        }
 
         return RopeMesh(vertices: vertices, indices: indices)
     }

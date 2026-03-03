@@ -31,7 +31,6 @@ extension Renderer {
         var score: Float
     }
 
-    @MainActor
     func handleTouch(phase: InputPhase, location: CGPoint, in view: MTKView) {
         if cameraDebugMode {
             switch phase {
@@ -206,12 +205,11 @@ extension Renderer {
             }
         }
 
-        settleCheckTimer = settleCheckDelay
+        levelFlow.scheduleSettleCheck()
         self.dragState = nil
         highlightHoleIndex = -1
     }
 
-    @MainActor
     private func screenToWorld(_ location: CGPoint, view: MTKView) -> SIMD2<Float> {
         let width = max(1.0, Float(view.bounds.size.width))
         let height = max(1.0, Float(view.bounds.size.height))

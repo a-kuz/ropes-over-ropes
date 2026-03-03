@@ -2,7 +2,7 @@ import MetalKit
 import simd
 
 extension Renderer {
-    @MainActor     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
+    func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         lastViewSize = size
         let offscreen = scaledOffscreenSize(from: size)
         resizeTextures(size: offscreen)
@@ -28,42 +28,7 @@ extension Renderer {
 
         updateFrameUniforms(view: view)
 
-        // Physics step — fixed timestep accumulator handles variable frame rate
-        simulator?.update(deltaTime: deltaTime)
-
-        let isDragging = dragState != nil || simulator?.lowerAnimation != nil
-        if isDragging, let friction = simulator?.consumeAndResetFriction() {
-            frictionSound.update(intensity: friction.intensity, speed: friction.speed)
-        } else {
-            _ = simulator?.consumeAndResetFriction()
-            frictionSound.fadeOut()
-        }
-
-        // Delayed next level load after victory
-        if let timer = nextLevelTimer {
-            let remaining = timer - deltaTime
-            if remaining <= 0 {
-                nextLevelTimer = nil
-                let nextId = currentLevelId + 1
-                Self.logger.info("Level \(self.currentLevelId) completed! Loading level \(nextId)...")
-                loadLevel(levelId: nextId)
-            } else {
-                nextLevelTimer = remaining
-            }
-        }
-
-        // Delayed win check after drag settles
-        if let timer = settleCheckTimer {
-            let remaining = timer - deltaTime
-            if remaining <= 0 {
-                settleCheckTimer = nil
-                PhysicsProfiler.shared.measure(.winCheck) { removeUntangledRopes() }
-            } else {
-                settleCheckTimer = remaining
-            }
-        }
-
-        PhysicsProfiler.shared.measure(.meshBuild) { updateRopeMesh() }
+        updateFrameSimulation(deltaTime: deltaTime)
 
         lastViewSize = view.drawableSize
         if hdrTex == nil {
@@ -339,7 +304,7 @@ extension Renderer {
         let useCartoon = cartoonShaderEnabled
         let effExposure = useCartoon ? cartoonExposure : exposure
         let effBloom = useCartoon ? cartoonBloom : bloomStrength
-        var postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: cartoonEdgeSmooth)
+        let postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: cartoonEdgeSmooth)
         postParamsBuffer?.contents().copyMemory(from: [postParams], byteCount: MemoryLayout<PostParams>.stride)
     }
 

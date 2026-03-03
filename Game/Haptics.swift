@@ -3,9 +3,14 @@ import AVFoundation
 #if os(iOS)
 import UIKit
 
+@MainActor
 enum Haptics {
-    static func light()   { UIImpactFeedbackGenerator(style: .light).impactOccurred() }
-    static func medium()  { UIImpactFeedbackGenerator(style: .medium).impactOccurred() }
+    static func light() {
+        UIImpactFeedbackGenerator(style: .light).impactOccurred()
+    }
+    static func medium() {
+        UIImpactFeedbackGenerator(style: .medium).impactOccurred()
+    }
     static func success() {
         UINotificationFeedbackGenerator().notificationOccurred(.success)
         SoundPlayer.playVictory()
@@ -14,9 +19,14 @@ enum Haptics {
 #elseif os(macOS)
 import AppKit
 
+@MainActor
 enum Haptics {
-    static func light()   { NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now) }
-    static func medium()  { NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now) }
+    static func light() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.alignment, performanceTime: .now)
+    }
+    static func medium() {
+        NSHapticFeedbackManager.defaultPerformer.perform(.levelChange, performanceTime: .now)
+    }
     static func success() {
         NSHapticFeedbackManager.defaultPerformer.perform(.generic, performanceTime: .now)
         SoundPlayer.playVictory()

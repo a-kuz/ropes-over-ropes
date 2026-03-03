@@ -1,4 +1,5 @@
 use crate::renderer::gpu::GpuTimings;
+use crate::renderer::frame_types::{RopeMaterialSettings, LightingSettings};
 
 pub struct HudAction {
     pub go_to_level: Option<usize>,
@@ -7,6 +8,7 @@ pub struct HudAction {
     pub toggle_hd: bool,
     pub toggle_cel: bool,
     pub toggle_prof: bool,
+    pub toggle_settings: bool,
 }
 
 impl Default for HudAction {
@@ -18,6 +20,7 @@ impl Default for HudAction {
             toggle_hd: false,
             toggle_cel: false,
             toggle_prof: false,
+            toggle_settings: false,
         }
     }
 }
@@ -48,7 +51,7 @@ pub fn render_mode_scale(mode: u8) -> f32 {
     }
 }
 
-pub fn draw_hud(ctx: &egui::Context, level: usize, fps: u32, _active_ropes: usize, _total_ropes: usize, victory_time: f32, can_undo: bool, render_mode: u8, move_count: u32, min_moves: u32, cel_mode: bool, prof_show: bool, prof: &ProfilingSnapshot) -> HudAction {
+pub fn draw_hud(ctx: &egui::Context, level: usize, fps: u32, _active_ropes: usize, _total_ropes: usize, victory_time: f32, can_undo: bool, render_mode: u8, move_count: u32, min_moves: u32, cel_mode: bool, prof_show: bool, prof: &ProfilingSnapshot, settings_open: bool, rope_mat: &mut RopeMaterialSettings, lighting: &mut LightingSettings, square_cross: &mut bool) -> HudAction {
     let mut action = HudAction::default();
     let level_input_id = egui::Id::new("level_input_active");
     let level_text_id = egui::Id::new("level_input_text");
@@ -221,6 +224,21 @@ pub fn draw_hud(ctx: &egui::Context, level: usize, fps: u32, _active_ropes: usiz
                     .min_size(egui::vec2(44.0, 44.0)),
                 ).clicked() {
                     action.toggle_prof = true;
+                }
+                let settings_color = if settings_open {
+                    egui::Color32::from_rgb(255, 180, 60)
+                } else {
+                    egui::Color32::from_white_alpha(120)
+                };
+                if ui.add(
+                    egui::Button::new(
+                        egui::RichText::new("\u{2699}").color(settings_color).size(18.0),
+                    )
+                    .fill(egui::Color32::from_black_alpha(140))
+                    .corner_radius(22)
+                    .min_size(egui::vec2(44.0, 44.0)),
+                ).clicked() {
+                    action.toggle_settings = true;
                 }
             });
         });
@@ -414,6 +432,63 @@ pub fn draw_hud(ctx: &egui::Context, level: usize, fps: u32, _active_ropes: usiz
                         let tshadow_c = if prof.table_shadow_mode == 2 { egui::Color32::from_rgb(255, 80, 80) } else { dim };
                         ui.label(mono(format!("4 tshadow [{}]", tshadow_label), tshadow_c));
                     });
+            });
+    }
+
+    if settings_open {
+        egui::Window::new("Settings")
+            .id(egui::Id::new("settings_panel"))
+            .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 64.0))
+            .default_width(280.0)
+            .resizable(false)
+            .collapsible(true)
+            .show(ctx, |ui| {
+                egui::ScrollArea::vertical().max_height(600.0).show(ui, |ui| {
+                    ui.checkbox(square_cross, "Square cross-section");
+                    ui.add_space(6.0);
+
+                    egui::CollapsingHeader::new("Rope Material").default_open(true).show(ui, |ui| {
+                        ui.add(egui::Slider::new(&mut rope_mat.matte, 0.0..=1.0).text("Matte"));
+                        ui.add(egui::Slider::new(&mut rope_mat.gloss, 0.0..=3.0).text("Gloss"));
+                        ui.add(egui::Slider::new(&mut rope_mat.diffuse_wrap, 0.0..=0.5).text("Diffuse wrap"));
+                        ui.add(egui::Slider::new(&mut rope_mat.subsurface, 0.0..=1.0).text("Subsurface"));
+                        ui.add(egui::Slider::new(&mut rope_mat.edge_light, 0.0..=1.0).text("Edge light"));
+                        ui.add(egui::Slider::new(&mut rope_mat.saturation, 0.0..=2.0).text("Saturation"));
+                        ui.add(egui::Slider::new(&mut rope_mat.micro_bump, 0.0..=3.0).text("Micro bump"));
+                        ui.add(egui::Slider::new(&mut rope_mat.bump_scale, 0.5..=15.0).text("Bump scale"));
+                        ui.add(egui::Slider::new(&mut rope_mat.contact_ao, 0.0..=2.0).text("Contact AO"));
+                        ui.add(egui::Slider::new(&mut rope_mat.lift_glow, 0.0..=2.0).text("Lift glow"));
+                        ui.add(egui::Slider::new(&mut rope_mat.stretch_gloss, 0.0..=1.0).text("Stretch gloss"));
+                        ui.add(egui::Slider::new(&mut rope_mat.stretch_spec, 0.0..=1.0).text("Stretch spec"));
+                    });
+
+                    egui::CollapsingHeader::new("Lighting").default_open(true).show(ui, |ui| {
+                        ui.add(egui::Slider::new(&mut lighting.ambient, 0.0..=0.5).text("Ambient"));
+                        ui.add(egui::Slider::new(&mut lighting.shadow_darkness, 0.0..=1.0).text("Shadow dark"));
+                        ui.add(egui::Slider::new(&mut lighting.light_intensity, 0.1..=5.0).text("Light intensity"));
+                        ui.add(egui::Slider::new(&mut lighting.exposure, 0.1..=3.0).text("Exposure"));
+                        ui.add(egui::Slider::new(&mut lighting.light_dir[0], -1.0..=1.0).text("Light X"));
+                        ui.add(egui::Slider::new(&mut lighting.light_dir[1], -1.0..=1.0).text("Light Y"));
+                        ui.add(egui::Slider::new(&mut lighting.light_dir[2], -1.0..=1.0).text("Light Z"));
+                        ui.add(egui::Slider::new(&mut lighting.shadow_bias, 0.0..=0.01).text("Shadow bias"));
+                        ui.add(egui::Slider::new(&mut lighting.rope_radius_scale, 0.3..=2.0).text("Rope scale"));
+                        let shadow_labels = ["ShadowMap", "PCF", "PCSS"];
+                        let current = (lighting.shadow_type as usize).min(2);
+                        egui::ComboBox::from_label("Shadow type")
+                            .selected_text(shadow_labels[current])
+                            .show_ui(ui, |ui| {
+                                for (i, label) in shadow_labels.iter().enumerate() {
+                                    ui.selectable_value(&mut lighting.shadow_type, i as u8, *label);
+                                }
+                            });
+                    });
+
+                    ui.add_space(8.0);
+                    if ui.button("Reset to defaults").clicked() {
+                        *rope_mat = RopeMaterialSettings::default();
+                        *lighting = LightingSettings::default();
+                    }
+                });
             });
     }
 

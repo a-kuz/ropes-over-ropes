@@ -1,6 +1,7 @@
 import MetalKit
 import os.log
 
+@MainActor
 final class Renderer: NSObject, MTKViewDelegate {
     static let logger = Logger(subsystem: "com.uzls.four", category: "Renderer")
 
@@ -206,6 +207,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private var undoStore = RendererUndoStore<UndoEntry>()
+    var levelFlow = RendererLevelFlowCoordinator(settleCheckDelay: 0.5)
 
     var canUndo: Bool { undoStore.canUndo }
 
@@ -224,18 +226,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let entry = undoStore.pop(), let sim = simulator else { return }
         dragState = nil
         highlightHoleIndex = -1
-        settleCheckTimer = nil
+        levelFlow.cancelSettleCheck()
         sim.restoreSnapshot(entry.simulatorSnapshot)
         ropes = entry.ropeEndpoints
         holeOccupied = entry.holeOccupied
         onUndoStackChanged?(undoStore.canUndo)
     }
-
-    /// Timer for delayed win check after drag ends.
-    /// Rope needs time to settle before we check crossings.
-    var settleCheckTimer: Float? = nil
-    let settleCheckDelay: Float = 0.5
-    var nextLevelTimer: Float? = nil
     
     // Physics parameters (forwarded to simulator)
     var physicsGravity: Float = -5.0 {
@@ -299,70 +295,6 @@ final class Renderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
-    private static func generateNoiseTexture(device: MTLDevice, size: Int) -> MTLTexture? {
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rg8Unorm,
-            width: size,
-            height: size,
-            mipmapped: false
-        )
-        desc.usage = .shaderRead
-        guard let tex = device.makeTexture(descriptor: desc) else { return nil }
-
-        let gridSize = 128
-        var rng: UInt32 = 0xDEAD_BEEF
-        func lcg() -> Float {
-            rng = rng &* 1_664_525 &+ 1_013_904_223
-            return Float(rng >> 8) / 16_777_216.0
-        }
-        var grid = [Float](repeating: 0, count: gridSize * gridSize * 2)
-        for i in 0..<grid.count { grid[i] = lcg() }
-
-        func gridVal(_ gx: Int, _ gy: Int, _ ch: Int) -> Float {
-            let wx = ((gx % gridSize) + gridSize) % gridSize
-            let wy = ((gy % gridSize) + gridSize) % gridSize
-            return grid[(wy * gridSize + wx) * 2 + ch]
-        }
-        func smooth(_ t: Float) -> Float { t * t * (3 - 2 * t) }
-        func valueNoise(_ x: Float, _ y: Float, _ freq: Int, _ ch: Int) -> Float {
-            let fx = x * Float(freq), fy = y * Float(freq)
-            let ix = Int(floor(fx)), iy = Int(floor(fy))
-            let tx = smooth(fx - floor(fx)), ty = smooth(fy - floor(fy))
-            let c00 = gridVal(ix, iy, ch), c10 = gridVal(ix+1, iy, ch)
-            let c01 = gridVal(ix, iy+1, ch), c11 = gridVal(ix+1, iy+1, ch)
-            let a = c00 + (c10 - c00) * tx
-            let b = c01 + (c11 - c01) * tx
-            return a + (b - a) * ty
-        }
-
-        var pixels = [UInt8](repeating: 0, count: size * size * 2)
-        for y in 0..<size {
-            for x in 0..<size {
-                let u = Float(x) / Float(size)
-                let v = Float(y) / Float(size)
-                let idx = (y * size + x) * 2
-                for ch in 0..<2 {
-                    let o1 = valueNoise(u, v, 16, ch)
-                    let o2 = valueNoise(u, v, 37, ch)
-                    let o3 = valueNoise(u, v, 79, ch)
-                    let o4 = valueNoise(u, v, 128, ch)
-                    let fbm = o1 * 0.15 + o2 * 0.30 + o3 * 0.30 + o4 * 0.15
-                    let white = lcg()
-                    let val = fbm * 0.85 + white * 0.15
-                    pixels[idx + ch] = UInt8(min(max(val, 0), 1) * 255)
-                }
-            }
-        }
-
-        tex.replace(
-            region: MTLRegionMake2D(0, 0, size, size),
-            mipmapLevel: 0,
-            withBytes: pixels,
-            bytesPerRow: size * 2
-        )
-        return tex
-    }
-    
     func loadLevel(levelId: Int) {
         let loadStart = CACurrentMediaTime()
         currentLevelId = levelId
@@ -372,6 +304,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragWorld = .zero
         simulator = nil
         undoStore.clear()
+        levelFlow.clearAll()
         onUndoStackChanged?(false)
         
         var t0 = CACurrentMediaTime()
@@ -495,379 +428,6 @@ final class Renderer: NSObject, MTKViewDelegate {
             TOTAL=\(ms(loadStart, tWood))ms
             """)
         levelLoaded = true
-    }
-
-    private static func makePipeline(device: MTLDevice, descriptor: MTLRenderPipelineDescriptor) -> MTLRenderPipelineState {
-        do {
-            return try device.makeRenderPipelineState(descriptor: descriptor)
-        } catch {
-            fatalError(String(describing: error))
-        }
-    }
-
-    private static func makeComputePipeline(device: MTLDevice, function: MTLFunction) -> MTLComputePipelineState {
-        do {
-            return try device.makeComputePipelineState(function: function)
-        } catch {
-            fatalError(String(describing: error))
-        }
-    }
-
-    private static func makeTablePipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "fullscreenVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "tableFragment")
-        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        descriptor.colorAttachments[0].isBlendingEnabled = false
-        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeHolePipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "holeVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "holeFragment")
-        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        descriptor.colorAttachments[0].isBlendingEnabled = false
-        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.vertexDescriptor = makeHoleVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeRopePipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "ropeVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "ropeFragment")
-        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        descriptor.colorAttachments[0].isBlendingEnabled = false
-        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.vertexDescriptor = makeRopeVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeShadowRopePipeline(device: MTLDevice, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "ropeShadowVertex")
-        descriptor.depthAttachmentPixelFormat = .depth32Float
-        descriptor.vertexDescriptor = makeRopeVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeShadowHolePipeline(device: MTLDevice, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "holeShadowVertex")
-        descriptor.depthAttachmentPixelFormat = .depth32Float
-        descriptor.vertexDescriptor = makeHoleVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeBoardPipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "boardVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "boardFragment")
-        descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        descriptor.colorAttachments[0].isBlendingEnabled = false
-        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.vertexDescriptor = makeBoardVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeShadowBoardPipeline(device: MTLDevice, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "boardShadowVertex")
-        descriptor.depthAttachmentPixelFormat = .depth32Float
-        descriptor.vertexDescriptor = makeBoardVertexDescriptor()
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeBoardVertexDescriptor() -> MTLVertexDescriptor {
-        let descriptor = MTLVertexDescriptor()
-        descriptor.attributes[0].format = .float3
-        descriptor.attributes[0].offset = 0
-        descriptor.attributes[0].bufferIndex = 0
-
-        descriptor.attributes[1].format = .float3
-        descriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
-        descriptor.attributes[1].bufferIndex = 0
-
-        descriptor.attributes[2].format = .float2
-        descriptor.attributes[2].offset = MemoryLayout<SIMD3<Float>>.stride * 2
-        descriptor.attributes[2].bufferIndex = 0
-
-        descriptor.layouts[0].stride = MemoryLayout<BoardVertex>.stride
-        return descriptor
-    }
-
-    private static func makePostPipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
-        let descriptor = MTLRenderPipelineDescriptor()
-        descriptor.vertexFunction = library.makeFunction(name: "fullscreenVertex")
-        descriptor.fragmentFunction = library.makeFunction(name: "postFragment")
-        descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
-        descriptor.colorAttachments[0].isBlendingEnabled = false
-        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
-        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
-        return makePipeline(device: device, descriptor: descriptor)
-    }
-
-    private static func makeBloomPipelines(device: MTLDevice, library: MTLLibrary) -> (MTLComputePipelineState, MTLComputePipelineState, MTLComputePipelineState) {
-        guard let thresholdFunction = library.makeFunction(name: "bloomThreshold"),
-              let blurHFunction = library.makeFunction(name: "bloomBlurH"),
-              let blurVFunction = library.makeFunction(name: "bloomBlurV") else {
-            fatalError("Failed to load bloom functions")
-        }
-        return (
-            makeComputePipeline(device: device, function: thresholdFunction),
-            makeComputePipeline(device: device, function: blurHFunction),
-            makeComputePipeline(device: device, function: blurVFunction)
-        )
-    }
-
-    private static func makeDepthStates(device: MTLDevice) -> (MTLDepthStencilState, MTLDepthStencilState, MTLDepthStencilState) {
-        let backgroundDescriptor = MTLDepthStencilDescriptor()
-        backgroundDescriptor.depthCompareFunction = .always
-        backgroundDescriptor.isDepthWriteEnabled = false
-
-        let sceneDescriptor = MTLDepthStencilDescriptor()
-        sceneDescriptor.depthCompareFunction = .lessEqual
-        sceneDescriptor.isDepthWriteEnabled = true
-
-        let shadowDescriptor = MTLDepthStencilDescriptor()
-        shadowDescriptor.depthCompareFunction = .lessEqual
-        shadowDescriptor.isDepthWriteEnabled = true
-
-        guard let backgroundState = device.makeDepthStencilState(descriptor: backgroundDescriptor),
-              let sceneState = device.makeDepthStencilState(descriptor: sceneDescriptor),
-              let shadowState = device.makeDepthStencilState(descriptor: shadowDescriptor) else {
-            fatalError("Failed to create depth states")
-        }
-
-        return (sceneState, backgroundState, shadowState)
-    }
-
-    private static func makeRopeVertexDescriptor() -> MTLVertexDescriptor {
-        let descriptor = MTLVertexDescriptor()
-        descriptor.attributes[0].format = .float3
-        descriptor.attributes[0].offset = MemoryLayout<RopeVertex>.offset(of: \.position) ?? 0
-        descriptor.attributes[0].bufferIndex = 0
-
-        descriptor.attributes[1].format = .float3
-        descriptor.attributes[1].offset = MemoryLayout<RopeVertex>.offset(of: \.normal) ?? 0
-        descriptor.attributes[1].bufferIndex = 0
-
-        descriptor.attributes[2].format = .float3
-        descriptor.attributes[2].offset = MemoryLayout<RopeVertex>.offset(of: \.color) ?? 0
-        descriptor.attributes[2].bufferIndex = 0
-
-        descriptor.attributes[3].format = .float2
-        descriptor.attributes[3].offset = MemoryLayout<RopeVertex>.offset(of: \.texCoord) ?? 0
-        descriptor.attributes[3].bufferIndex = 0
-
-        descriptor.attributes[4].format = .float4
-        descriptor.attributes[4].offset = MemoryLayout<RopeVertex>.offset(of: \.params) ?? 0
-        descriptor.attributes[4].bufferIndex = 0
-
-        descriptor.layouts[0].stride = MemoryLayout<RopeVertex>.stride
-        return descriptor
-    }
-
-    private static func makeHoleVertexDescriptor() -> MTLVertexDescriptor {
-        let descriptor = MTLVertexDescriptor()
-        descriptor.attributes[0].format = .float3
-        descriptor.attributes[0].offset = 0
-        descriptor.attributes[0].bufferIndex = 0
-
-        descriptor.attributes[1].format = .float3
-        descriptor.attributes[1].offset = MemoryLayout<SIMD3<Float>>.stride
-        descriptor.attributes[1].bufferIndex = 0
-
-        descriptor.layouts[0].stride = MemoryLayout<HoleVertex>.stride
-        return descriptor
-    }
-
-    private static func buildHoleMeshBuffers(device: MTLDevice, segments: Int, square: Bool = false, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
-        let mesh = square ? HoleMeshBuilder.buildSquare() : HoleMeshBuilder.build(segments: segments)
-        indexCount = mesh.indices.count
-        vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
-        indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])
-    }
-
-    private func rebuildHoleInstances() {
-        guard !holePositions.isEmpty else { return }
-        let visualRadius = holeRadius * holeRadiusScale
-        holeInstances = Self.makeHoleInstances(device: device, positions: holePositions, elevations: holeElevations, radius: visualRadius)
-    }
-
-    private func rebuildHoleInstancesIfNeeded() {
-        rebuildHoleInstances()
-    }
-
-    private func rebuildHoleMeshIfNeeded() {
-        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
-    }
-
-    func rebuildBoardMesh() {
-        guard !boards.isEmpty else {
-            boardMeshVB = nil
-            boardMeshIB = nil
-            boardMeshIndexCount = 0
-            return
-        }
-
-        var vertices: [BoardVertex] = []
-        var indices: [UInt32] = []
-
-        for board in boards {
-            let hw = board.width * 0.5
-            let hh = board.height * 0.5
-            let z = board.elevation
-            let cx = board.centerX
-            let cy = board.centerY
-            let base: UInt32 = UInt32(vertices.count)
-
-            let topN = SIMD3<Float>(0, 0, 1)
-            vertices.append(BoardVertex(position: SIMD3(cx - hw, cy - hh, z), normal: topN, worldXY: SIMD2(cx - hw, cy - hh)))
-            vertices.append(BoardVertex(position: SIMD3(cx + hw, cy - hh, z), normal: topN, worldXY: SIMD2(cx + hw, cy - hh)))
-            vertices.append(BoardVertex(position: SIMD3(cx + hw, cy + hh, z), normal: topN, worldXY: SIMD2(cx + hw, cy + hh)))
-            vertices.append(BoardVertex(position: SIMD3(cx - hw, cy + hh, z), normal: topN, worldXY: SIMD2(cx - hw, cy + hh)))
-            indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
-
-            let sides: [(SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>, SIMD3<Float>)] = [
-                (SIMD3(cx - hw, cy - hh, z), SIMD3(cx + hw, cy - hh, z), SIMD3(cx + hw, cy - hh, 0), SIMD3(cx - hw, cy - hh, 0), SIMD3(0, -1, 0)),
-                (SIMD3(cx + hw, cy - hh, z), SIMD3(cx + hw, cy + hh, z), SIMD3(cx + hw, cy + hh, 0), SIMD3(cx + hw, cy - hh, 0), SIMD3(1, 0, 0)),
-                (SIMD3(cx + hw, cy + hh, z), SIMD3(cx - hw, cy + hh, z), SIMD3(cx - hw, cy + hh, 0), SIMD3(cx + hw, cy + hh, 0), SIMD3(0, 1, 0)),
-                (SIMD3(cx - hw, cy + hh, z), SIMD3(cx - hw, cy - hh, z), SIMD3(cx - hw, cy - hh, 0), SIMD3(cx - hw, cy + hh, 0), SIMD3(-1, 0, 0)),
-            ]
-            for (p0, p1, p2, p3, n) in sides {
-                let sb = UInt32(vertices.count)
-                vertices.append(BoardVertex(position: p0, normal: n, worldXY: SIMD2(p0.x, p0.y)))
-                vertices.append(BoardVertex(position: p1, normal: n, worldXY: SIMD2(p1.x, p1.y)))
-                vertices.append(BoardVertex(position: p2, normal: n, worldXY: SIMD2(p2.x, p2.y)))
-                vertices.append(BoardVertex(position: p3, normal: n, worldXY: SIMD2(p3.x, p3.y)))
-                indices.append(contentsOf: [sb, sb+1, sb+2, sb, sb+2, sb+3])
-            }
-        }
-
-        boardMeshIndexCount = indices.count
-        guard boardMeshIndexCount > 0 else { return }
-        boardMeshVB = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<BoardVertex>.stride, options: [.storageModeShared])
-        boardMeshIB = device.makeBuffer(bytes: indices, length: indices.count * MemoryLayout<UInt32>.stride, options: [.storageModeShared])
-    }
-
-    func bakeWoodTexture() {
-        guard !holePositions.isEmpty else { return }
-
-        var minP = SIMD2<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-        var maxP = SIMD2<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
-        for h in holePositions {
-            minP = min(minP, h)
-            maxP = max(maxP, h)
-        }
-        let boardSize = max(maxP.x - minP.x, maxP.y - minP.y)
-        let padding = max(boardSize * 3.0, 10.0)
-        let center = (minP + maxP) * 0.5
-        let half = (maxP - minP) * 0.5 + SIMD2<Float>(padding, padding)
-        let minBake = center - half
-        let maxBake = center + half
-
-        woodBoundsMin = minBake
-        woodBoundsMax = maxBake
-
-        let texSize = 8192
-        let desc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba16Float,
-            width: texSize,
-            height: texSize,
-            mipmapped: false
-        )
-        desc.usage = [.shaderRead, .shaderWrite]
-        guard let tex = device.makeTexture(descriptor: desc) else { return }
-        bakedWoodTex = tex
-
-        guard let cmdBuf = commandQueue.makeCommandBuffer(),
-              let encoder = cmdBuf.makeComputeCommandEncoder() else { return }
-
-        let effectiveSeed = Float(currentLevelId) + woodSeed * 100
-        var params = BakeWoodParams(worldMin: minBake, worldMax: maxBake, seed: effectiveSeed, brightness: woodBrightness, patternScale: woodPatternScale)
-        encoder.setComputePipelineState(bakeWoodPipeline)
-        encoder.setTexture(tex, index: 0)
-        encoder.setBytes(&params, length: MemoryLayout<BakeWoodParams>.stride, index: 0)
-
-        let threadWidth = bakeWoodPipeline.threadExecutionWidth
-        let threadHeight = max(1, bakeWoodPipeline.maxTotalThreadsPerThreadgroup / threadWidth)
-        let threadsPerGroup = MTLSize(width: threadWidth, height: threadHeight, depth: 1)
-        let groupsW = (texSize + threadWidth - 1) / threadWidth
-        let groupsH = (texSize + threadHeight - 1) / threadHeight
-        encoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: 1), threadsPerThreadgroup: threadsPerGroup)
-        encoder.endEncoding()
-
-        cmdBuf.commit()
-        cmdBuf.waitUntilCompleted()
-    }
-
-    func bakeBoardWoodVolumeTexture() {
-        guard !boards.isEmpty, !holePositions.isEmpty else {
-            bakedBoardWoodVolumeTex = nil
-            return
-        }
-
-        let texW = 128
-        let texH = 128
-        let texD = 64
-        let desc = MTLTextureDescriptor()
-        desc.textureType = .type3D
-        desc.pixelFormat = .rgba16Float
-        desc.width = texW
-        desc.height = texH
-        desc.depth = texD
-        desc.mipmapLevelCount = 1
-        desc.usage = [.shaderRead, .shaderWrite]
-        guard let tex = device.makeTexture(descriptor: desc) else { return }
-        bakedBoardWoodVolumeTex = tex
-
-        boardWoodZMin = min(0, boards.map(\.elevation).min() ?? boardElevation)
-        boardWoodZMax = max(boards.map(\.elevation).max() ?? boardElevation, 0.001)
-
-        guard let cmdBuf = commandQueue.makeCommandBuffer(),
-              let encoder = cmdBuf.makeComputeCommandEncoder() else { return }
-
-        let effectiveSeed = Float(currentLevelId) + woodSeed * 100
-        var params = BakeBoardWoodVolumeParams(
-            worldMin: SIMD4<Float>(woodBoundsMin.x, woodBoundsMin.y, boardWoodZMin, 0),
-            worldMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, boardWoodZMax, 0),
-            seed: effectiveSeed,
-            brightness: woodBrightness
-        )
-        encoder.setComputePipelineState(bakeBoardWoodVolumePipeline)
-        encoder.setTexture(tex, index: 0)
-        encoder.setBytes(&params, length: MemoryLayout<BakeBoardWoodVolumeParams>.stride, index: 0)
-
-        let maxThreads = bakeBoardWoodVolumePipeline.maxTotalThreadsPerThreadgroup
-        let tgDepth = max(1, min(4, maxThreads / 16))
-        let threadsPerGroup = MTLSize(width: 4, height: 4, depth: tgDepth)
-        let groupsW = (texW + threadsPerGroup.width - 1) / threadsPerGroup.width
-        let groupsH = (texH + threadsPerGroup.height - 1) / threadsPerGroup.height
-        let groupsD = (texD + threadsPerGroup.depth - 1) / threadsPerGroup.depth
-        encoder.dispatchThreadgroups(MTLSize(width: groupsW, height: groupsH, depth: groupsD), threadsPerThreadgroup: threadsPerGroup)
-        encoder.endEncoding()
-
-        cmdBuf.commit()
-        cmdBuf.waitUntilCompleted()
-    }
-
-    func invalidateOffscreenTextures() {
-        hdrTex = nil
-    }
-
-    func scaledOffscreenSize(from drawableSize: CGSize) -> CGSize {
-        let s = CGFloat(renderScale)
-        return CGSize(
-            width: max(1, (drawableSize.width * s).rounded()),
-            height: max(1, (drawableSize.height * s).rounded())
-        )
     }
 
     /// Resolves a HookRopeRef to a rope index.

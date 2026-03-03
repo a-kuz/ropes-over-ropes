@@ -105,16 +105,11 @@ Temporary Items
 
 # Jupyter Notebook
 .ipynb_checkpoints
-*/.ipynb_checkpoints/*
-*/.ipynb_checkpoints/*
-# *.ipynb
-
-Untitled*
+**/.ipynb_checkpoints/
+*.ipynb
 
 # XcodeGen generated files
 UzlsFour.xcodeproj
-UzlsFour.xcodeproj
-UzlsFour.xcodeproj/xcuserdata/alexsandrkuznetsov.xcuserdatad/xcschemes/xcschememanagement.plist
 cross/target
 cross/node_modules
 cross/profile_*
