@@ -27,11 +27,12 @@ extension Renderer {
         return HoleLayout(positions: positions, radius: radius)
     }
 
-    static func makeHoleInstances(device: MTLDevice, positions: [SIMD2<Float>], radius: Float) -> MTLBuffer {
+    static func makeHoleInstances(device: MTLDevice, positions: [SIMD2<Float>], elevations: [Float], radius: Float) -> MTLBuffer {
         var holes: [HoleInstance] = []
         holes.reserveCapacity(positions.count)
-        for position in positions {
-            holes.append(HoleInstance(positionRadius: SIMD4<Float>(position.x, position.y, 0, radius)))
+        for (i, position) in positions.enumerated() {
+            let z = elevations.indices.contains(i) ? elevations[i] : 0
+            holes.append(HoleInstance(positionRadius: SIMD4<Float>(position.x, position.y, z, radius)))
         }
 
         guard let buffer = device.makeBuffer(

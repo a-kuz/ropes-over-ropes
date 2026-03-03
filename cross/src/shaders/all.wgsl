@@ -39,6 +39,8 @@ struct ShadowSegmentArray {
 @group(0) @binding(2) var shadow_sampler: sampler_comparison;
 @group(0) @binding(3) var depth_sampler: sampler;
 @group(0) @binding(4) var planar_shadow_mask: texture_2d<f32>;
+@group(0) @binding(5) var noise_tex: texture_2d<f32>;
+@group(0) @binding(6) var noise_sampler: sampler;
 
 @group(1) @binding(0) var<storage, read> hole_instances: HoleInstanceArray;
 @group(1) @binding(1) var<storage, read> shadow_segments: ShadowSegmentArray;
@@ -96,212 +98,7 @@ fn hash21(p: vec2<f32>) -> f32 {
     return fract(n * 43758.5453123);
 }
 
-fn noise2d(p: vec2<f32>) -> f32 {
-    let i = floor(p);
-    let f = fract(p);
-    let ff = f * f * (3.0 - 2.0 * f);
-    let a = hash21(i);
-    let b = hash21(i + vec2<f32>(1.0, 0.0));
-    let c = hash21(i + vec2<f32>(0.0, 1.0));
-    let d = hash21(i + vec2<f32>(1.0, 1.0));
-    return mix(mix(a, b, ff.x), mix(c, d, ff.x), ff.y);
-}
-
-fn fbm2d(p: vec2<f32>, octaves: i32) -> f32 {
-    var value = 0.0;
-    var amplitude = 0.5;
-    var frequency = 1.0;
-    for (var i = 0; i < octaves; i = i + 1) {
-        value += amplitude * noise2d(p * frequency);
-        amplitude *= 0.5;
-        frequency *= 2.0;
-    }
-    return value;
-}
-
-// ── Wood texture ──
-
-fn woodTexture(uv: vec2<f32>, worldXY: vec2<f32>) -> vec3<f32> {
-    let p = worldXY * 0.28;
-
-    let angle = atan2(p.y, p.x);
-    let ringDist = length(p);
-
-    let ringNoise = fbm2d(p * 3.2 + vec2<f32>(angle * 0.5, 0.0), 4);
-    let ringWarp = ringNoise * 0.15;
-    let warpedDist = ringDist + ringWarp;
-
-    let ringPhase = warpedDist * 10.5 + fbm2d(p * 1.8, 3) * 1.4;
-    var rings = sin(ringPhase) * 0.5 + 0.5;
-    rings = pow(rings, 2.2);
-
-    let ringVariation = fbm2d(p * 4.5, 3);
-    rings = mix(rings, rings * 0.7, ringVariation * 0.4);
-
-    let densityNoise = fbm2d(p * 6.0, 4);
-    let density = mix(0.85, 1.15, densityNoise);
-    rings *= density;
-
-    let grainDir = angle + ringDist * 0.3;
-    let grainScale = 52.0;
-    let grainNoise = fbm2d(vec2<f32>(p.y * grainScale, p.x * 0.25 + grainDir * 2.0), 5);
-    var grainPattern = sin(p.y * grainScale + grainNoise * 4.5) * 0.5 + 0.5;
-    grainPattern = pow(grainPattern, 5.5);
-
-    let grainIntensity = mix(0.65, 0.95, fbm2d(p * 8.0, 3));
-    grainPattern = grainPattern * grainIntensity;
-
-    var medullaryRays = sin(angle * 8.0 + ringDist * 3.0) * 0.5 + 0.5;
-    medullaryRays = pow(medullaryRays, 12.0) * 0.3;
-    medullaryRays *= smoothstep(0.2, 1.5, ringDist);
-
-    let heartwoodDark = vec3<f32>(0.38, 0.24, 0.16);
-    let heartwoodMid = vec3<f32>(0.52, 0.36, 0.24);
-    let heartwoodLight = vec3<f32>(0.68, 0.52, 0.38);
-    let sapwoodLight = vec3<f32>(0.82, 0.70, 0.56);
-
-    let ringMask = rings;
-    var heartwoodColor = mix(heartwoodDark, heartwoodMid, vec3<f32>(ringMask));
-    heartwoodColor = mix(heartwoodColor, heartwoodLight, vec3<f32>(smoothstep(0.3, 0.7, rings)));
-
-    let sapwoodMask = smoothstep(0.0, 0.35, ringDist) * smoothstep(1.4, 0.95, ringDist);
-    var woodColor = mix(heartwoodColor, sapwoodLight, vec3<f32>(sapwoodMask * 0.65));
-
-    let grainEffect = grainPattern * 0.45;
-    woodColor = mix(woodColor, heartwoodLight * 1.15, vec3<f32>(grainEffect));
-
-    woodColor = mix(woodColor, woodColor * 1.12, vec3<f32>(medullaryRays));
-
-    let colorVariation = fbm2d(p * 0.95, 4);
-    woodColor *= mix(0.88, 1.12, colorVariation);
-
-    let textureVariation = fbm2d(p * 2.3, 5);
-    woodColor *= mix(0.92, 1.08, textureVariation);
-
-    let finalColor = clamp(woodColor, vec3<f32>(0.0), vec3<f32>(1.0));
-    return finalColor;
-}
-
-fn woodTextureVariant(uv: vec2<f32>, worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
-    let seedAngle = seed * 2.399;
-    let sa = sin(seedAngle);
-    let ca = cos(seedAngle);
-    let rotated = vec2<f32>(worldXY.x * ca - worldXY.y * sa,
-                            worldXY.x * sa + worldXY.y * ca);
-    let offset = vec2<f32>(hash21(vec2<f32>(seed, seed * 7.13)) * 40.0 - 20.0,
-                           hash21(vec2<f32>(seed * 3.71, seed)) * 40.0 - 20.0);
-    var p = (rotated + offset) * 1.1;
-    let scaleVar = mix(0.8, 1.2, hash21(vec2<f32>(seed * 1.23, 0.0)));
-    p *= scaleVar;
-
-    let angle = atan2(p.y, p.x);
-    let ringDist = length(p);
-
-    let ringNoise = fbm2d(p * 3.2 + vec2<f32>(angle * 0.5, 0.0), 3);
-    let ringWarp = ringNoise * 0.12;
-    let warpedDist = ringDist + ringWarp;
-
-    let ringDensity = mix(10.0, 18.0, hash21(vec2<f32>(seed * 2.17, 1.0)));
-    let ringPhase = warpedDist * ringDensity + fbm2d(p * 2.2, 3) * 1.2;
-    var rings = sin(ringPhase) * 0.5 + 0.5;
-    let ringSharp = mix(2.5, 4.0, hash21(vec2<f32>(seed * 5.77, 3.0)));
-    rings = pow(rings, ringSharp);
-
-    let ringVariation = fbm2d(p * 5.5, 3);
-    rings = mix(rings, rings * 0.65, ringVariation * 0.45);
-
-    let densityNoise = fbm2d(p * 8.0, 3);
-    let density = mix(0.88, 1.12, densityNoise);
-    rings *= density;
-
-    let grainDir = angle + ringDist * 0.3;
-    let grainScale = mix(45.0, 80.0, hash21(vec2<f32>(seed * 4.31, 2.0)));
-    let grainNoise = fbm2d(vec2<f32>(p.y * grainScale, p.x * 0.25 + grainDir * 2.0), 3);
-    var grainPattern = sin(p.y * grainScale + grainNoise * 5.0) * 0.5 + 0.5;
-    grainPattern = pow(grainPattern, 6.0);
-
-    let grainIntensity = mix(0.6, 0.95, fbm2d(p * 10.0, 3));
-    grainPattern *= grainIntensity;
-
-    let fineGrain = fbm2d(p * 28.0, 2) * 0.08;
-
-    var medullaryRays = sin(angle * 10.0 + ringDist * 4.0) * 0.5 + 0.5;
-    medullaryRays = pow(medullaryRays, 14.0) * 0.25;
-    medullaryRays *= smoothstep(0.15, 1.2, ringDist);
-
-    let pores = smoothstep(0.92, 0.98, hash21(floor(p * 120.0))) * 0.06;
-
-    let hue = fract(seed * 0.618033988);
-
-    var dark: vec3<f32>;
-    var mid: vec3<f32>;
-    var light: vec3<f32>;
-    var sap: vec3<f32>;
-
-    if (hue < 0.125) {
-        dark  = vec3<f32>(0.38, 0.24, 0.16);
-        mid   = vec3<f32>(0.52, 0.36, 0.24);
-        light = vec3<f32>(0.68, 0.52, 0.38);
-        sap   = vec3<f32>(0.82, 0.70, 0.56);
-    } else if (hue < 0.25) {
-        dark  = vec3<f32>(0.18, 0.12, 0.08);
-        mid   = vec3<f32>(0.30, 0.20, 0.14);
-        light = vec3<f32>(0.42, 0.30, 0.22);
-        sap   = vec3<f32>(0.55, 0.42, 0.32);
-    } else if (hue < 0.375) {
-        dark  = vec3<f32>(0.62, 0.52, 0.38);
-        mid   = vec3<f32>(0.74, 0.64, 0.50);
-        light = vec3<f32>(0.84, 0.76, 0.62);
-        sap   = vec3<f32>(0.92, 0.86, 0.74);
-    } else if (hue < 0.5) {
-        dark  = vec3<f32>(0.12, 0.08, 0.06);
-        mid   = vec3<f32>(0.22, 0.15, 0.10);
-        light = vec3<f32>(0.32, 0.22, 0.16);
-        sap   = vec3<f32>(0.44, 0.32, 0.24);
-    } else if (hue < 0.625) {
-        dark  = vec3<f32>(0.42, 0.20, 0.14);
-        mid   = vec3<f32>(0.58, 0.32, 0.22);
-        light = vec3<f32>(0.72, 0.46, 0.32);
-        sap   = vec3<f32>(0.85, 0.62, 0.48);
-    } else if (hue < 0.75) {
-        dark  = vec3<f32>(0.06, 0.05, 0.04);
-        mid   = vec3<f32>(0.14, 0.11, 0.08);
-        light = vec3<f32>(0.22, 0.17, 0.13);
-        sap   = vec3<f32>(0.34, 0.26, 0.20);
-    } else if (hue < 0.875) {
-        dark  = vec3<f32>(0.26, 0.12, 0.08);
-        mid   = vec3<f32>(0.40, 0.22, 0.14);
-        light = vec3<f32>(0.54, 0.32, 0.22);
-        sap   = vec3<f32>(0.68, 0.48, 0.34);
-    } else {
-        dark  = vec3<f32>(0.52, 0.46, 0.38);
-        mid   = vec3<f32>(0.64, 0.58, 0.50);
-        light = vec3<f32>(0.76, 0.70, 0.62);
-        sap   = vec3<f32>(0.88, 0.84, 0.76);
-    }
-
-    let ringMask = rings;
-    var heartwoodColor = mix(dark, mid, vec3<f32>(ringMask));
-    heartwoodColor = mix(heartwoodColor, light, vec3<f32>(smoothstep(0.3, 0.7, rings)));
-
-    let sapwoodMask = smoothstep(0.0, 0.35, ringDist) * smoothstep(1.4, 0.95, ringDist);
-    var woodColor = mix(heartwoodColor, sap, vec3<f32>(sapwoodMask * 0.65));
-
-    let grainEffect = grainPattern * 0.4;
-    woodColor = mix(woodColor, light * 1.1, vec3<f32>(grainEffect));
-    woodColor += fineGrain;
-
-    woodColor = mix(woodColor, woodColor * 1.1, vec3<f32>(medullaryRays));
-    woodColor -= pores;
-
-    let colorVariation = fbm2d(p * 1.2, 3);
-    woodColor *= mix(0.9, 1.1, colorVariation);
-
-    let textureVariation = fbm2d(p * 3.0, 3);
-    woodColor *= mix(0.93, 1.07, textureVariation);
-
-    return clamp(woodColor, vec3<f32>(0.0), vec3<f32>(1.0));
-}
+// (wood texture removed — will be baked to texture on CPU)
 
 // ── Cel shading ──
 
@@ -463,9 +260,7 @@ fn shadowMapPCF(worldPos: vec3<f32>) -> f32 {
     let lp4 = frame.lightViewProj * vec4<f32>(worldPos, 1.0);
     let ndc3 = lp4.xyz / lp4.w;
     let suv2 = vec2<f32>(ndc3.x * 0.5 + 0.5, 1.0 - (ndc3.y * 0.5 + 0.5));
-    if (suv2.x < 0.0 || suv2.x > 1.0 || suv2.y < 0.0 || suv2.y > 1.0) {
-        return 1.0;
-    }
+    let outOfBounds = suv2.x < 0.0 || suv2.x > 1.0 || suv2.y < 0.0 || suv2.y > 1.0;
     let smBias = frame.orthoHalfSize_shadowBias.z;
     let refD = ndc3.z - smBias;
     let smInv = frame.shadowInvSize_unused.x;
@@ -479,7 +274,7 @@ fn shadowMapPCF(worldPos: vec3<f32>) -> f32 {
         let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
         smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * radius, refD);
     }
-    return smVis / 12.0;
+    return select(smVis / 12.0, 1.0, outOfBounds);
 }
 
 fn planarCapsuleShadowAt(worldXY: vec2<f32>) -> f32 {
@@ -664,7 +459,12 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
             let grayVal = mix(0.35, 0.55, hash21(vec2<f32>(levelSeed * 4.13, 2.0)));
             baseColor = vec3<f32>(grayVal, grayVal, grayVal);
         } else {
-            baseColor = woodTextureVariant(uv, worldXY, levelSeed);
+            let wSeed = hash21(vec2<f32>(levelSeed * 1.23, 0.0));
+            let warmth = hash21(vec2<f32>(levelSeed * 3.71, 1.0));
+            let base_lum = mix(0.28, 0.48, wSeed);
+            baseColor = vec3<f32>(base_lum * mix(1.0, 1.12, warmth),
+                                  base_lum * mix(0.92, 1.0, warmth),
+                                  base_lum * mix(0.82, 0.92, warmth));
         }
     }
 
@@ -706,8 +506,6 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
             shadow = shadowMapPCF(worldPos);
         } else if (tsMode < 1.5) {
             shadow = planarMaskShadow(worldXY);
-        } else if (tsMode < 2.5) {
-            shadow = 1.0;
         }
         c *= mix(0.25, 1.0, shadow);
 
@@ -868,31 +666,57 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     let pinch = clamp(in.params.y, 0.0, 1.0);
     let fadeOut = clamp(in.params.w, 0.0, 1.0);
 
+    let stretchDamp = 1.0 / (1.0 + taut * 2.5);
+
+    let baseUV = in.uv * vec2<f32>(3.0, 0.8);
+    let ns1 = textureSample(noise_tex, noise_sampler, baseUV).rg;
+    let ns2 = textureSample(noise_tex, noise_sampler, baseUV * 2.7 + vec2<f32>(0.31, 0.73)).rg;
+    let ns3 = textureSample(noise_tex, noise_sampler, baseUV * 5.3 + vec2<f32>(0.67, 0.19)).rg;
+
+    let n0 = ns1.r * 0.5 + ns2.r * 0.3 + ns3.r * 0.2;
+    let n1 = ns1.g * 0.5 + ns2.g * 0.3 + ns3.g * 0.2;
+
+    var tVec = cross(n, vec3<f32>(0.0, 0.0, 1.0));
+    if (length(tVec) < 1e-3) { tVec = cross(n, vec3<f32>(0.0, 1.0, 0.0)); }
+    tVec = normalize(tVec);
+    let bVec = normalize(cross(n, tVec));
+
+    let microBump = 0.10 * stretchDamp;
+    let microAmp = microBump + pinch * 0.03 * stretchDamp;
+    n = normalize(n + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * microAmp);
+
     var base = in.color;
-    base = mix(base, vec3<f32>(1.0), vec3<f32>(pinch * 0.18));
-    base *= 1.0 + pinch * 0.28;
+    let microAO = (n0 + n1 - 1.0) * microBump * 2.0;
+    base *= 1.0 + microAO;
+    base = mix(base, base * 1.3, vec3<f32>(pinch * 0.15));
 
     let glowT = smoothstep(0.0, 0.6, fadeOut);
     base = mix(base, vec3<f32>(1.0, 1.0, 0.95), vec3<f32>(glowT * 0.7));
+
+    let roughNoise = textureSample(noise_tex, noise_sampler, baseUV * 1.7 + 0.37).r;
+    let rough = roughNoise + pinch * 0.06;
 
     var c: vec3<f32>;
     if (celMode) {
         c = celShading(base, n, l, v);
     } else {
-        let rough = 0.48 + pinch * 0.06;
-        let fiber = 0.15;
-
         let ao = mix(0.80, 1.0, clamp(taut * 0.5 + (1.0 - pinch) * 0.3, 0.0, 1.0));
+        let fiber = 0.15;
         c = matteRubber(base, n, l, v, rough, fiber);
 
         let heightLift = clamp(in.worldPos.z / 0.35, 0.0, 1.0);
-        c += vec3<f32>(0.06, 0.08, 0.12) * heightLift * 0.5;
+        c += vec3<f32>(0.03, 0.04, 0.06) * heightLift * 0.5;
         c *= ao;
 
         let renderMode = u32(frame.shadowInvSize_unused.w);
         if (renderMode > 0u) {
-            let interShadow = shadowMapPCF(in.worldPos);
-            c *= mix(0.38, 1.0, interShadow);
+            let lp4 = frame.lightViewProj * vec4<f32>(in.worldPos, 1.0);
+            let ndc3 = lp4.xyz / lp4.w;
+            let suv2 = vec2<f32>(ndc3.x * 0.5 + 0.5, 1.0 - (ndc3.y * 0.5 + 0.5));
+            let refD = ndc3.z - frame.orthoHalfSize_shadowBias.z;
+            let interShadow = textureSampleCompare(shadow_map, shadow_sampler, clamp(suv2, vec2<f32>(0.001), vec2<f32>(0.999)), refD);
+            let inBounds = suv2.x >= 0.0 && suv2.x <= 1.0 && suv2.y >= 0.0 && suv2.y <= 1.0;
+            c *= mix(0.38, 1.0, select(1.0, interShadow, inBounds));
         } else {
             let lift = 0.22 + 0.06 * taut;
             c *= lift;

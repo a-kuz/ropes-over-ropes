@@ -349,6 +349,10 @@ function __wbg_get_imports() {
             const ret = arg0.getContext(getStringFromWasm0(arg1, arg2));
             return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
         }, arguments); },
+        __wbg_getContext_f63e0cc3b9d1dc24: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.getContext(getStringFromWasm0(arg1, arg2));
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        }, arguments); },
         __wbg_getCurrentTexture_3ac9a0eb8d7eccf7: function() { return handleError(function (arg0) {
             const ret = arg0.getCurrentTexture();
             return ret;
@@ -379,6 +383,10 @@ function __wbg_get_imports() {
             getDataViewMemory0().setInt32(arg0 + 4 * 1, len1, true);
             getDataViewMemory0().setInt32(arg0 + 4 * 0, ptr1, true);
         }, arguments); },
+        __wbg_get_01b80713f61639c9: function(arg0, arg1) {
+            const ret = arg0[arg1 >>> 0];
+            return isLikeNone(ret) ? 0 : addToExternrefTable0(ret);
+        },
         __wbg_get_f09c3a16f8848381: function(arg0, arg1) {
             const ret = arg0[arg1 >>> 0];
             return ret;
@@ -663,6 +671,10 @@ function __wbg_get_imports() {
             const ret = arg0.push(arg1);
             return ret;
         },
+        __wbg_querySelectorAll_0553d7ba7491befc: function() { return handleError(function (arg0, arg1, arg2) {
+            const ret = arg0.querySelectorAll(getStringFromWasm0(arg1, arg2));
+            return ret;
+        }, arguments); },
         __wbg_queueMicrotask_2c8dfd1056f24fdc: function(arg0) {
             const ret = arg0.queueMicrotask;
             return ret;
@@ -912,9 +924,6 @@ function __wbg_get_imports() {
         },
         __wbg_set_count_f4ae1546794fb395: function(arg0, arg1) {
             arg0.count = arg1 >>> 0;
-        },
-        __wbg_set_cssText_af8b6381ddbaa357: function(arg0, arg1, arg2) {
-            arg0.cssText = getStringFromWasm0(arg1, arg2);
         },
         __wbg_set_cull_mode_5a9a78be0b9e959d: function(arg0, arg1) {
             arg0.cullMode = __wbindgen_enum_GpuCullMode[arg1];

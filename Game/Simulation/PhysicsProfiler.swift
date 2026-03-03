@@ -15,7 +15,6 @@ final class PhysicsProfiler: @unchecked Sendable {
         case postCollision     = "postCol"
         case meshBuild         = "mesh"
         case winCheck          = "winChk"
-        case linkingNumber     = "linking"
     }
 
     struct Sample {

@@ -12,11 +12,18 @@ enum RopeMeshBuilder {
         let window: Float
     }
 
-    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, radius: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0, segmentStarts: [Int] = [], restLength: Float = 0, crossSection: CrossSection = .circular(radius: 0), materialFrames: [MaterialFrame]? = nil) -> RopeMesh {
+    struct WormMeshParams {
+        var segFreq: Float = 28.0
+        var segBulge: Float = 0.12
+        var thickness: Float = 1.35
+        var taperLen: Float = 0.12
+    }
+
+    static func buildRect(points: UnsafeBufferPointer<SIMD3<Float>>, radius: Float, color: SIMD3<Float>, twistEvents: [TwistEvent], tautness: Float, repulsors: [SIMD4<Float>], stretchRatio: Float = 1.0, oscillation: Float = 0.0, segmentStarts: [Int] = [], restLength: Float = 0, crossSection: CrossSection = .circular(radius: 0), materialFrames: [MaterialFrame]? = nil, profileSegments: Int = 16, ropeContactPoints: [SIMD2<Float>] = [], ropeContactRadius: Float = 0, stretchThinning: Float = 0.5, wormMode: Bool = false, wormTime: Float = 0, wormMeshParams: WormMeshParams = WormMeshParams(), squareCrossSection: Bool = false) -> RopeMesh {
         let pointCount = points.count
         if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
 
-        let usePhysicsFrames = crossSection.isRectangular && materialFrames != nil && materialFrames!.count == pointCount
+        let usePhysicsFrames = (crossSection.isRectangular || squareCrossSection) && materialFrames != nil && materialFrames!.count == pointCount
         
         let debugColors: [SIMD3<Float>] = [
             SIMD3<Float>(1.0, 0.3, 0.3),
@@ -42,11 +49,16 @@ enum RopeMeshBuilder {
 
         let r = max(0.0005, radius)
         let profile: Profile2D
-        switch crossSection {
-        case .rectangular(let w, let h):
-            profile = rectangularProfile(width: w, height: h)
-        default:
-            profile = circularProfile(radius: r, segments: 16)
+        if squareCrossSection {
+            let side = r * 2
+            profile = squareProfile(width: side, height: side)
+        } else {
+            switch crossSection {
+            case .rectangular(let w, let h):
+                profile = rectangularProfile(width: w, height: h)
+            default:
+                profile = circularProfile(radius: r, segments: profileSegments)
+            }
         }
         let profileCount = profile.positions.count
 
@@ -68,12 +80,6 @@ enum RopeMeshBuilder {
         let up = SIMD3<Float>(0, 0, 1)
 
         var distanceAlong: Float = 0
-        var tPrev = simd_normalize(points[1] - points[0])
-        var nrmPrev: SIMD3<Float> = {
-            var nrm = simd_cross(up, tPrev)
-            if simd_length_squared(nrm) < 1e-8 { nrm = SIMD3<Float>(1, 0, 0) }
-            return simd_normalize(nrm)
-        }()
 
         for pointIndex in 0..<pointCount {
             var position = points[pointIndex]
@@ -98,30 +104,16 @@ enum RopeMeshBuilder {
                     tangent = simd_normalize(points[pointIndex + 1] - points[pointIndex - 1])
                 }
 
-                nrm = nrmPrev
-                if pointIndex > 0 {
-                    let axis = simd_cross(tPrev, tangent)
-                    let axisLen = simd_length(axis)
-                    if axisLen > 1e-6 {
-                        let axisN = axis / axisLen
-                        let dotClamped = max(-1.0 as Float, min(1.0 as Float, simd_dot(tPrev, tangent)))
-                        let angle = atan2(axisLen, dotClamped)
-                        nrm = rotate(vector: nrmPrev, axis: axisN, angle: angle)
-                        let proj = nrm - tangent * simd_dot(nrm, tangent)
-                        if simd_length_squared(proj) > 1e-10 {
-                            nrm = simd_normalize(proj)
-                        }
-                    }
+                let upProj = up - tangent * simd_dot(up, tangent)
+                let upProjLen2 = simd_length_squared(upProj)
+                if upProjLen2 > 1e-6 {
+                    bin = simd_normalize(upProj)
+                    nrm = simd_normalize(simd_cross(bin, tangent))
+                } else {
+                    nrm = simd_normalize(simd_cross(up, tangent))
+                    if simd_length_squared(nrm) < 1e-8 { nrm = SIMD3<Float>(1, 0, 0) }
+                    bin = simd_normalize(simd_cross(tangent, nrm))
                 }
-
-                bin = simd_cross(tangent, nrm)
-                if simd_length_squared(bin) < 1e-8 {
-                    var fallback = simd_cross(up, tangent)
-                    if simd_length_squared(fallback) < 1e-8 { fallback = SIMD3<Float>(1, 0, 0) }
-                    nrm = simd_normalize(fallback)
-                    bin = simd_cross(tangent, nrm)
-                }
-                bin = simd_normalize(bin)
 
                 let twist = twistAngle(at: distanceAlong, events: twistEvents)
                 if abs(twist) > 1e-6 {
@@ -130,20 +122,10 @@ enum RopeMeshBuilder {
                     nrm = n2
                     bin = b2
                 }
-
-                tPrev = {
-                    if pointIndex == 0 {
-                        return simd_normalize(points[1] - points[0])
-                    } else if pointIndex == pointCount - 1 {
-                        return simd_normalize(points[pointCount - 1] - points[pointCount - 2])
-                    } else {
-                        return simd_normalize(points[pointIndex + 1] - points[pointIndex - 1])
-                    }
-                }()
-                nrmPrev = nrm
             }
 
             let uCoord = distanceAlong / totalLen
+            let uParam = Float(pointIndex) / Float(max(1, pointCount - 1))
             let center = sin(uCoord * Float.pi)
             let centerMask = center * center
             let centerMaskStrong = centerMask * centerMask
@@ -192,15 +174,42 @@ enum RopeMeshBuilder {
                 position.z += min(0.02, repelMagTotal * 0.22) * endFade
             }
 
-            let params = SIMD4<Float>(adjustedTautness, pinch, min(1, repelMagTotal / max(1e-4, radius)), 0)
+            var contactDeform: Float = 0
+            if !ropeContactPoints.isEmpty && ropeContactRadius > 1e-6 {
+                let p2 = SIMD2<Float>(position.x, position.y)
+                let inner = ropeContactRadius * 0.4
+                let outer = ropeContactRadius * 1.3
+                for cp in ropeContactPoints {
+                    let dist = simd_length(p2 - cp)
+                    let w = smoothstep(edge0: outer, edge1: inner, value: dist)
+                    if w > 0 { contactDeform = max(contactDeform, w * 0.1) }
+                }
+            }
+
+            let params = SIMD4<Float>(adjustedTautness, pinch, min(1, repelMagTotal / max(1e-4, radius)), wormMode ? 1.0 : 0.0)
             
-            let latexThinning = 1.0 / sqrt(max(1.0, 1.0 + totalTension * 1.5 * centerMaskStrong))
+            let latexThinning = 1.0 / sqrt(max(1.0, 1.0 + totalTension * stretchThinning * 3.0 * centerMaskStrong))
             let relaxThickening = 1.0 + stretchRelax * 0.15
-            let baseScale = latexThinning * relaxThickening
-            let flattenAmount = min(0.3, totalTension * 0.2 * centerMaskStrong)
-            let scaleNrm = baseScale * (1.0 - flattenAmount)
-            let scaleBin = baseScale * (1.0 + flattenAmount * 0.5)
-            
+            var baseScale = latexThinning * relaxThickening
+            let endTaper = smoothstep(edge0: 0.08, edge1: 0.02, value: uCoord) * smoothstep(edge0: 0.08, edge1: 0.02, value: 1 - uCoord)
+            baseScale *= 1.0 - endTaper * 0.06
+            let flattenAmount = min(0.3, totalTension * 0.2 * stretchThinning * centerMaskStrong)
+            var scaleNrm = baseScale * (1.0 - flattenAmount) * (1.0 - contactDeform)
+            var scaleBin = baseScale * (1.0 + flattenAmount * 0.5) * (1.0 - contactDeform)
+
+            if wormMode {
+                let bodyTaper = sin(uCoord * Float.pi)
+                let headTaper = smoothstep(edge0: 0.0, edge1: wormMeshParams.taperLen, value: uCoord)
+                let tailTaper = smoothstep(edge0: 0.0, edge1: wormMeshParams.taperLen, value: 1.0 - uCoord)
+                let taper = headTaper * tailTaper * (0.5 + 0.5 * bodyTaper)
+
+                let segBulge = 1.0 + wormMeshParams.segBulge * sin(uCoord * wormMeshParams.segFreq * Float.pi * 2.0)
+
+                let wormScale = taper * segBulge * wormMeshParams.thickness
+                scaleNrm *= wormScale
+                scaleBin *= wormScale
+            }
+
             let lightenAmount = totalTension * centerMaskStrong * 0.35
             let baseColor: SIMD3<Float>
             if !segmentStarts.isEmpty {
@@ -236,7 +245,7 @@ enum RopeMeshBuilder {
                 let localN = profile.normals[k]
                 let worldPos = position + nrm * (localPos.x * scaleNrm) + bin * (localPos.y * scaleBin)
                 let worldN = simd_normalize(nrm * (localN.x / max(0.01, scaleNrm)) + bin * (localN.y / max(0.01, scaleBin)))
-                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uCoord, profile.v[k]), params: params))
+                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uParam, profile.v[k]), params: params))
             }
 
             if pointIndex < pointCount - 1 {
@@ -258,7 +267,7 @@ enum RopeMeshBuilder {
         return RopeMesh(vertices: vertices, indices: indices)
     }
 
-    static func buildHemisphere(center: SIMD3<Float>, radius: Float, facing: SIMD3<Float>, color: SIMD3<Float>, segments: Int = 12, rings: Int = 6, darken: Float = 0.7) -> RopeMesh {
+    static func buildHemisphere(center: SIMD3<Float>, radius: Float, facing: SIMD3<Float>, color: SIMD3<Float>, segments: Int = 12, rings: Int = 6, darken: Float = 0.7, wormMode: Bool = false) -> RopeMesh {
         let r = max(0.001, radius)
         let seg = max(6, segments)
         let rng = max(3, rings)
@@ -269,6 +278,7 @@ enum RopeMeshBuilder {
         let forward = simd_normalize(simd_cross(facing, right))
 
         let darkColor = color * (1.0 - darken)
+        let capParams = SIMD4<Float>(0, 0, 0, wormMode ? 1.0 : 0.0)
 
         var vertices: [RopeVertex] = []
         var indices: [UInt32] = []
@@ -288,7 +298,7 @@ enum RopeMeshBuilder {
                 let localY = sin(theta) * ringR
                 let pos = center + right * localX + forward * localY + facing * ringZ
                 let nrm = simd_normalize(right * (cos(theta) * cos(phi)) + forward * (sin(theta) * cos(phi)) + facing * sin(phi))
-                vertices.append(RopeVertex(position: pos, normal: nrm, color: ringColor, texCoord: SIMD2<Float>(0.5, 0.5), params: .zero))
+                vertices.append(RopeVertex(position: pos, normal: nrm, color: ringColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
             }
         }
 
@@ -303,13 +313,74 @@ enum RopeMeshBuilder {
         }
 
         let tipIdx = UInt32(vertices.count)
-        vertices.append(RopeVertex(position: center + facing * r, normal: facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: .zero))
+        vertices.append(RopeVertex(position: center + facing * r, normal: facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
         let topRing = rng * seg
         for s in 0..<seg {
             let curr = UInt32(topRing + s)
             let next = UInt32(topRing + (s + 1) % seg)
             indices.append(contentsOf: [curr, tipIdx, next])
         }
+
+        return RopeMesh(vertices: vertices, indices: indices)
+    }
+
+    static func buildSquareCap(center: SIMD3<Float>, halfSize: Float, depth: Float, facing: SIMD3<Float>, color: SIMD3<Float>, darken: Float = 0.7, wormMode: Bool = false) -> RopeMesh {
+        let h = max(0.001, halfSize)
+        let d = max(0.001, depth)
+
+        let capParams = SIMD4<Float>(0, 0, 0, wormMode ? 1.0 : 0.0)
+
+        var vertices: [RopeVertex] = []
+        var indices: [UInt32] = []
+
+        let topN = SIMD3<Float>(0, 0, 1)
+
+        let corners: [SIMD2<Float>] = [
+            SIMD2<Float>( h,  h),
+            SIMD2<Float>(-h,  h),
+            SIMD2<Float>(-h, -h),
+            SIMD2<Float>( h, -h),
+        ]
+
+        func pos3(_ c: SIMD2<Float>, z: Float) -> SIMD3<Float> {
+            SIMD3<Float>(center.x + c.x, center.y + c.y, z)
+        }
+
+        func quad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, n: SIMD3<Float>, c: SIMD3<Float>) {
+            let base = UInt32(vertices.count)
+            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+            indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
+        }
+
+        let topZ = center.z
+        let botZ = center.z - d
+
+        quad(pos3(corners[0], z: topZ), pos3(corners[1], z: topZ),
+             pos3(corners[2], z: topZ), pos3(corners[3], z: topZ),
+             n: topN, c: color)
+
+        let sideColor = color * (1.0 - darken * 0.4)
+        let wallNormals: [SIMD3<Float>] = [
+            SIMD3<Float>( 0,  1, 0),
+            SIMD3<Float>(-1,  0, 0),
+            SIMD3<Float>( 0, -1, 0),
+            SIMD3<Float>( 1,  0, 0),
+        ]
+        let wallEdges: [(Int, Int)] = [(0, 1), (1, 2), (2, 3), (3, 0)]
+        for (edgeIdx, (a, b)) in wallEdges.enumerated() {
+            let n = wallNormals[edgeIdx]
+            quad(pos3(corners[a], z: topZ), pos3(corners[b], z: topZ),
+                 pos3(corners[b], z: botZ), pos3(corners[a], z: botZ),
+                 n: n, c: sideColor)
+        }
+
+        let bottomColor = color * (1.0 - darken)
+        quad(pos3(corners[3], z: botZ), pos3(corners[2], z: botZ),
+             pos3(corners[1], z: botZ), pos3(corners[0], z: botZ),
+             n: SIMD3<Float>(0, 0, -1), c: bottomColor)
 
         return RopeMesh(vertices: vertices, indices: indices)
     }
@@ -384,9 +455,40 @@ enum RopeMeshBuilder {
         return Profile2D(positions: pos, normals: nrm, v: v)
     }
 
+    private static func squareProfile(width: Float, height: Float) -> Profile2D {
+        let hw = max(0.0005, width * 0.5)
+        let hh = max(0.0005, height * 0.5)
+
+        let right  = SIMD2<Float>( 1,  0)
+        let top    = SIMD2<Float>( 0,  1)
+        let left   = SIMD2<Float>(-1,  0)
+        let bottom = SIMD2<Float>( 0, -1)
+
+        let tr = SIMD2<Float>( hw,  hh)
+        let tl = SIMD2<Float>(-hw,  hh)
+        let bl = SIMD2<Float>(-hw, -hh)
+        let br = SIMD2<Float>( hw, -hh)
+
+        let pos: [SIMD2<Float>] = [
+            tr, tl,
+            tl, bl,
+            bl, br,
+            br, tr,
+        ]
+        let nrm: [SIMD2<Float>] = [
+            top,   top,
+            left,  left,
+            bottom, bottom,
+            right, right,
+        ]
+        let v: [Float] = (0..<8).map { Float($0) / 8.0 }
+
+        return Profile2D(positions: pos, normals: nrm, v: v)
+    }
+
     private static func circularProfile(radius: Float, segments: Int) -> Profile2D {
         let r = max(0.0005, radius)
-        let seg = max(8, min(32, segments))
+        let seg = max(3, min(32, segments))
 
         var pos: [SIMD2<Float>] = []
         var nrm: [SIMD2<Float>] = []

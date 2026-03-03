@@ -15,7 +15,7 @@ impl Default for Camera {
             center: Vec3::ZERO,
             distance: 2.8,
             ortho_half_height: 2.05,
-            tilt_angle: 0.35,
+            tilt_angle: 0.0,
             orbit_angle: 0.0,
             perspective_blend: 1.0,
         }

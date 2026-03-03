@@ -3,36 +3,97 @@ import MetalKit
 #if os(iOS)
 import UIKit
 
-final class GameMTKView: MTKView {
+final class GameMTKView: MTKView, UIGestureRecognizerDelegate {
     var onTouch: ((InputPhase, CGPoint) -> Void)?
     var onCameraPan: ((SIMD2<Float>) -> Void)?
     var onCameraRotation: ((Float) -> Void)?
     var onCameraZoom: ((Float) -> Void)?
+    var onCameraSpin: ((Float) -> Void)?
     var onCameraDebugToggle: (() -> Void)?
 
-    private var lastPanLocation: CGPoint?
-    private var lastPinchScale: CGFloat = 1.0
     private var tapCount = 0
     private var lastTapTime: Date?
+    private var twoFingerActive = false
+    private var singleTouchCancelled = false
+
+    private lazy var pinchGesture: UIPinchGestureRecognizer = {
+        let g = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
+        g.delegate = self
+        return g
+    }()
+
+    private lazy var rotationGesture: UIRotationGestureRecognizer = {
+        let g = UIRotationGestureRecognizer(target: self, action: #selector(handleRotation(_:)))
+        g.delegate = self
+        return g
+    }()
+
+    override func didMoveToSuperview() {
+        super.didMoveToSuperview()
+        if pinchGesture.view == nil {
+            isMultipleTouchEnabled = true
+            addGestureRecognizer(pinchGesture)
+            addGestureRecognizer(rotationGesture)
+        }
+    }
+
+    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            twoFingerActive = true
+            if !singleTouchCancelled {
+                singleTouchCancelled = true
+                onTouch?(.cancelled, .zero)
+            }
+        case .changed:
+            let scale = Float(gesture.scale)
+            let zoomScale = 1.0 / scale
+            onCameraZoom?(zoomScale)
+            gesture.scale = 1.0
+        case .ended, .cancelled, .failed:
+            twoFingerActive = false
+            singleTouchCancelled = false
+        default:
+            break
+        }
+    }
+
+    @objc private func handleRotation(_ gesture: UIRotationGestureRecognizer) {
+        switch gesture.state {
+        case .began:
+            twoFingerActive = true
+            if !singleTouchCancelled {
+                singleTouchCancelled = true
+                onTouch?(.cancelled, .zero)
+            }
+        case .changed:
+            onCameraSpin?(Float(gesture.rotation))
+            gesture.rotation = 0
+        case .ended, .cancelled, .failed:
+            twoFingerActive = false
+            singleTouchCancelled = false
+        default:
+            break
+        }
+    }
+
+    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
+        true
+    }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let event = event, let allTouches = event.allTouches else { return }
         let viewTouches = allTouches.filter { $0.view === self }
-        
-        if viewTouches.count == 2 {
-            if let touch1 = viewTouches.first, let touch2 = viewTouches.dropFirst().first {
-                let loc1 = touch1.location(in: self)
-                let loc2 = touch2.location(in: self)
-                let center = CGPoint(x: (loc1.x + loc2.x) / 2, y: (loc1.y + loc2.y) / 2)
-                lastPanLocation = center
-                
-                let dx = loc2.x - loc1.x
-                let dy = loc2.y - loc1.y
-                let distance = sqrt(dx * dx + dy * dy)
-                lastPinchScale = distance
+
+        if viewTouches.count >= 2 {
+            twoFingerActive = true
+            if !singleTouchCancelled {
+                singleTouchCancelled = true
+                onTouch?(.cancelled, .zero)
             }
-        } else if viewTouches.count == 1 {
+        } else if viewTouches.count == 1 && !twoFingerActive {
             if let currentTouch = viewTouches.first {
+                singleTouchCancelled = false
                 onTouch?(.began, currentTouch.location(in: self))
             }
         }
@@ -41,32 +102,16 @@ final class GameMTKView: MTKView {
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let event = event, let allTouches = event.allTouches else { return }
         let viewTouches = allTouches.filter { $0.view === self }
-        
-        if viewTouches.count == 2 {
-            if let touch1 = viewTouches.first, let touch2 = viewTouches.dropFirst().first {
-                let loc1 = touch1.location(in: self)
-                let loc2 = touch2.location(in: self)
-                let center = CGPoint(x: (loc1.x + loc2.x) / 2, y: (loc1.y + loc2.y) / 2)
-                
-                if let lastPan = lastPanLocation {
-                    let panDeltaX = Float(center.x - lastPan.x)
-                    let panDeltaY = Float(center.y - lastPan.y)
-                    onCameraPan?(SIMD2<Float>(panDeltaX, panDeltaY))
-                    let rotationDelta = -panDeltaY / Float(bounds.height) * Float.pi * 0.5
-                    onCameraRotation?(rotationDelta)
-                    lastPanLocation = center
-                }
-                
-                let dx = loc2.x - loc1.x
-                let dy = loc2.y - loc1.y
-                let distance = sqrt(dx * dx + dy * dy)
-                if lastPinchScale > 0 {
-                    let scale = Float(distance / lastPinchScale)
-                    onCameraZoom?(scale)
-                    lastPinchScale = distance
+
+        if viewTouches.count >= 2 {
+            if !twoFingerActive {
+                twoFingerActive = true
+                if !singleTouchCancelled {
+                    singleTouchCancelled = true
+                    onTouch?(.cancelled, .zero)
                 }
             }
-        } else if viewTouches.count == 1 {
+        } else if viewTouches.count == 1 && !twoFingerActive && !singleTouchCancelled {
             if let currentTouch = viewTouches.first {
                 onTouch?(.moved, currentTouch.location(in: self))
             }
@@ -75,13 +120,15 @@ final class GameMTKView: MTKView {
 
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let event = event, let allTouches = event.allTouches else { return }
-        let viewTouches = allTouches.filter { $0.view === self }
-        
-        if viewTouches.count == 2 {
-            lastPanLocation = nil
-            lastPinchScale = 1.0
-        } else if viewTouches.count == 1 {
-            if let currentTouch = viewTouches.first {
+        let remaining = allTouches.filter { $0.view === self && $0.phase != .ended && $0.phase != .cancelled }
+
+        if remaining.isEmpty {
+            if twoFingerActive || singleTouchCancelled {
+                twoFingerActive = false
+                singleTouchCancelled = false
+                return
+            }
+            if let currentTouch = touches.first {
                 let now = Date()
                 if let lastTime = lastTapTime, now.timeIntervalSince(lastTime) < 0.5 {
                     tapCount += 1
@@ -89,7 +136,7 @@ final class GameMTKView: MTKView {
                     tapCount = 1
                 }
                 lastTapTime = now
-                
+
                 if tapCount >= 3 {
                     tapCount = 0
                     lastTapTime = nil
@@ -102,18 +149,12 @@ final class GameMTKView: MTKView {
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard let event = event, let allTouches = event.allTouches else { return }
-        let viewTouches = allTouches.filter { $0.view === self }
-        
-        if viewTouches.count == 2 {
-            lastPanLocation = nil 
-            lastPinchScale = 1.0
-        } else if viewTouches.count == 1 {
-            tapCount = 0
-            lastTapTime = nil
-            if let currentTouch = viewTouches.first {
-                onTouch?(.cancelled, currentTouch.location(in: self))
-            }
+        twoFingerActive = false
+        singleTouchCancelled = false
+        tapCount = 0
+        lastTapTime = nil
+        if let currentTouch = touches.first {
+            onTouch?(.cancelled, currentTouch.location(in: self))
         }
     }
 }
@@ -126,6 +167,7 @@ final class GameMTKView: MTKView {
     var onCameraPan: ((SIMD2<Float>) -> Void)?
     var onCameraRotation: ((Float) -> Void)?
     var onCameraZoom: ((Float) -> Void)?
+    var onCameraSpin: ((Float) -> Void)?
     var onCameraDebugToggle: (() -> Void)?
 
     private var isDragging = false

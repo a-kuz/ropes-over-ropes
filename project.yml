@@ -41,12 +41,14 @@ targets:
         "INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]": YES
         "INFOPLIST_KEY_UIStatusBarHidden[sdk=iphoneos*]": YES
         "INFOPLIST_KEY_UIStatusBarHidden[sdk=iphonesimulator*]": YES
-        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphoneos*]": YES
-        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphonesimulator*]": YES
+        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphoneos*]": NO
+        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphonesimulator*]": NO
         "INFOPLIST_KEY_UIInterfaceOrientation[sdk=iphoneos*]": UIInterfaceOrientationPortrait
         "INFOPLIST_KEY_UIInterfaceOrientation[sdk=iphonesimulator*]": UIInterfaceOrientationPortrait
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphoneos*]": UIInterfaceOrientationPortrait
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphonesimulator*]": UIInterfaceOrientationPortrait
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphoneos*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphonesimulator*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=iphoneos*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=iphonesimulator*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
         "INFOPLIST_KEY_CADisableMinimumFrameDuration[sdk=iphoneos*]": YES
         "INFOPLIST_KEY_CADisableMinimumFrameDuration[sdk=iphonesimulator*]": YES
         "TARGETED_DEVICE_FAMILY[sdk=iphoneos*]": "1,2"
@@ -67,3 +69,36 @@ targets:
       base:
         SWIFT_VERSION: 6.0
         GENERATE_INFOPLIST_FILE: YES
+schemes:
+  UzlsFour_iOS:
+    build:
+      targets:
+        UzlsFour_iOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UzlsFourTests_iOS
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release
+  UzlsFour_macOS:
+    build:
+      targets:
+        UzlsFour_macOS: all
+    run:
+      config: Debug
+    test:
+      config: Debug
+      targets:
+        - UzlsFourTests_macOS
+    profile:
+      config: Release
+    analyze:
+      config: Debug
+    archive:
+      config: Release

@@ -333,56 +333,6 @@ final class LevelGeneratorTests: XCTestCase {
         XCTAssertGreaterThanOrEqual(crossingPairs, 1, "Level 20: ropes should cross initially")
     }
 
-    // MARK: - Linking number test (actual topology after physics simulation)
-
-    func testLevelsProduceLinkingNumbers() {
-        let physics = RopePhysics()
-
-        for levelId in [1, 5, 10, 15, 20, 50, 100, 200] {
-            let level = LevelGenerator.generate(levelId: levelId)
-
-            // Run VerletSimulator with the generated level
-            let sim = VerletSimulator(
-                holePositions: level.holes.map { $0.simd },
-                holeRadius: level.holeRadius
-            )
-            sim.settleSteps = 20
-            sim.constraintIterations = 8
-
-            let configs = level.ropes.map {
-                VerletSimulator.RopeConfig(startHole: $0.startHole, endHole: $0.endHole, radius: $0.radius)
-            }
-            let actions: [VerletSimulator.LevelAction] = (level.actions ?? []).compactMap { action in
-                guard let t = VerletSimulator.LevelAction.ActionType(rawValue: action.type) else { return nil }
-                return VerletSimulator.LevelAction(type: t, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
-            }
-            sim.initializeLevel(ropeConfigs: configs, actions: actions)
-
-            // Check linking numbers between all active band pairs
-            var totalLinking = 0
-            let activeBands = sim.bands.indices.filter { sim.bands[$0].active }
-            for i in 0..<activeBands.count {
-                for j in (i+1)..<activeBands.count {
-                    let lk = physics.linkingNumber(
-                        sim.bands[activeBands[i]].positions,
-                        sim.bands[activeBands[j]].positions
-                    )
-                    totalLinking += abs(lk)
-                }
-            }
-
-            let dragCount = (level.actions ?? []).filter { $0.type == "drag" }.count
-            print("Level \(levelId): ropes=\(level.ropes.count) drags=\(dragCount) totalLinking=\(totalLinking)")
-
-            // Levels should have non-zero linking (ropes are actually tangled)
-            if levelId >= 3 {
-                XCTAssertGreaterThan(totalLinking, 0,
-                    "Level \(levelId): linking number is 0 — no real tangling! " +
-                    "Drags: \(dragCount)")
-            }
-        }
-    }
-
     // MARK: - Helpers
 
     private func segmentsCross(

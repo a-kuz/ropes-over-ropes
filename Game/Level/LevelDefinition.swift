@@ -5,13 +5,62 @@ struct LevelDefinition: Codable {
     struct Vec2: Codable {
         let xPosition: Float
         let yPosition: Float
+        let zPosition: Float
 
         enum CodingKeys: String, CodingKey {
             case xPosition = "x"
             case yPosition = "y"
+            case zPosition = "z"
+        }
+
+        init(xPosition: Float, yPosition: Float, zPosition: Float = 0) {
+            self.xPosition = xPosition
+            self.yPosition = yPosition
+            self.zPosition = zPosition
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            xPosition = try container.decode(Float.self, forKey: .xPosition)
+            yPosition = try container.decode(Float.self, forKey: .yPosition)
+            zPosition = try container.decodeIfPresent(Float.self, forKey: .zPosition) ?? 0
         }
 
         var simd: SIMD2<Float> { SIMD2<Float>(xPosition, yPosition) }
+        var simd3: SIMD3<Float> { SIMD3<Float>(xPosition, yPosition, zPosition) }
+    }
+
+    struct Board: Codable {
+        let centerX: Float
+        let centerY: Float
+        let width: Float
+        let height: Float
+        let elevation: Float
+
+        enum CodingKeys: String, CodingKey {
+            case centerX = "cx"
+            case centerY = "cy"
+            case width = "w"
+            case height = "h"
+            case elevation = "z"
+        }
+
+        init(centerX: Float, centerY: Float, width: Float, height: Float, elevation: Float) {
+            self.centerX = centerX
+            self.centerY = centerY
+            self.width = width
+            self.height = height
+            self.elevation = elevation
+        }
+
+        init(from decoder: Decoder) throws {
+            let container = try decoder.container(keyedBy: CodingKeys.self)
+            centerX = try container.decode(Float.self, forKey: .centerX)
+            centerY = try container.decode(Float.self, forKey: .centerY)
+            width = try container.decode(Float.self, forKey: .width)
+            height = try container.decode(Float.self, forKey: .height)
+            elevation = try container.decodeIfPresent(Float.self, forKey: .elevation) ?? 0
+        }
     }
 
     struct Color: Codable {
@@ -130,5 +179,6 @@ struct LevelDefinition: Codable {
     let ropes: [Rope]
     let hooks: [Hook]?
     let actions: [Action]?
+    let boards: [Board]?
 }
 

@@ -12,13 +12,48 @@ struct FrameUniforms {
     var timeDrag: SIMD4<Float>
     var woodBoundsMin: SIMD4<Float>
     var woodBoundsMax: SIMD4<Float>
+    var holeTint: SIMD4<Float>
+    var visualParams: SIMD4<Float>
+    var lightingParams: SIMD4<Float>
+    var tableParams: SIMD4<Float>
+    var tableParams2: SIMD4<Float>
+    var ropeMatParams: SIMD4<Float>
+    var ropeMatParams2: SIMD4<Float>
+    var ropeMatParams3: SIMD4<Float>
+    var cartoonParams: SIMD4<Float>
+    var wormParams1: SIMD4<Float>
+    var wormParams2: SIMD4<Float>
+    var wormParams3: SIMD4<Float>
+    var wormParams4: SIMD4<Float>
+}
+
+struct PostParams {
+    var exposure: Float
+    var bloomStrength: Float
+    var cartoonEdgeStrength: Float = 0.88
+    var cartoonMode: Float = 0
+    var cartoonEdgeSmooth: Float = 0.5
+    var _pad0: Float = 0
+    var _pad1: Float = 0
+    var _pad2: Float = 0
 }
 
 struct BakeWoodParams {
     var worldMin: SIMD2<Float>
     var worldMax: SIMD2<Float>
     var seed: Float
-    var _pad: Float = 0
+    var brightness: Float
+    var patternScale: Float
+    var _pad0: Float = 0
+    var _pad1: Float = 0
+}
+
+struct BakeBoardWoodVolumeParams {
+    var worldMin: SIMD4<Float>
+    var worldMax: SIMD4<Float>
+    var seed: Float
+    var brightness: Float
+    var _pad0: SIMD2<Float> = .zero
 }
 
 struct HoleInstance {
@@ -36,5 +71,11 @@ struct RopeVertex {
 struct HoleVertex {
     var position: SIMD3<Float>
     var normal: SIMD3<Float>
+}
+
+struct BoardVertex {
+    var position: SIMD3<Float>
+    var normal: SIMD3<Float>
+    var worldXY: SIMD2<Float>
 }
 

@@ -12,25 +12,28 @@ extension Renderer {
             height: bloomTextureA.height
         )
 
-        encoder.setComputePipelineState(bloomBlurH)
-        encoder.setTexture(bloomTextureA, index: 0)
-        encoder.setTexture(bloomTextureB, index: 1)
-        dispatch2D(
-            encoder: encoder,
-            pipeline: bloomBlurH,
-            width: bloomTextureB.width,
-            height: bloomTextureB.height
-        )
+        let blurPasses = 3
+        for _ in 0..<blurPasses {
+            encoder.setComputePipelineState(bloomBlurH)
+            encoder.setTexture(bloomTextureA, index: 0)
+            encoder.setTexture(bloomTextureB, index: 1)
+            dispatch2D(
+                encoder: encoder,
+                pipeline: bloomBlurH,
+                width: bloomTextureB.width,
+                height: bloomTextureB.height
+            )
 
-        encoder.setComputePipelineState(bloomBlurV)
-        encoder.setTexture(bloomTextureB, index: 0)
-        encoder.setTexture(bloomTextureA, index: 1)
-        dispatch2D(
-            encoder: encoder,
-            pipeline: bloomBlurV,
-            width: bloomTextureA.width,
-            height: bloomTextureA.height
-        )
+            encoder.setComputePipelineState(bloomBlurV)
+            encoder.setTexture(bloomTextureB, index: 0)
+            encoder.setTexture(bloomTextureA, index: 1)
+            dispatch2D(
+                encoder: encoder,
+                pipeline: bloomBlurV,
+                width: bloomTextureA.width,
+                height: bloomTextureA.height
+            )
+        }
     }
 
     func dispatch2D(encoder: MTLComputeCommandEncoder, pipeline: MTLComputePipelineState, width: Int, height: Int) {

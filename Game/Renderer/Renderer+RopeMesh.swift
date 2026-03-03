@@ -19,16 +19,18 @@ extension Renderer {
                 allRopePoints.append([])
                 continue
             }
-
-            // Skip non-fading ropes that have been removed (startHole == -1)
             if ropes[ropeIndex].startHole < 0 && sim.bands[ropeIndex].fadeOut == 0 {
                 allRopePoints.append([])
                 continue
             }
+            allRopePoints.append(sim.bands[ropeIndex].positions)
+        }
+
+        for ropeIndex in ropes.indices {
+            guard let sim = simulator, sim.bands.indices.contains(ropeIndex), sim.bands[ropeIndex].active else { continue }
+            if ropes[ropeIndex].startHole < 0 && sim.bands[ropeIndex].fadeOut == 0 { continue }
 
             let points = sim.bands[ropeIndex].positions
-            allRopePoints.append(points)
-
             let ropeColor = ropes[ropeIndex].color
             let fadeOut = sim.bands[ropeIndex].fadeOut
             let ropeRadius = ropes[ropeIndex].radius * 1.3
@@ -37,7 +39,7 @@ extension Renderer {
             let band = sim.bands[ropeIndex]
 
             let frames: [MaterialFrame]?
-            if cs.isRectangular && sim.cachedFrames.indices.contains(ropeIndex) && !sim.cachedFrames[ropeIndex].isEmpty {
+            if (cs.isRectangular || squareCrossSection) && sim.cachedFrames.indices.contains(ropeIndex) && !sim.cachedFrames[ropeIndex].isEmpty {
                 frames = sim.cachedFrames[ropeIndex]
             } else {
                 frames = nil
@@ -90,11 +92,34 @@ extension Renderer {
             }
 
             let restLength = band.segmentLength * Float(visiblePoints.count - 1)
+            let scaledRadius = ropeRadius * ropeRadiusScale
 
+            var ropeContactPoints: [SIMD2<Float>] = []
+            for otherIdx in ropes.indices where otherIdx != ropeIndex && !allRopePoints[otherIdx].isEmpty {
+                let otherPoints = allRopePoints[otherIdx]
+                let rj = ropes[otherIdx].radius * 1.3 * ropeRadiusScale
+                let threshold = (scaledRadius + rj) * 1.5
+                for s in 0..<(otherPoints.count - 1) {
+                    let mid = (otherPoints[s] + otherPoints[s + 1]) * 0.5
+                    var minDist2: Float = .greatestFiniteMagnitude
+                    for p in visiblePoints {
+                        let d2 = simd_length_squared(SIMD2<Float>(p.x, p.y) - SIMD2<Float>(mid.x, mid.y))
+                        minDist2 = min(minDist2, d2)
+                    }
+                    if minDist2 < threshold * threshold {
+                        ropeContactPoints.append(SIMD2<Float>(mid.x, mid.y))
+                    }
+                }
+            }
+
+            let wmp = RopeMeshBuilder.WormMeshParams(
+                segFreq: wormSegFreq, segBulge: wormSegBulge,
+                thickness: wormThickness, taperLen: wormTaperLen
+            )
             let ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
                 RopeMeshBuilder.buildRect(
                     points: pointsBuffer,
-                    radius: ropeRadius,
+                    radius: scaledRadius,
                     color: ropeColor,
                     twistEvents: [],
                     tautness: 1.0,
@@ -104,7 +129,15 @@ extension Renderer {
                     segmentStarts: [],
                     restLength: restLength,
                     crossSection: cs,
-                    materialFrames: visibleFrames
+                    materialFrames: visibleFrames,
+                    profileSegments: profileSegments,
+                    ropeContactPoints: ropeContactPoints,
+                    ropeContactRadius: scaledRadius,
+                    stretchThinning: stretchThinning,
+                    wormMode: wormMode,
+                    wormTime: time,
+                    wormMeshParams: wmp,
+                    squareCrossSection: squareCrossSection
                 )
             }
 
@@ -112,35 +145,37 @@ extension Renderer {
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
 
-            let sphereRadius = holeRadius * 0.72
-            if visiblePoints.count >= 2 {
-                let isSucking = fadeOut > 0 && band.suckHole != nil
+            if !squareCrossSection {
+                let sphereRadius = holeRadius * holeRadiusScale * capRadiusScale
+                if visiblePoints.count >= 2 {
+                    let isSucking = fadeOut > 0 && band.suckHole != nil
+                    let suckFromEnd = band.suckFromEnd
+                    let drawStartSphere = !isSucking || suckFromEnd == 0
+                    let drawEndSphere = !isSucking || suckFromEnd == 1
 
-                let drawStartSphere = !isSucking
-                let drawEndSphere = !isSucking
+                    if drawStartSphere {
+                        let startPos = visiblePoints[0]
+                        let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                        let startCap = RopeMeshBuilder.buildHemisphere(
+                            center: startPos, radius: sphereRadius, facing: -startTangent,
+                            color: ropeColor, segments: capSegments, rings: capRings, darken: capDarken, wormMode: wormMode
+                        )
+                        allVertices.append(contentsOf: startCap.vertices)
+                        allIndices.append(contentsOf: startCap.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(startCap.vertices.count)
+                    }
 
-                if drawStartSphere {
-                    let startPos = visiblePoints[0]
-                    let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
-                    let startSphere = RopeMeshBuilder.buildHemisphere(
-                        center: startPos, radius: sphereRadius, facing: -startTangent,
-                        color: ropeColor, segments: 12, rings: 6
-                    )
-                    allVertices.append(contentsOf: startSphere.vertices)
-                    allIndices.append(contentsOf: startSphere.indices.map { $0 + baseVertex })
-                    baseVertex += UInt32(startSphere.vertices.count)
-                }
-
-                if drawEndSphere {
-                    let endPos = visiblePoints[visiblePoints.count - 1]
-                    let endTangent = simd_normalize(visiblePoints[visiblePoints.count - 1] - visiblePoints[visiblePoints.count - 2])
-                    let endSphere = RopeMeshBuilder.buildHemisphere(
-                        center: endPos, radius: sphereRadius, facing: endTangent,
-                        color: ropeColor, segments: 12, rings: 6
-                    )
-                    allVertices.append(contentsOf: endSphere.vertices)
-                    allIndices.append(contentsOf: endSphere.indices.map { $0 + baseVertex })
-                    baseVertex += UInt32(endSphere.vertices.count)
+                    if drawEndSphere {
+                        let endPos = visiblePoints[visiblePoints.count - 1]
+                        let endTangent = simd_normalize(visiblePoints[visiblePoints.count - 1] - visiblePoints[visiblePoints.count - 2])
+                        let endCap = RopeMeshBuilder.buildHemisphere(
+                            center: endPos, radius: sphereRadius, facing: endTangent,
+                            color: ropeColor, segments: capSegments, rings: capRings, darken: capDarken, wormMode: wormMode
+                        )
+                        allVertices.append(contentsOf: endCap.vertices)
+                        allIndices.append(contentsOf: endCap.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(endCap.vertices.count)
+                    }
                 }
             }
         }
@@ -160,19 +195,6 @@ extension Renderer {
         }
         if indexBytes > 0 {
             ropeIB?.contents().copyMemory(from: allIndices, byteCount: indexBytes)
-        }
-
-        if let sim = simulator {
-            var loggableRopes: [(index: Int, points: ContiguousArray<SIMD3<Float>>)] = []
-            for ropeIndex in ropes.indices {
-                if allRopePoints[ropeIndex].isEmpty { continue }
-                if !sim.bands[ropeIndex].active { continue }
-                loggableRopes.append((index: ropeIndex, points: allRopePoints[ropeIndex]))
-            }
-            ropePhysicsLogger.logStateIfNeeded(
-                time: Double(time),
-                ropes: loggableRopes
-            )
         }
 
         let currentMeshStats = MeshStats(vertices: allVertices.count, indices: allIndices.count, ropeCount: self.ropes.count)

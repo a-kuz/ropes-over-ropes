@@ -92,35 +92,6 @@ extension Renderer {
         }
     }
 
-    @MainActor
-    func handleCameraPan(translation: SIMD2<Float>, in view: MTKView) {
-        guard cameraDebugMode else { return }
-        let width = max(1.0, Float(view.bounds.size.width))
-        let height = max(1.0, Float(view.bounds.size.height))
-        let aspect = width / height
-        let halfHeight = camera.orthoHalfHeight
-        let halfWidth = halfHeight * aspect
-
-        let worldDeltaX = (translation.x / width) * 2 * halfWidth
-        let worldDeltaY = -(translation.y / height) * 2 * halfHeight
-
-        camera.center.x -= worldDeltaX
-        camera.center.y -= worldDeltaY
-    }
-
-    @MainActor
-    func handleCameraRotation(delta: Float) {
-        guard cameraDebugMode else { return }
-        camera.tiltAngle += delta
-        camera.tiltAngle = max(-Float.pi / 2 + 0.1, min(Float.pi / 2 - 0.1, camera.tiltAngle))
-    }
-
-    @MainActor
-    func handleCameraZoom(scale: Float) {
-        camera.orthoHalfHeight *= scale
-        camera.orthoHalfHeight = max(0.1, min(10.0, camera.orthoHalfHeight))
-    }
-
     private func beginDrag(world: SIMD2<Float>) {
         let hitRadius = holeRadius * 1.65
         var best: DragCandidate?
@@ -263,6 +234,21 @@ extension Renderer {
         guard abs(dir.z) > 1e-8 else {
             return SIMD2<Float>(nearP.x, nearP.y)
         }
+
+        for board in boards.sorted(by: { $0.elevation > $1.elevation }) {
+            let tBoard = (board.elevation - nearP.z) / dir.z
+            if tBoard > 0 {
+                let hitX = nearP.x + dir.x * tBoard
+                let hitY = nearP.y + dir.y * tBoard
+                let hw = board.width * 0.5
+                let hh = board.height * 0.5
+                if hitX >= board.centerX - hw && hitX <= board.centerX + hw &&
+                   hitY >= board.centerY - hh && hitY <= board.centerY + hh {
+                    return SIMD2<Float>(hitX, hitY)
+                }
+            }
+        }
+
         let t = -nearP.z / dir.z
         return SIMD2<Float>(nearP.x + dir.x * t, nearP.y + dir.y * t)
     }

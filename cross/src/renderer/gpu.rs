@@ -105,6 +105,8 @@ pub struct GpuRenderer {
 
     shadow_sampler: wgpu::Sampler,
     linear_sampler: wgpu::Sampler,
+    noise_view: wgpu::TextureView,
+    noise_sampler: wgpu::Sampler,
     empty_bind_group: wgpu::BindGroup,
 
     hole_index_count: u32,
@@ -255,6 +257,22 @@ fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
                 },
                 count: None,
             },
+            wgpu::BindGroupLayoutEntry {
+                binding: 5,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 6,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
         ],
     })
 }
@@ -379,6 +397,8 @@ fn build_frame_bind_group(
     shadow_sampler: &wgpu::Sampler,
     linear_sampler: &wgpu::Sampler,
     planar_mask_view: &wgpu::TextureView,
+    noise_view: &wgpu::TextureView,
+    noise_sampler: &wgpu::Sampler,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("frame_bind_group"),
@@ -389,6 +409,8 @@ fn build_frame_bind_group(
             wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
             wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(linear_sampler) },
             wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(planar_mask_view) },
+            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(noise_view) },
+            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(noise_sampler) },
         ],
     })
 }
@@ -625,6 +647,89 @@ impl GpuRenderer {
             ..Default::default()
         });
 
+        let noise_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("noise_sampler"),
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            ..Default::default()
+        });
+
+        let noise_view = {
+            const NOISE_SIZE: u32 = 1024;
+            const GRID: u32 = 128;
+            let tex = device.create_texture(&wgpu::TextureDescriptor {
+                label: Some("noise_texture"),
+                size: wgpu::Extent3d { width: NOISE_SIZE, height: NOISE_SIZE, depth_or_array_layers: 1 },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rg8Unorm,
+                usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+                view_formats: &[],
+            });
+
+            fn lcg(s: &mut u32) -> f32 {
+                *s = s.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (*s >> 8) as f32 / 16_777_216.0
+            }
+            fn grid_val(grid: &[f32], gx: i32, gy: i32, sz: u32, ch: usize) -> f32 {
+                let wx = ((gx % sz as i32) + sz as i32) as u32 % sz;
+                let wy = ((gy % sz as i32) + sz as i32) as u32 % sz;
+                grid[((wy * sz + wx) * 2 + ch as u32) as usize]
+            }
+            fn smoothstep_f(t: f32) -> f32 { t * t * (3.0 - 2.0 * t) }
+
+            fn value_noise(grid: &[f32], x: f32, y: f32, freq: u32, sz: u32, ch: usize) -> f32 {
+                let fx = x * freq as f32;
+                let fy = y * freq as f32;
+                let ix = fx.floor() as i32;
+                let iy = fy.floor() as i32;
+                let tx = smoothstep_f(fx - fx.floor());
+                let ty = smoothstep_f(fy - fy.floor());
+                let c00 = grid_val(grid, ix, iy, sz, ch);
+                let c10 = grid_val(grid, ix + 1, iy, sz, ch);
+                let c01 = grid_val(grid, ix, iy + 1, sz, ch);
+                let c11 = grid_val(grid, ix + 1, iy + 1, sz, ch);
+                let a = c00 + (c10 - c00) * tx;
+                let b = c01 + (c11 - c01) * tx;
+                a + (b - a) * ty
+            }
+
+            let mut rng_state: u32 = 0xDEAD_BEEF;
+            let mut grid_data = vec![0.0f32; (GRID * GRID * 2) as usize];
+            for v in grid_data.iter_mut() {
+                *v = lcg(&mut rng_state);
+            }
+
+            let mut pixels = vec![0u8; (NOISE_SIZE * NOISE_SIZE * 2) as usize];
+            for y in 0..NOISE_SIZE {
+                for x in 0..NOISE_SIZE {
+                    let u = x as f32 / NOISE_SIZE as f32;
+                    let v = y as f32 / NOISE_SIZE as f32;
+                    let idx = ((y * NOISE_SIZE + x) * 2) as usize;
+                    for ch in 0..2usize {
+                        let o1 = value_noise(&grid_data, u, v, 16, GRID, ch);
+                        let o2 = value_noise(&grid_data, u, v, 37, GRID, ch);
+                        let o3 = value_noise(&grid_data, u, v, 79, GRID, ch);
+                        let o4 = value_noise(&grid_data, u, v, 128, GRID, ch);
+                        let fbm = o1 * 0.15 + o2 * 0.30 + o3 * 0.30 + o4 * 0.15;
+                        let white = lcg(&mut rng_state);
+                        let val = fbm * 0.85 + white * 0.15;
+                        pixels[idx + ch] = (val.clamp(0.0, 1.0) * 255.0) as u8;
+                    }
+                }
+            }
+            queue.write_texture(
+                wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                &pixels,
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(NOISE_SIZE * 2), rows_per_image: None },
+                wgpu::Extent3d { width: NOISE_SIZE, height: NOISE_SIZE, depth_or_array_layers: 1 },
+            );
+            tex.create_view(&wgpu::TextureViewDescriptor::default())
+        };
+
         // ── textures ──
 
         let render_scale: f32 = 1.0;
@@ -718,6 +823,8 @@ impl GpuRenderer {
             &shadow_sampler,
             &linear_sampler,
             &planar_mask_view,
+            &noise_view,
+            &noise_sampler,
         );
 
         let post_bind_group = build_post_bind_group(
@@ -904,6 +1011,8 @@ impl GpuRenderer {
 
             shadow_sampler,
             linear_sampler,
+            noise_view,
+            noise_sampler,
             empty_bind_group,
 
             hole_index_count: 0,
@@ -1020,6 +1129,8 @@ impl GpuRenderer {
             &self.shadow_sampler,
             &self.linear_sampler,
             &self.planar_mask_view,
+            &self.noise_view,
+            &self.noise_sampler,
         );
 
         self.post_bind_group = build_post_bind_group(
@@ -1312,8 +1423,7 @@ impl GpuRenderer {
         let sd = render_mode == 0;
         let do_shadow_pass = !cel_mode && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
         let do_planar_mask_pass = !cel_mode
-            && self.draw_flags.table_shadow_mode == 1
-            && (drag_active || (self.frame_index & 1) == 0);
+            && self.draw_flags.table_shadow_mode == 1;
         if do_shadow_pass {
             self.encode_shadow_pass(&mut encoder);
         }
@@ -1506,6 +1616,8 @@ impl GpuRenderer {
             &self.shadow_sampler,
             &self.linear_sampler,
             &self.hole_mask_view,
+            &self.noise_view,
+            &self.noise_sampler,
         );
         let wg_x = (self.planar_mask_w + 7) / 8;
         let wg_y = (self.planar_mask_h + 7) / 8;

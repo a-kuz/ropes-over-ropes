@@ -1,5 +1,6 @@
 use glam::Vec2;
 use std::collections::HashSet;
+use std::f32::consts::{FRAC_PI_2, PI, TAU};
 
 use super::definition::*;
 
@@ -67,428 +68,548 @@ fn difficulty(level_id: u32) -> Difficulty {
 
 #[derive(Clone, Copy)]
 enum HoleLayout {
-    Grid4x5,
-    Circle12,
+    Grid,
+    Circle,
     Hexagon,
     Diamond,
     Cross,
-    TwoRings,
+    Rings,
     Triangle,
     Star,
-    Grid5x6,
-    Circle16,
-    HexagonLarge,
-    DiamondWide,
-    CrossLarge,
-    ThreeRings,
-    TriangleLarge,
-    StarLarge,
     Honeycomb,
     Spiral,
     DoubleGrid,
     Scattered,
+    Columns,
+    CenterPlusRing,
+    RotatedSquare,
+    SquareInCircle,
+    Arc,
+    ConcentricSquares,
+    TriangleInCircle,
+    Crescent,
+    LetterH,
+    LetterT,
+    Arrow,
+    Zigzag,
+    Clover,
+    Clusters,
+    ThreeColumns,
+    RingWithSpokes,
+    DiamondOutline,
+    BowTie,
 }
 
-const ALL_LAYOUTS: [HoleLayout; 20] = [
-    HoleLayout::Grid4x5,
-    HoleLayout::Circle12,
+const ALL_LAYOUTS: [HoleLayout; 30] = [
+    HoleLayout::Grid,
+    HoleLayout::Circle,
     HoleLayout::Hexagon,
     HoleLayout::Diamond,
     HoleLayout::Cross,
-    HoleLayout::TwoRings,
+    HoleLayout::Rings,
     HoleLayout::Triangle,
     HoleLayout::Star,
-    HoleLayout::Grid5x6,
-    HoleLayout::Circle16,
-    HoleLayout::HexagonLarge,
-    HoleLayout::DiamondWide,
-    HoleLayout::CrossLarge,
-    HoleLayout::ThreeRings,
-    HoleLayout::TriangleLarge,
-    HoleLayout::StarLarge,
     HoleLayout::Honeycomb,
     HoleLayout::Spiral,
     HoleLayout::DoubleGrid,
     HoleLayout::Scattered,
+    HoleLayout::Columns,
+    HoleLayout::CenterPlusRing,
+    HoleLayout::RotatedSquare,
+    HoleLayout::SquareInCircle,
+    HoleLayout::Arc,
+    HoleLayout::ConcentricSquares,
+    HoleLayout::TriangleInCircle,
+    HoleLayout::Crescent,
+    HoleLayout::LetterH,
+    HoleLayout::LetterT,
+    HoleLayout::Arrow,
+    HoleLayout::Zigzag,
+    HoleLayout::Clover,
+    HoleLayout::Clusters,
+    HoleLayout::ThreeColumns,
+    HoleLayout::RingWithSpokes,
+    HoleLayout::DiamondOutline,
+    HoleLayout::BowTie,
 ];
 
-fn grid(cols: usize, rows: usize, spacing_x: f32, spacing_y: f32) -> Vec<HolePos> {
-    let ox = -((cols as f32 - 1.0) / 2.0) * spacing_x;
-    let oy = -((rows as f32 - 1.0) / 2.0) * spacing_y;
-    let mut holes = Vec::new();
-    for row in 0..rows {
-        for col in 0..cols {
-            holes.push(HolePos {
-                x_position: ox + col as f32 * spacing_x,
-                y_position: oy + row as f32 * spacing_y,
-            });
-        }
+fn min_holes(level_id: u32, rope_count: usize) -> usize {
+    let base = rope_count * 2 + 4;
+    match level_id {
+        1..=5 => base.max(10),
+        6..=15 => base.max(14),
+        16..=30 => base.max(18),
+        31..=60 => base.max(20),
+        61..=100 => base.max(22),
+        _ => base.max(24),
     }
-    holes
-}
-
-fn circle(count: usize, radius: f32) -> Vec<HolePos> {
-    let mut holes = Vec::new();
-    for i in 0..count {
-        let angle = (i as f32 / count as f32) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-        holes.push(HolePos {
-            x_position: radius * angle.cos(),
-            y_position: radius * angle.sin(),
-        });
-    }
-    holes
 }
 
 impl HoleLayout {
-    fn generate(self) -> Vec<HolePos> {
+    fn generate(self, n: usize) -> Vec<HolePos> {
         match self {
-            HoleLayout::Grid4x5 => grid(5, 4, 0.42, 0.45),
-            HoleLayout::Circle12 => circle(12, 0.72),
+            HoleLayout::Grid => {
+                let cols = 3usize.max((n as f32 * 1.25).sqrt().ceil() as usize);
+                let rows = 3usize.max((n + cols - 1) / cols);
+                let s = 0.42_f32.min(1.6 / (cols.max(rows) as f32 - 1.0).max(1.0));
+                let ox = -(cols as f32 - 1.0) / 2.0 * s;
+                let oy = -(rows as f32 - 1.0) / 2.0 * s;
+                let mut pts = Vec::new();
+                for row in 0..rows {
+                    for col in 0..cols {
+                        pts.push(hp(ox + col as f32 * s, oy + row as f32 * s));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Circle => {
+                let count = 8usize.max(n);
+                let r = 0.90_f32.min(0.40 + count as f32 * 0.035);
+                (0..count).map(|i| {
+                    let a = i as f32 / count as f32 * TAU - FRAC_PI_2;
+                    hp(r * a.cos(), r * a.sin())
+                }).collect()
+            }
             HoleLayout::Hexagon => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                let r1: f32 = 0.45;
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_6;
-                    holes.push(HolePos {
-                        x_position: r1 * angle.cos(),
-                        y_position: r1 * angle.sin(),
-                    });
+                let mut pts = vec![hp(0.0, 0.0)];
+                let mut ring = 1u32;
+                while pts.len() < n {
+                    let count = ring * 6;
+                    let r = ring as f32 * 0.95_f32.min(0.35).min(0.95 / (ring as f32 + 1.0));
+                    for i in 0..count {
+                        let a = i as f32 / count as f32 * TAU + ring as f32 * 0.15;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                    ring += 1;
                 }
-                let r2: f32 = 0.85;
-                for i in 0..12 {
-                    let angle = (i as f32 / 12.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: r2 * angle.cos(),
-                        y_position: r2 * angle.sin(),
-                    });
-                }
-                holes
+                pts
             }
             HoleLayout::Diamond => {
-                let s: f32 = 0.38;
-                let row_counts = [1, 3, 5, 3, 1];
-                let mut holes = Vec::new();
-                for (row_idx, &count) in row_counts.iter().enumerate() {
-                    let y = (row_idx as f32 - 2.0) * s;
-                    let ox = -((count as f32 - 1.0) / 2.0) * s;
+                let mut half = 2usize.max((n as f32).sqrt().ceil() as usize);
+                if half % 2 == 0 { half += 1; }
+                let s = 0.38_f32.min(1.6 / half as f32);
+                let mut pts = Vec::new();
+                for row_idx in 0..(half * 2 - 1) {
+                    let dist = (row_idx as isize - (half as isize - 1)).unsigned_abs();
+                    let count = half - dist;
+                    let y = (row_idx as f32 - (half as f32 - 1.0)) * s;
+                    let ox = -(count as f32 - 1.0) / 2.0 * s;
                     for col in 0..count {
-                        holes.push(HolePos {
-                            x_position: ox + col as f32 * s,
-                            y_position: y,
-                        });
+                        pts.push(hp(ox + col as f32 * s, y));
                     }
                 }
-                holes
+                pts
             }
             HoleLayout::Cross => {
-                let s: f32 = 0.40;
-                let mut holes = Vec::new();
-                for i in -2i32..=2 {
-                    holes.push(HolePos {
-                        x_position: 0.0,
-                        y_position: i as f32 * s,
-                    });
+                let arm = 2usize.max(n / 5);
+                let s = 0.40_f32.min(1.6 / (arm as f32 * 2.0));
+                let mut pts = Vec::new();
+                for i in -(arm as i32)..=(arm as i32) {
+                    pts.push(hp(0.0, i as f32 * s));
                 }
-                for &i in &[-2i32, -1, 1, 2] {
-                    holes.push(HolePos {
-                        x_position: i as f32 * s,
-                        y_position: 0.0,
-                    });
+                for i in -(arm as i32)..=(arm as i32) {
+                    if i != 0 { pts.push(hp(i as f32 * s, 0.0)); }
                 }
-                for &sx in &[-1.0f32, 1.0] {
-                    for &sy in &[-1.0f32, 1.0] {
-                        holes.push(HolePos {
-                            x_position: sx * s,
-                            y_position: sy * s,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::TwoRings => {
-                let mut holes = Vec::new();
-                let r_inner: f32 = 0.35;
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: r_inner * angle.cos(),
-                        y_position: r_inner * angle.sin(),
-                    });
-                }
-                let r_outer: f32 = 0.78;
-                for i in 0..10 {
-                    let angle =
-                        (i as f32 / 10.0) * std::f32::consts::TAU + std::f32::consts::PI / 10.0;
-                    holes.push(HolePos {
-                        x_position: r_outer * angle.cos(),
-                        y_position: r_outer * angle.sin(),
-                    });
-                }
-                holes
-            }
-            HoleLayout::Triangle => {
-                let s: f32 = 0.38;
-                let mut holes = Vec::new();
-                for row in 0..5usize {
-                    let count = row + 1;
-                    let ox = -((count as f32 - 1.0) / 2.0) * s;
-                    let y = (row as f32 - 2.0) * s * 0.866;
-                    for col in 0..count {
-                        holes.push(HolePos {
-                            x_position: ox + col as f32 * s,
-                            y_position: y,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::Star => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                for i in 0..5 {
-                    let outer_angle =
-                        (i as f32 / 5.0) * std::f32::consts::TAU - std::f32::consts::FRAC_PI_2;
-                    holes.push(HolePos {
-                        x_position: 0.82 * outer_angle.cos(),
-                        y_position: 0.82 * outer_angle.sin(),
-                    });
-                    let inner_angle = outer_angle + std::f32::consts::PI / 5.0;
-                    holes.push(HolePos {
-                        x_position: 0.38 * inner_angle.cos(),
-                        y_position: 0.38 * inner_angle.sin(),
-                    });
-                }
-                for i in 0..5 {
-                    let angle = (i as f32 / 5.0) * std::f32::consts::TAU
-                        - std::f32::consts::FRAC_PI_2
-                        + std::f32::consts::PI / 5.0;
-                    holes.push(HolePos {
-                        x_position: 0.60 * angle.cos(),
-                        y_position: 0.60 * angle.sin(),
-                    });
-                }
-                holes
-            }
-            HoleLayout::Grid5x6 => grid(6, 5, 0.38, 0.40),
-            HoleLayout::Circle16 => circle(16, 0.85),
-            HoleLayout::HexagonLarge => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                for ring in 1..=3u32 {
-                    let count = ring * 6;
-                    let radius = ring as f32 * 0.35;
-                    let offset = ring as f32 * 0.15;
-                    for i in 0..count {
-                        let angle = (i as f32 / count as f32) * std::f32::consts::TAU + offset;
-                        holes.push(HolePos {
-                            x_position: radius * angle.cos(),
-                            y_position: radius * angle.sin(),
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::DiamondWide => {
-                let s: f32 = 0.34;
-                let row_counts = [2, 4, 6, 8, 6, 4, 2];
-                let mut holes = Vec::new();
-                for (row_idx, &count) in row_counts.iter().enumerate() {
-                    let y = (row_idx as f32 - 3.0) * s;
-                    let ox = -((count as f32 - 1.0) / 2.0) * s;
-                    for col in 0..count {
-                        holes.push(HolePos {
-                            x_position: ox + col as f32 * s,
-                            y_position: y,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::CrossLarge => {
-                let s: f32 = 0.32;
-                let mut holes = Vec::new();
-                for i in -3i32..=3 {
-                    holes.push(HolePos {
-                        x_position: 0.0,
-                        y_position: i as f32 * s,
-                    });
-                }
-                for &i in &[-3i32, -2, -1, 1, 2, 3] {
-                    holes.push(HolePos {
-                        x_position: i as f32 * s,
-                        y_position: 0.0,
-                    });
-                }
-                for &x in &[-2i32, -1, 1, 2] {
-                    for &y in &[-1i32, 1] {
-                        holes.push(HolePos {
-                            x_position: x as f32 * s,
-                            y_position: y as f32 * s,
-                        });
-                    }
-                }
-                for &x in &[-1i32, 1] {
-                    for &y in &[-2i32, 2] {
-                        holes.push(HolePos {
-                            x_position: x as f32 * s,
-                            y_position: y as f32 * s,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::ThreeRings => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                for i in 0..5 {
-                    let angle = (i as f32 / 5.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: 0.30 * angle.cos(),
-                        y_position: 0.30 * angle.sin(),
-                    });
-                }
-                for i in 0..9 {
-                    let angle = (i as f32 / 9.0) * std::f32::consts::TAU + std::f32::consts::PI / 9.0;
-                    holes.push(HolePos {
-                        x_position: 0.60 * angle.cos(),
-                        y_position: 0.60 * angle.sin(),
-                    });
-                }
-                for i in 0..13 {
-                    let angle = (i as f32 / 13.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: 0.92 * angle.cos(),
-                        y_position: 0.92 * angle.sin(),
-                    });
-                }
-                holes
-            }
-            HoleLayout::TriangleLarge => {
-                let s: f32 = 0.30;
-                let mut holes = Vec::new();
-                for row in 0..7usize {
-                    let count = row + 1;
-                    let ox = -((count as f32 - 1.0) / 2.0) * s;
-                    let y = (row as f32 - 3.0) * s * 0.866;
-                    for col in 0..count {
-                        holes.push(HolePos {
-                            x_position: ox + col as f32 * s,
-                            y_position: y,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::StarLarge => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: 0.95 * angle.cos(),
-                        y_position: 0.95 * angle.sin(),
-                    });
-                }
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU + std::f32::consts::PI / 6.0;
-                    holes.push(HolePos {
-                        x_position: 0.42 * angle.cos(),
-                        y_position: 0.42 * angle.sin(),
-                    });
-                }
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU + std::f32::consts::PI / 6.0;
-                    holes.push(HolePos {
-                        x_position: 0.68 * angle.cos(),
-                        y_position: 0.68 * angle.sin(),
-                    });
-                }
-                for i in 0..6 {
-                    let angle = (i as f32 / 6.0) * std::f32::consts::TAU;
-                    holes.push(HolePos {
-                        x_position: 0.68 * angle.cos(),
-                        y_position: 0.68 * angle.sin(),
-                    });
-                }
-                holes
-            }
-            HoleLayout::Honeycomb => {
-                let s: f32 = 0.36;
-                let mut holes = Vec::new();
-                for row in -2i32..=2 {
-                    let (cols, x_off) = if row.abs() % 2 == 0 {
-                        (5, 0.0)
-                    } else {
-                        (4, 0.5 * s)
-                    };
-                    let ox = -((cols as f32 - 1.0) / 2.0) * s + x_off;
-                    let y = row as f32 * s * 0.866;
-                    for col in 0..cols {
-                        holes.push(HolePos {
-                            x_position: ox + col as f32 * s,
-                            y_position: y,
-                        });
-                    }
-                }
-                holes
-            }
-            HoleLayout::Spiral => {
-                let mut holes = vec![HolePos { x_position: 0.0, y_position: 0.0 }];
-                for i in 0..20 {
-                    let t = i as f32 / 20.0;
-                    let r = 0.15 + t * 0.75;
-                    let angle = t * 4.5 * std::f32::consts::PI;
-                    holes.push(HolePos {
-                        x_position: r * angle.cos(),
-                        y_position: r * angle.sin(),
-                    });
-                }
-                holes
-            }
-            HoleLayout::DoubleGrid => {
-                let s: f32 = 0.38;
-                let gap: f32 = 0.22;
-                let mut holes = Vec::new();
-                for grid_idx in 0..2 {
-                    let y_base = if grid_idx == 0 {
-                        -(1.5 * s + gap / 2.0)
-                    } else {
-                        gap / 2.0 - 0.5 * s
-                    };
-                    for row in 0..3usize {
-                        for col in 0..4usize {
-                            holes.push(HolePos {
-                                x_position: (col as f32 - 1.5) * s,
-                                y_position: y_base + row as f32 * s,
-                            });
+                let fill = 1usize.max(arm - 1);
+                for dx in 1..=fill {
+                    for dy in 1..=fill {
+                        for &sx in &[-1.0_f32, 1.0] {
+                            for &sy in &[-1.0_f32, 1.0] {
+                                pts.push(hp(sx * dx as f32 * s, sy * dy as f32 * s));
+                            }
                         }
                     }
                 }
-                holes
+                pts
+            }
+            HoleLayout::Rings => {
+                let ring_count = if n <= 14 { 2 } else if n <= 22 { 3 } else { 4 };
+                let mut pts = Vec::new();
+                let per_ring = 4usize.max((n - if ring_count > 2 { 1 } else { 0 }) / ring_count);
+                if ring_count > 2 { pts.push(hp(0.0, 0.0)); }
+                for ring in 0..ring_count {
+                    let r = 0.25 + ring as f32 * (0.65 / (ring_count as f32 - 1.0).max(1.0));
+                    let count = 4usize.max(per_ring + ring * 2);
+                    let offset = ring as f32 * PI / count as f32;
+                    for i in 0..count {
+                        let a = i as f32 / count as f32 * TAU + offset;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Triangle => {
+                let mut rows = 4usize;
+                while rows * (rows + 1) / 2 < n { rows += 1; }
+                let s = 0.38_f32.min(1.6 / rows as f32);
+                let cy = (rows as f32 - 1.0) / 2.0;
+                let mut pts = Vec::new();
+                for row in 0..rows {
+                    let count = row + 1;
+                    let ox = -(count as f32 - 1.0) / 2.0 * s;
+                    let y = (row as f32 - cy) * s * 0.866;
+                    for col in 0..count {
+                        pts.push(hp(ox + col as f32 * s, y));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Star => {
+                let points = if n <= 14 { 5 } else if n <= 22 { 6 } else { 8 };
+                let mut pts = vec![hp(0.0, 0.0)];
+                for i in 0..points {
+                    let outer_a = i as f32 / points as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(0.85 * outer_a.cos(), 0.85 * outer_a.sin()));
+                    let inner_a = outer_a + PI / points as f32;
+                    pts.push(hp(0.40 * inner_a.cos(), 0.40 * inner_a.sin()));
+                }
+                if pts.len() < n {
+                    let extra = n - pts.len();
+                    for i in 0..extra {
+                        let a = i as f32 / extra as f32 * TAU - FRAC_PI_2 + 0.3;
+                        pts.push(hp(0.62 * a.cos(), 0.62 * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Honeycomb => {
+                let mut half_rows = 2usize;
+                while (2 * half_rows + 1) * (half_rows + 2) < n { half_rows += 1; }
+                let s = 0.36_f32.min(1.6 / (2 * half_rows + 1) as f32);
+                let h = s * 0.866;
+                let mut pts = Vec::new();
+                for row in -(half_rows as i32)..=(half_rows as i32) {
+                    let (cols, offset) = if row.abs() % 2 == 0 {
+                        (half_rows + 2, 0.0)
+                    } else {
+                        (half_rows + 1, s * 0.5)
+                    };
+                    let ox = -(cols as f32 - 1.0) / 2.0 * s + offset;
+                    for col in 0..cols {
+                        pts.push(hp(ox + col as f32 * s, row as f32 * h));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Spiral => {
+                let count = 10usize.max(n - 1);
+                let mut pts = vec![hp(0.0, 0.0)];
+                let turns = 2.0 + count as f32 * 0.12;
+                for i in 1..=count {
+                    let t = i as f32 / count as f32;
+                    let r = 0.12 + t * 0.78;
+                    let a = t * turns * PI;
+                    pts.push(hp(r * a.cos(), r * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::DoubleGrid => {
+                let half = 6usize.max(n / 2);
+                let cols = 3usize.max((half as f32 * 1.5).sqrt().ceil() as usize);
+                let rows = 2usize.max((half + cols - 1) / cols);
+                let s = 0.38_f32.min(1.5 / (cols.max(rows * 2 + 1) as f32 - 1.0).max(1.0));
+                let gap = s * 0.6;
+                let mut pts = Vec::new();
+                for &gy in &[-1.0_f32, 1.0] {
+                    let cy = gy * ((rows as f32 - 1.0) / 2.0 * s + gap);
+                    for row in 0..rows {
+                        for col in 0..cols {
+                            let x = -(cols as f32 - 1.0) / 2.0 * s + col as f32 * s;
+                            let y = cy + (row as f32 - (rows as f32 - 1.0) / 2.0) * s;
+                            pts.push(hp(x, y));
+                        }
+                    }
+                }
+                pts
             }
             HoleLayout::Scattered => {
-                vec![
-                    HolePos { x_position: -0.75, y_position: -0.70 },
-                    HolePos { x_position: -0.30, y_position: -0.80 },
-                    HolePos { x_position:  0.20, y_position: -0.75 },
-                    HolePos { x_position:  0.70, y_position: -0.65 },
-                    HolePos { x_position: -0.85, y_position: -0.25 },
-                    HolePos { x_position: -0.40, y_position: -0.30 },
-                    HolePos { x_position:  0.05, y_position: -0.35 },
-                    HolePos { x_position:  0.50, y_position: -0.20 },
-                    HolePos { x_position:  0.88, y_position: -0.30 },
-                    HolePos { x_position: -0.70, y_position:  0.15 },
-                    HolePos { x_position: -0.25, y_position:  0.10 },
-                    HolePos { x_position:  0.25, y_position:  0.18 },
-                    HolePos { x_position:  0.72, y_position:  0.10 },
-                    HolePos { x_position: -0.80, y_position:  0.60 },
-                    HolePos { x_position: -0.35, y_position:  0.55 },
-                    HolePos { x_position:  0.10, y_position:  0.65 },
-                    HolePos { x_position:  0.55, y_position:  0.58 },
-                    HolePos { x_position:  0.85, y_position:  0.55 },
-                    HolePos { x_position: -0.50, y_position:  0.90 },
-                    HolePos { x_position:  0.00, y_position:  0.92 },
-                    HolePos { x_position:  0.50, y_position:  0.88 },
-                ]
+                let cols = 3usize.max((n as f32 * 1.3).sqrt().ceil() as usize);
+                let rows = 3usize.max((n + cols - 1) / cols);
+                let sx = 1.6 / cols as f32;
+                let sy = 1.6 / rows as f32;
+                let mut pts = Vec::new();
+                let mut idx = 0usize;
+                for row in 0..rows {
+                    for col in 0..cols {
+                        if idx >= n { break; }
+                        let jx = ((idx * 7 + 13) % 17) as f32 / 17.0 - 0.5;
+                        let jy = ((idx * 11 + 3) % 13) as f32 / 13.0 - 0.5;
+                        let x = -0.8 + col as f32 * sx + jx * sx * 0.35;
+                        let y = -0.8 + row as f32 * sy + jy * sy * 0.35;
+                        pts.push(hp(x, y));
+                        idx += 1;
+                    }
+                }
+                pts
+            }
+            HoleLayout::Columns => {
+                let col_count = if n <= 12 { 2 } else if n <= 20 { 3 } else { 4 };
+                let row_count = 3usize.max((n + col_count - 1) / col_count);
+                let s = 0.35_f32.min(1.5 / (row_count as f32 - 1.0).max(1.0));
+                let x_spread = 0.55_f32.min(0.30 + col_count as f32 * 0.12);
+                let mut pts = Vec::new();
+                for col in 0..col_count {
+                    let x = -x_spread + col as f32 * (2.0 * x_spread / (col_count as f32 - 1.0).max(1.0));
+                    for row in 0..row_count {
+                        let y = (row as f32 - (row_count as f32 - 1.0) / 2.0) * s;
+                        pts.push(hp(x, y));
+                    }
+                }
+                pts
+            }
+            HoleLayout::CenterPlusRing => {
+                let center_count = if n <= 14 { 1 } else if n <= 20 { 2 } else { 3 };
+                let mut pts = Vec::new();
+                if center_count == 1 {
+                    pts.push(hp(0.0, 0.0));
+                } else {
+                    let r = 0.12_f32;
+                    for i in 0..center_count {
+                        let a = i as f32 / center_count as f32 * TAU - FRAC_PI_2;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                }
+                let ring_count = n - center_count;
+                let r = 0.85_f32.min(0.55 + ring_count as f32 * 0.02);
+                for i in 0..ring_count {
+                    let a = i as f32 / ring_count as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(r * a.cos(), r * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::RotatedSquare => {
+                let rings = 2usize.max((n + 3) / 4);
+                let mut pts = Vec::new();
+                for ring in 1..=rings {
+                    let r = ring as f32 / rings as f32 * 0.85;
+                    let per_side = 1usize.max(ring);
+                    let count = per_side * 4;
+                    for i in 0..count {
+                        let a = i as f32 / count as f32 * TAU + PI / 4.0;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::SquareInCircle => {
+                let sq_side = 2usize.max(n / 4);
+                let ring_count = 8usize.max(n - sq_side * 4);
+                let sq = 0.50_f32.min(0.30 + sq_side as f32 * 0.05);
+                let mut pts = Vec::new();
+                let s = 2.0 * sq / (sq_side as f32 - 1.0).max(1.0);
+                for row in 0..sq_side {
+                    for col in 0..sq_side {
+                        if row == 0 || row == sq_side - 1 || col == 0 || col == sq_side - 1 {
+                            pts.push(hp(-sq + col as f32 * s, -sq + row as f32 * s));
+                        }
+                    }
+                }
+                let r = 0.90_f32.min(sq + 0.35);
+                for i in 0..ring_count {
+                    let a = i as f32 / ring_count as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(r * a.cos(), r * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::Arc => {
+                let count = 8usize.max(n);
+                let r = 0.85_f32.min(0.55 + count as f32 * 0.02);
+                (0..count).map(|i| {
+                    let a = i as f32 / (count as f32 - 1.0).max(1.0) * PI - FRAC_PI_2;
+                    hp(r * a.cos(), r * a.sin())
+                }).collect()
+            }
+            HoleLayout::ConcentricSquares => {
+                let rings = 2usize.max(n / 6);
+                let mut pts = Vec::new();
+                for ring in 1..=rings {
+                    let r = ring as f32 / rings as f32 * 0.85;
+                    let count = 4usize.max(4 + (ring - 1) * 4);
+                    for i in 0..count {
+                        let a = i as f32 / count as f32 * TAU + PI / 4.0;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::TriangleInCircle => {
+                let inner_count = 3usize.max(n / 4);
+                let outer_count = 6usize.max(n - inner_count);
+                let r_inner = 0.40_f32.min(0.20 + inner_count as f32 * 0.04);
+                let mut pts = Vec::new();
+                for i in 0..inner_count {
+                    let a = i as f32 / inner_count as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(r_inner * a.cos(), r_inner * a.sin()));
+                }
+                let r_outer = 0.85_f32.min(r_inner + 0.35);
+                for i in 0..outer_count {
+                    let a = i as f32 / outer_count as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(r_outer * a.cos(), r_outer * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::Crescent => {
+                let outer_count = 5usize.max((n * 3 + 2) / 5);
+                let inner_count = 4usize.max(n - outer_count);
+                let r_out = 0.80_f32;
+                let r_in = 0.50_f32;
+                let mut pts = Vec::new();
+                for i in 0..outer_count {
+                    let a = i as f32 / (outer_count as f32 - 1.0).max(1.0) * PI * 0.9 - FRAC_PI_2 - PI / 8.0;
+                    pts.push(hp(r_out * a.cos(), r_out * a.sin()));
+                }
+                for i in 0..inner_count {
+                    let a = i as f32 / (inner_count as f32 - 1.0).max(1.0) * PI * 0.75 - FRAC_PI_2 + PI / 10.0;
+                    pts.push(hp(r_in * a.cos() + 0.22, r_in * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::LetterH => {
+                let col_rows = 3usize.max((n - 1) / 2);
+                let s = 0.32_f32.min(1.5 / (col_rows as f32 - 1.0).max(1.0));
+                let xl = -0.45_f32;
+                let xr = 0.45_f32;
+                let mut pts = Vec::new();
+                for row in 0..col_rows {
+                    let y = (row as f32 - (col_rows as f32 - 1.0) / 2.0) * s;
+                    pts.push(hp(xl, y));
+                    pts.push(hp(xr, y));
+                }
+                let bar_count = 1usize.max(n - col_rows * 2);
+                let bar_s = 0.9 / (bar_count as f32 + 1.0);
+                for i in 1..=bar_count {
+                    pts.push(hp(xl + i as f32 * bar_s, 0.0));
+                }
+                pts
+            }
+            HoleLayout::LetterT => {
+                let top_count = 3usize.max(n / 3);
+                let stem_count = 3usize.max(n - top_count);
+                let top_s = 0.30_f32.min(1.5 / (top_count as f32 - 1.0).max(1.0));
+                let stem_s = 0.30_f32.min(1.3 / stem_count as f32);
+                let mut pts = Vec::new();
+                for col in 0..top_count {
+                    let x = (col as f32 - (top_count as f32 - 1.0) / 2.0) * top_s;
+                    pts.push(hp(x, 0.65));
+                }
+                for row in 0..stem_count {
+                    pts.push(hp(0.0, 0.65 - (row + 1) as f32 * stem_s));
+                }
+                pts
+            }
+            HoleLayout::Arrow => {
+                let per_side = 3usize.max(n / 2);
+                let mut pts = Vec::new();
+                for i in 0..per_side {
+                    let t = i as f32 / (per_side as f32 - 1.0).max(1.0);
+                    pts.push(hp(-0.60 * (1.0 - t), -0.60 + t * 1.2));
+                    pts.push(hp(0.60 * (1.0 - t), -0.60 + t * 1.2));
+                }
+                pts
+            }
+            HoleLayout::Zigzag => {
+                let count = 8usize.max(n);
+                let s = 0.28_f32.min(1.5 / (count as f32 - 1.0).max(1.0));
+                (0..count).map(|i| {
+                    let x = ((i % 2) as f32 - 0.5) * 0.65;
+                    let y = (i as f32 - (count as f32 - 1.0) / 2.0) * s;
+                    hp(x, y)
+                }).collect()
+            }
+            HoleLayout::Clover => {
+                let petals = if n <= 14 { 4 } else if n <= 22 { 5 } else { 6 };
+                let per_petal = 3usize.max(n / petals);
+                let r = 0.22_f32;
+                let big_r = 0.55_f32;
+                let mut pts = Vec::new();
+                for petal in 0..petals {
+                    let ca = petal as f32 / petals as f32 * TAU;
+                    let cx = big_r * ca.cos();
+                    let cy = big_r * ca.sin();
+                    for i in 0..per_petal {
+                        let a = i as f32 / per_petal as f32 * TAU + ca;
+                        pts.push(hp(cx + r * a.cos(), cy + r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::Clusters => {
+                let cluster_count = if n <= 14 { 3 } else if n <= 22 { 4 } else { 5 };
+                let per_cluster = 3usize.max(n / cluster_count);
+                let big_r = 0.65_f32;
+                let r = 0.18_f32.min(0.10 + per_cluster as f32 * 0.02);
+                let mut pts = Vec::new();
+                for c in 0..cluster_count {
+                    let ca = c as f32 / cluster_count as f32 * TAU - FRAC_PI_2;
+                    let cx = big_r * ca.cos();
+                    let cy = big_r * ca.sin();
+                    for i in 0..per_cluster {
+                        let a = i as f32 / per_cluster as f32 * TAU;
+                        pts.push(hp(cx + r * a.cos(), cy + r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::ThreeColumns => {
+                let row_count = 3usize.max((n + 2) / 3);
+                let s = 0.35_f32.min(1.5 / (row_count as f32 - 1.0).max(1.0));
+                let x_pos = [-0.55_f32, 0.0, 0.55];
+                let mut pts = Vec::new();
+                for &x in &x_pos {
+                    for row in 0..row_count {
+                        let y = (row as f32 - (row_count as f32 - 1.0) / 2.0) * s;
+                        pts.push(hp(x, y));
+                    }
+                }
+                pts
+            }
+            HoleLayout::RingWithSpokes => {
+                let spokes = 3usize.max(n / 4);
+                let ring_count = 6usize.max(n - spokes - 1);
+                let mut pts = vec![hp(0.0, 0.0)];
+                for i in 0..spokes {
+                    let a = i as f32 / spokes as f32 * TAU;
+                    pts.push(hp(0.35 * a.cos(), 0.35 * a.sin()));
+                }
+                for i in 0..ring_count {
+                    let a = i as f32 / ring_count as f32 * TAU - FRAC_PI_2;
+                    pts.push(hp(0.78 * a.cos(), 0.78 * a.sin()));
+                }
+                pts
+            }
+            HoleLayout::DiamondOutline => {
+                let rings = 2usize.max(n / 4);
+                let mut pts = Vec::new();
+                for ring in 1..=rings {
+                    let r = ring as f32 / rings as f32 * 0.78;
+                    let count = 4usize.max(ring * 4);
+                    for i in 0..count {
+                        let a = i as f32 / count as f32 * TAU + PI / 4.0;
+                        pts.push(hp(r * a.cos(), r * a.sin()));
+                    }
+                }
+                pts
+            }
+            HoleLayout::BowTie => {
+                let per_side = 3usize.max((n - 1) / 2);
+                let mut pts = vec![hp(0.0, 0.0)];
+                let r = 0.70_f32;
+                for i in 0..per_side {
+                    let a = i as f32 / per_side as f32 * PI - FRAC_PI_2;
+                    pts.push(hp(r * a.cos(), r * a.sin()));
+                }
+                for i in 0..per_side {
+                    let a = i as f32 / per_side as f32 * PI + FRAC_PI_2;
+                    pts.push(hp(r * a.cos(), r * a.sin()));
+                }
+                pts
             }
         }
     }
+}
+
+fn hp(x: f32, y: f32) -> HolePos {
+    HolePos { x_position: x, y_position: y }
 }
 
 fn pick_structured_pairs(
@@ -567,9 +688,10 @@ fn pick_structured_pairs(
 
 pub fn generate(level_id: u32) -> LevelDefinition {
     let mut rng = SeededRNG::new((level_id as u64).wrapping_mul(2654435761));
-    let layout = ALL_LAYOUTS[level_id as usize % ALL_LAYOUTS.len()];
-    let holes = layout.generate();
     let diff = difficulty(level_id);
+    let layout = ALL_LAYOUTS[level_id as usize % ALL_LAYOUTS.len()];
+    let n = min_holes(level_id, diff.rope_count);
+    let holes = layout.generate(n);
     let max_ropes = (holes.len().saturating_sub(3)) / 2;
     let rope_count = diff.rope_count.min(max_ropes).max(1);
 

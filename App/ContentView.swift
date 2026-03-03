@@ -7,6 +7,7 @@ struct ContentView: View {
     @State private var showLevelPicker = false
     @State private var levelInput = ""
     @State private var dumpMessage: String?
+    @State private var settingsCopied = false
     @State private var shareURL: URL?
 
     var body: some View {
@@ -14,8 +15,34 @@ struct ContentView: View {
             GameView(controller: gameController)
                 .ignoresSafeArea()
 
-            VStack {
-                HStack {
+            VStack(spacing: 0) {
+                HStack(spacing: 8) {
+                    Button(action: {
+                        gameController.restartLevel()
+                    }) {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .padding(.leading, 16)
+
+                    Button(action: {
+                        if gameController.currentLevel > 1 {
+                            gameController.loadLevel(gameController.currentLevel - 1)
+                        }
+                    }) {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(gameController.currentLevel > 1 ? .white : .white.opacity(0.3))
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .disabled(gameController.currentLevel <= 1)
+
                     Button(action: {
                         levelInput = "\(gameController.currentLevel)"
                         showLevelPicker = true
@@ -29,8 +56,20 @@ struct ContentView: View {
                                 .foregroundColor(.white.opacity(0.4))
                         }
                     }
-                    .padding(.top, 52)
-                    .padding(.leading, 16)
+
+                    Button(action: {
+                        if gameController.currentLevel < 200 {
+                            gameController.loadLevel(gameController.currentLevel + 1)
+                        }
+                    }) {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(gameController.currentLevel < 200 ? .white : .white.opacity(0.3))
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .disabled(gameController.currentLevel >= 200)
 
                     Spacer()
 
@@ -44,22 +83,6 @@ struct ContentView: View {
                             .background(Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
-                    .padding(.top, 50)
-                    .padding(.trailing, 8)
-
-                    Button(action: {
-                        if let url = gameController.dumpTopology() {
-                            dumpMessage = url.lastPathComponent
-                        }
-                    }) {
-                        Image(systemName: "square.and.arrow.down")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 50)
                     .padding(.trailing, 8)
 
                     Button(action: {
@@ -72,52 +95,9 @@ struct ContentView: View {
                             .background(gameController.profilerActive ? Color.red.opacity(0.3) : Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
-                    .padding(.top, 50)
-                    .padding(.trailing, 8)
-
-                    Button(action: {
-                        gameController.undo()
-                    }) {
-                        Image(systemName: "arrow.uturn.backward")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(gameController.canUndo ? .white : .white.opacity(0.3))
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .disabled(!gameController.canUndo)
-                    #if os(macOS)
-                    .keyboardShortcut("z", modifiers: .command)
-                    #endif
-                    .padding(.top, 50)
-                    .padding(.trailing, 8)
-
-                    Button(action: {
-                        gameController.frictionSoundEnabled.toggle()
-                    }) {
-                        Image(systemName: gameController.frictionSoundEnabled ? "speaker.wave.2.fill" : "speaker.slash.fill")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(gameController.frictionSoundEnabled ? .white : .white.opacity(0.5))
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 50)
-                    .padding(.trailing, 8)
-
-                    Button(action: {
-                        gameController.restartLevel()
-                    }) {
-                        Image(systemName: "arrow.counterclockwise")
-                            .font(.system(size: 20, weight: .semibold))
-                            .foregroundColor(.white)
-                            .frame(width: 44, height: 44)
-                            .background(Color.black.opacity(0.5))
-                            .clipShape(Circle())
-                    }
-                    .padding(.top, 50)
-                    .padding(.trailing, 20)
+                    .padding(.trailing, 16)
                 }
+                .padding(.top, 8)
 
                 if showControls {
                     VStack(spacing: 0) {
@@ -126,6 +106,19 @@ struct ContentView: View {
                                 .font(.system(size: 14, weight: .semibold))
                                 .foregroundColor(.white)
                             Spacer()
+                            Button(action: {
+                                if gameController.dumpSettingsToClipboard() {
+                                    settingsCopied = true
+                                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settingsCopied = false }
+                                }
+                            }) {
+                                Image(systemName: "doc.on.clipboard")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(settingsCopied ? .green : .white.opacity(0.8))
+                                    .frame(width: 30, height: 30)
+                                    .background(Color.white.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
                             Button(action: { gameController.resetToDefaults() }) {
                                 Image(systemName: "arrow.uturn.backward")
                                     .font(.system(size: 13, weight: .bold))
@@ -139,11 +132,21 @@ struct ContentView: View {
                         .padding(.top, 8)
                         .padding(.bottom, 4)
 
-                        // Tab bar
-                        HStack(spacing: 0) {
-                            TabButton(title: "Rope", index: 0, selected: $selectedTab)
-                            TabButton(title: "Solver", index: 1, selected: $selectedTab)
-                            TabButton(title: "Drag", index: 2, selected: $selectedTab)
+                        VStack(spacing: 2) {
+                            HStack(spacing: 0) {
+                                TabButton(title: "Rope", index: 0, selected: $selectedTab)
+                                TabButton(title: "Solver", index: 1, selected: $selectedTab)
+                                TabButton(title: "Drag", index: 2, selected: $selectedTab)
+                                TabButton(title: "Visual", index: 3, selected: $selectedTab)
+                                TabButton(title: "Cartoon", index: 4, selected: $selectedTab)
+                            }
+                            HStack(spacing: 0) {
+                                TabButton(title: "Light", index: 5, selected: $selectedTab)
+                                TabButton(title: "Table", index: 6, selected: $selectedTab)
+                                TabButton(title: "Matte", index: 7, selected: $selectedTab)
+                                TabButton(title: "Cap", index: 8, selected: $selectedTab)
+                                TabButton(title: "Worm", index: 9, selected: $selectedTab)
+                            }
                         }
                         .padding(.horizontal, 10)
                         .padding(.bottom, 6)
@@ -154,13 +157,20 @@ struct ContentView: View {
                             case 0: ropeTab
                             case 1: solverTab
                             case 2: dragTab
+                            case 3: visualTab
+                            case 4: cartoonTab
+                            case 5: lightTab
+                            case 6: tableTab
+                            case 7: matteTab
+                            case 8: capTab
+                            case 9: wormTab
                             default: ropeTab
                             }
                         }
                         .padding(.horizontal, 10)
                         .padding(.bottom, 10)
                     }
-                    .frame(maxHeight: 220)
+                    .frame(maxHeight: 320)
                     .background(Color.black.opacity(0.5))
                     .cornerRadius(14)
                     .padding(.horizontal, 12)
@@ -168,6 +178,31 @@ struct ContentView: View {
                 }
 
                 Spacer()
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .ignoresSafeArea(edges: .horizontal)
+
+            VStack {
+                Spacer()
+                HStack {
+                    Spacer()
+                    Button(action: {
+                        gameController.undo()
+                    }) {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 20, weight: .semibold))
+                            .foregroundColor(gameController.canUndo ? .white : .white.opacity(0.3))
+                            .frame(width: 52, height: 52)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .disabled(!gameController.canUndo)
+                    #if os(macOS)
+                    .keyboardShortcut("z", modifiers: .command)
+                    #endif
+                    .padding(.trailing, 20)
+                    .padding(.bottom, 40)
+                }
             }
 
             if gameController.profilerActive {
@@ -232,24 +267,236 @@ struct ContentView: View {
 
     private var ropeTab: some View {
         VStack(spacing: 3) {
-            ParamRowInt(label: "Particles", value: $gameController.particleCount, range: 6...200)
-            ParamRow(label: "Gravity", value: $gameController.gravity, range: -20.0...0.0, format: "%.1f")
-            ParamRow(label: "Damping", value: $gameController.damping, range: 0.8...1.0, format: "%.3f")
-            ParamRow(label: "Tension", value: $gameController.ropeTension, range: 0.50...1.0, format: "%.3f")
+            ParamRowInt(label: "Particles", value: $gameController.particleCount, range: 6...200, defaultValue: 60)
+            ParamRow(label: "Gravity", value: $gameController.gravity, range: -20.0...0.0, format: "%.1f", defaultValue: -5.0)
+            ParamRow(label: "Damping", value: $gameController.damping, range: 0.8...1.0, format: "%.3f", defaultValue: 0.97)
+            ParamRow(label: "Tension", value: $gameController.ropeTension, range: 0.50...1.0, format: "%.3f", defaultValue: 0.98)
         }
     }
 
     private var solverTab: some View {
         VStack(spacing: 3) {
-            ParamRowInt(label: "Constr Iter", value: $gameController.constraintIterations, range: 1...60)
-            ParamRowInt(label: "Settle Steps", value: $gameController.settleSteps, range: 1...100)
+            ParamRowInt(label: "Constr Iter", value: $gameController.constraintIterations, range: 1...60, defaultValue: 8)
+            ParamRowInt(label: "Settle Steps", value: $gameController.settleSteps, range: 1...100, defaultValue: 5)
+            ParamRow(label: "Bend Comp", value: $gameController.bendCompliance, range: 0.0...0.01, format: "%.4f", defaultValue: 0.0015)
+            ParamRow(label: "Bend Damp", value: $gameController.bendVelocityCoupling, range: 0.0...1.0, format: "%.2f", defaultValue: 0.45)
         }
     }
 
     private var dragTab: some View {
         VStack(spacing: 3) {
-            ParamRow(label: "Drag H", value: $gameController.dragHeight, range: 0.05...1.5, format: "%.3f")
-            ParamRow(label: "Lift H", value: $gameController.liftHeight, range: 0.05...1.5, format: "%.3f")
+            ParamRow(label: "Drag H", value: $gameController.dragHeight, range: 0.05...1.5, format: "%.3f", defaultValue: 0.35)
+            ParamRow(label: "Lift H", value: $gameController.liftHeight, range: 0.05...1.5, format: "%.3f", defaultValue: 0.30)
+            ParamRow(label: "Board Z", value: $gameController.boardElevation, range: 0.02...0.5, format: "%.3f", defaultValue: 0.12)
+        }
+    }
+
+    private var visualTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Square")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.squareCrossSection)
+                        .labelsHidden()
+                    ResetButton { gameController.squareCrossSection = false }
+                }
+                ParamRowInt(label: "Profile", value: $gameController.profileSegments, range: 3...32, defaultValue: 16)
+                ParamRow(label: "Hole Size", value: $gameController.holeRadiusScale, range: 0.5...2.0, format: "%.2f", defaultValue: 1.0)
+                ParamRowInt(label: "Hole Seg", value: $gameController.holeSegments, range: 12...96, defaultValue: 48)
+                ParamRow(label: "Rope Scale", value: $gameController.ropeRadiusScale, range: 0.5...2.0, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Stretch Thin", value: $gameController.stretchThinning, range: 0.0...1.0, format: "%.2f", defaultValue: 0.5)
+                ParamRow(label: "Hole R", value: $gameController.holeTintR, range: 0...1, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Hole G", value: $gameController.holeTintG, range: 0...1, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Hole B", value: $gameController.holeTintB, range: 0...1, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Tint Amt", value: $gameController.holeTintAmount, range: 0...1, format: "%.2f", defaultValue: 0)
+                ParamRow(label: "Exposure", value: $gameController.exposure, range: 0.5...2.5, format: "%.2f", defaultValue: 1.05)
+                ParamRow(label: "Bloom", value: $gameController.bloomStrength, range: 0...2.0, format: "%.2f", defaultValue: 0.35)
+                ParamRow(label: "Render Scale", value: $gameController.renderScale, range: 0.25...2.0, format: "%.2f", defaultValue: 1.0)
+            }
+        }
+        .frame(maxHeight: 220)
+    }
+
+    private var cartoonTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Enabled")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.cartoonShaderEnabled)
+                        .labelsHidden()
+                    ResetButton { gameController.cartoonShaderEnabled = false }
+                }
+                ParamRow(label: "Exposure", value: $gameController.cartoonExposure, range: 0.5...1.5, format: "%.2f", defaultValue: 0.75)
+                ParamRow(label: "Bloom", value: $gameController.cartoonBloom, range: 0...0.3, format: "%.2f", defaultValue: 0)
+                ParamRow(label: "Edge", value: $gameController.cartoonEdgeStrength, range: 0...1, format: "%.2f", defaultValue: 0.88)
+                ParamRowInt(label: "Levels", value: $gameController.cartoonLevels, range: 2...6, defaultValue: 4)
+                ParamRow(label: "Shadow", value: $gameController.cartoonShadowBright, range: 0.1...0.8, format: "%.2f", defaultValue: 0.38)
+                ParamRow(label: "Wrap", value: $gameController.cartoonWrap, range: 0...0.5, format: "%.2f", defaultValue: 0.15)
+                ParamRow(label: "Edge Smooth", value: $gameController.cartoonEdgeSmooth, range: 0...1, format: "%.2f", defaultValue: 0.5)
+            }
+        }
+        .frame(maxHeight: 280)
+    }
+
+    private var lightTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Shadow")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Picker("", selection: $gameController.shadowType) {
+                        ForEach(GameController.ShadowType.allCases, id: \.rawValue) { t in
+                            Text(t.label).foregroundColor(.primary).tag(t)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white)
+                    ResetButton { gameController.shadowType = .pcss }
+                }
+                HStack(spacing: 6) {
+                    Text("Shadows")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.shadowsEnabled)
+                        .labelsHidden()
+                    ResetButton { gameController.shadowsEnabled = true }
+                }
+                ParamRow(label: "Intensity", value: $gameController.lightIntensity, range: 0.1...3.0, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Light X", value: $gameController.lightDirX, range: -1...1, format: "%.2f", defaultValue: -0.65)
+                ParamRow(label: "Light Y", value: $gameController.lightDirY, range: -1...1, format: "%.2f", defaultValue: -0.35)
+                ParamRow(label: "Light Z", value: $gameController.lightDirZ, range: -1...1, format: "%.2f", defaultValue: 0.67)
+                ParamRow(label: "Ambient", value: $gameController.ambient, range: 0...0.6, format: "%.2f", defaultValue: 0.08)
+                ParamRow(label: "Shadow Bias", value: $gameController.shadowBias, range: 0.0001...0.005, format: "%.4f", defaultValue: 0.0012)
+                ParamRow(label: "Shadow Dark", value: $gameController.shadowDarkness, range: 0...0.5, format: "%.2f", defaultValue: 0.12)
+                ParamRow(label: "Light Size", value: $gameController.lightSize, range: 0.002...0.08, format: "%.3f", defaultValue: 0.012)
+            }
+        }
+        .frame(maxHeight: 260)
+    }
+
+    private var tableTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Style")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Picker("", selection: $gameController.tableStyle) {
+                        ForEach(GameController.TableStyle.allCases, id: \.rawValue) { s in
+                            Text(s.label).foregroundColor(.primary).tag(s)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .tint(.white)
+                    ResetButton { gameController.tableStyle = .wood }
+                }
+                if gameController.tableStyle != .wood {
+                    ParamRow(label: "Color1 R", value: $gameController.tableColor1R, range: 0...1, format: "%.2f", defaultValue: 0.08)
+                    ParamRow(label: "Color1 G", value: $gameController.tableColor1G, range: 0...1, format: "%.2f", defaultValue: 0.09)
+                    ParamRow(label: "Color1 B", value: $gameController.tableColor1B, range: 0...1, format: "%.2f", defaultValue: 0.13)
+                    if gameController.tableStyle == .gradient {
+                        ParamRow(label: "Color2 R", value: $gameController.tableColor2R, range: 0...1, format: "%.2f", defaultValue: 0.12)
+                        ParamRow(label: "Color2 G", value: $gameController.tableColor2G, range: 0...1, format: "%.2f", defaultValue: 0.13)
+                        ParamRow(label: "Color2 B", value: $gameController.tableColor2B, range: 0...1, format: "%.2f", defaultValue: 0.20)
+                    }
+                }
+                ParamRow(label: "Wood Seed", value: $gameController.woodSeed, range: 0...1, format: "%.2f", defaultValue: 0)
+                ParamRow(label: "Brightness", value: $gameController.woodBrightness, range: 0.5...1.5, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Pattern Scale", value: $gameController.woodPatternScale, range: 0.5...7.0, format: "%.1f", defaultValue: 3.0)
+            }
+        }
+        .frame(maxHeight: 220)
+    }
+
+    private var matteTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                ParamRow(label: "Matte", value: $gameController.ropeMatte, range: 0...1, format: "%.2f", defaultValue: 0.6)
+                ParamRow(label: "Gloss", value: $gameController.ropeGloss, range: 0...2, format: "%.2f", defaultValue: 0.5)
+                ParamRow(label: "Diff Wrap", value: $gameController.ropeDiffuseWrap, range: 0...1, format: "%.2f", defaultValue: 0.3)
+                ParamRow(label: "Subsurface", value: $gameController.ropeSubsurface, range: 0...1, format: "%.2f", defaultValue: 0.4)
+                ParamRow(label: "Edge Light", value: $gameController.ropeEdgeLight, range: 0...0.5, format: "%.2f", defaultValue: 0.15)
+                ParamRow(label: "Saturation", value: $gameController.ropeSaturation, range: 0...2, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Micro Bump", value: $gameController.ropeMicroBump, range: 0...1.5, format: "%.3f", defaultValue: 0.14)
+                ParamRow(label: "Bump Scale", value: $gameController.ropeBumpScale, range: 0.5...20.0, format: "%.1f", defaultValue: 3.0)
+                ParamRow(label: "Contact AO", value: $gameController.ropeContactAO, range: 0...1, format: "%.2f", defaultValue: 0.35)
+                ParamRow(label: "Lift Glow", value: $gameController.ropeLiftGlow, range: 0...1, format: "%.2f", defaultValue: 0.25)
+                ParamRow(label: "Str Gloss", value: $gameController.ropeStretchGloss, range: 0...1, format: "%.2f", defaultValue: 0.7)
+                ParamRow(label: "Str Spec", value: $gameController.ropeStretchSpec, range: 0...2, format: "%.2f", defaultValue: 1.0)
+            }
+        }
+        .frame(maxHeight: 260)
+    }
+
+    private var capTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                ParamRow(label: "Radius Scale", value: $gameController.capRadiusScale, range: 0.3...2.5, format: "%.2f", defaultValue: 1.0)
+                ParamRowInt(label: "Segments", value: $gameController.capSegments, range: 4...48, defaultValue: 12)
+                ParamRowInt(label: "Rings", value: $gameController.capRings, range: 2...16, defaultValue: 6)
+                ParamRow(label: "Darken", value: $gameController.capDarken, range: 0...1, format: "%.2f", defaultValue: 0.7)
+            }
+        }
+        .frame(maxHeight: 180)
+    }
+
+    private var wormTab: some View {
+        ScrollView(.vertical, showsIndicators: false) {
+            VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Enabled")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.wormMode)
+                        .labelsHidden()
+                    ResetButton { gameController.wormMode = false }
+                }
+                ParamRow(label: "Seg Freq", value: $gameController.wormSegFreq, range: 4...80, format: "%.0f", defaultValue: 28)
+                ParamRow(label: "Seg Bulge", value: $gameController.wormSegBulge, range: 0...0.5, format: "%.3f", defaultValue: 0.12)
+                ParamRow(label: "Thickness", value: $gameController.wormThickness, range: 0.5...3.0, format: "%.2f", defaultValue: 1.35)
+                ParamRow(label: "Taper Len", value: $gameController.wormTaperLen, range: 0.02...0.4, format: "%.3f", defaultValue: 0.12)
+                ParamRow(label: "Groove", value: $gameController.wormGrooveDepth, range: 0...1, format: "%.2f", defaultValue: 0.35)
+                ParamRow(label: "Belly", value: $gameController.wormBellyBright, range: 0.5...2.0, format: "%.2f", defaultValue: 1.15)
+                ParamRow(label: "Back Dark", value: $gameController.wormBackDark, range: 0.2...1.5, format: "%.2f", defaultValue: 0.7)
+                ParamRow(label: "Skin Noise", value: $gameController.wormSkinNoise, range: 0...0.3, format: "%.3f", defaultValue: 0.08)
+                ParamRow(label: "SSS", value: $gameController.wormSSS, range: 0...1, format: "%.2f", defaultValue: 0.25)
+                ParamRow(label: "Roughness", value: $gameController.wormRoughness, range: 0.05...1, format: "%.2f", defaultValue: 0.25)
+                ParamRow(label: "Specular", value: $gameController.wormSpecular, range: 0...2, format: "%.2f", defaultValue: 0.8)
+                ParamRow(label: "Rim", value: $gameController.wormRimStrength, range: 0...0.5, format: "%.3f", defaultValue: 0.08)
+                ParamRow(label: "Eye Size", value: $gameController.wormEyeSize, range: 0...0.06, format: "%.4f", defaultValue: 0.015)
+                ParamRow(label: "Pulse Spd", value: $gameController.wormPulseSpeed, range: 0...10, format: "%.1f", defaultValue: 2.5)
+                ParamRow(label: "Pulse Amp", value: $gameController.wormPulseAmp, range: 0...0.1, format: "%.3f", defaultValue: 0.02)
+                ParamRow(label: "Crawl Spd", value: $gameController.wormCrawlSpeed, range: 0...15, format: "%.1f", defaultValue: 3.5)
+                ParamRow(label: "Crawl Amp", value: $gameController.wormCrawlAmp, range: 0...0.05, format: "%.4f", defaultValue: 0.012)
+                ParamRow(label: "Side Amp", value: $gameController.wormSideAmp, range: 0...0.03, format: "%.4f", defaultValue: 0.008)
+            }
+        }
+        .frame(maxHeight: 280)
+    }
+}
+
+private struct ResetButton: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Image(systemName: "arrow.counterclockwise")
+                .font(.system(size: 9, weight: .bold))
+                .foregroundColor(.white.opacity(0.7))
+                .frame(width: 22, height: 22)
+                .background(Color.white.opacity(0.12))
+                .clipShape(Circle())
         }
     }
 }
@@ -277,6 +524,7 @@ private struct ParamRow: View {
     @Binding var value: Float
     let range: ClosedRange<Float>
     let format: String
+    var defaultValue: Float? = nil
 
     @State private var textValue: String = ""
     @FocusState private var isEditing: Bool
@@ -308,6 +556,17 @@ private struct ParamRow: View {
                 .onChange(of: isEditing) { _, editing in
                     if !editing { applyText() }
                 }
+
+            if let def = defaultValue {
+                Button(action: { value = def; textValue = String(format: format, def) }) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 22, height: 22)
+                        .background(Color.white.opacity(0.12))
+                        .clipShape(Circle())
+                }
+            }
         }
     }
 
@@ -323,6 +582,7 @@ private struct ParamRowInt: View {
     let label: String
     @Binding var value: Float
     let range: ClosedRange<Int>
+    var defaultValue: Float? = nil
 
     @State private var textValue: String = ""
     @FocusState private var isEditing: Bool
@@ -354,6 +614,17 @@ private struct ParamRowInt: View {
                 .onChange(of: isEditing) { _, editing in
                     if !editing { applyText() }
                 }
+
+            if let def = defaultValue {
+                Button(action: { value = def; textValue = "\(Int(def))" }) {
+                    Image(systemName: "arrow.counterclockwise")
+                        .font(.system(size: 9, weight: .bold))
+                        .foregroundColor(.white.opacity(0.7))
+                        .frame(width: 22, height: 22)
+                        .background(Color.white.opacity(0.12))
+                        .clipShape(Circle())
+                }
+            }
         }
     }
 

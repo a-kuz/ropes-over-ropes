@@ -5,8 +5,9 @@ struct Camera {
     var distance: Float = 2.8
     var orthoHalfHeight: Float = 2.05
     var tiltAngle: Float = 0.0
+    var rotationAngle: Float = 0.0
 
-    mutating func fitToHoles(_ holes: [SIMD2<Float>], holeRadius: Float, aspect: Float) {
+    mutating func fitToHoles(_ holes: [SIMD2<Float>], holeRadius: Float, aspect: Float, maxElevation: Float = 0) {
         guard !holes.isEmpty else { return }
         var minX: Float = .greatestFiniteMagnitude
         var maxX: Float = -.greatestFiniteMagnitude
@@ -26,8 +27,15 @@ struct Camera {
 
         let halfHFromHeight = contentH * 0.5
         let halfHFromWidth = (contentW * 0.5) / max(aspect, 0.01)
-        orthoHalfHeight = max(halfHFromHeight, halfHFromWidth) * 1.2
+        let elevationPadding: Float = maxElevation > 0.01 ? maxElevation * 1.5 : 0
+        orthoHalfHeight = max(halfHFromHeight, halfHFromWidth) * 1.2 + elevationPadding
         center = SIMD3<Float>(centerX, centerY, 0)
+
+        rotationAngle = 0
+
+        if maxElevation > 0.01 && tiltAngle < 0.15 {
+            tiltAngle = 0.25
+        }
     }
 
     func viewProj(aspect: Float) -> simd_float4x4 {
@@ -35,10 +43,11 @@ struct Camera {
         let zOffset = distance * cos(tiltAngle)
         let eye = center + SIMD3<Float>(0, yOffset, zOffset)
         let view = simd_float4x4.lookAt(eye: eye, center: center, up: SIMD3<Float>(0, 1, 0))
+        let rot = simd_float4x4.rotationZ(rotationAngle)
         let halfH = orthoHalfHeight
         let halfW = orthoHalfHeight * aspect
         let proj = simd_float4x4.ortho(left: -halfW, right: halfW, bottom: -halfH, top: halfH, near: 0.01, far: 10.0)
-        return proj * view
+        return proj * rot * view
     }
 }
 
@@ -53,6 +62,17 @@ extension simd_float4x4 {
             SIMD4<Float>(0, 2.0 / tb, 0, 0),
             SIMD4<Float>(0, 0, -1.0 / fn, 0),
             SIMD4<Float>(-(right + left) / rl, -(top + bottom) / tb, -near / fn, 1)
+        )
+    }
+
+    static func rotationZ(_ angle: Float) -> simd_float4x4 {
+        let c = cos(angle)
+        let s = sin(angle)
+        return simd_float4x4(
+            SIMD4<Float>( c, s, 0, 0),
+            SIMD4<Float>(-s, c, 0, 0),
+            SIMD4<Float>( 0, 0, 1, 0),
+            SIMD4<Float>( 0, 0, 0, 1)
         )
     }
 
