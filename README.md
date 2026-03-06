@@ -13,3 +13,5 @@ iOS-игра-головоломка про распутывание резино
 - Swift + SwiftUI
 - Metal (рендеринг)
 - Собственный физический движок на Verlet integration + PBD constraints
+
+demo: https://ropes-ropes.vercel.app
