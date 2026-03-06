@@ -45,7 +45,11 @@ fn main() {
     println!("  Average: {:.1} µs ({:.3} ms)", avg_us, avg_us / 1000.0);
     println!("  Min:     {:.1} µs (level {})", min.1, min.0);
     println!("  Max:     {:.1} µs (level {})", max.1, max.0);
-    println!("  Total (1 pass, 200 levels): {:.1} µs ({:.2} ms)", total_us, total_us / 1000.0);
+    println!(
+        "  Total (1 pass, 200 levels): {:.1} µs ({:.2} ms)",
+        total_us,
+        total_us / 1000.0
+    );
 
     println!("\n--- By difficulty tier ---");
     let tiers: &[(std::ops::RangeInclusive<u32>, &str)] = &[
@@ -68,16 +72,34 @@ fn main() {
         }
         let tier_avg = tier_times.iter().sum::<f64>() / tier_times.len() as f64;
         let tier_max = tier_times.iter().cloned().fold(0.0f64, f64::max);
-        println!("  {:<30} avg={:.1}µs  max={:.1}µs", label, tier_avg, tier_max);
+        println!(
+            "  {:<30} avg={:.1}µs  max={:.1}µs",
+            label, tier_avg, tier_max
+        );
     }
 
     println!("\n--- Per-layout average ---");
     let layout_names = [
-        "Grid4x5", "Circle12", "Hexagon", "Diamond", "Cross",
-        "TwoRings", "Triangle", "Star", "Grid5x6", "Circle16",
-        "HexagonLarge", "DiamondWide", "CrossLarge", "ThreeRings",
-        "TriangleLarge", "StarLarge", "Honeycomb", "Spiral",
-        "DoubleGrid", "Scattered",
+        "Grid4x5",
+        "Circle12",
+        "Hexagon",
+        "Diamond",
+        "Cross",
+        "TwoRings",
+        "Triangle",
+        "Star",
+        "Grid5x6",
+        "Circle16",
+        "HexagonLarge",
+        "DiamondWide",
+        "CrossLarge",
+        "ThreeRings",
+        "TriangleLarge",
+        "StarLarge",
+        "Honeycomb",
+        "Spiral",
+        "DoubleGrid",
+        "Scattered",
     ];
     for (layout_idx, name) in layout_names.iter().enumerate() {
         let layout_times: Vec<f64> = per_level
@@ -89,6 +111,11 @@ fn main() {
             continue;
         }
         let layout_avg = layout_times.iter().sum::<f64>() / layout_times.len() as f64;
-        println!("  {:<16} avg={:.1}µs  (n={})", name, layout_avg, layout_times.len());
+        println!(
+            "  {:<16} avg={:.1}µs  (n={})",
+            name,
+            layout_avg,
+            layout_times.len()
+        );
     }
 }

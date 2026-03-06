@@ -1,8 +1,9 @@
-pub mod simulation;
-pub mod renderer;
-pub mod level;
-pub mod input;
 pub mod audio;
-pub mod hud;
-pub mod storage;
 pub mod celebration;
+pub mod hud;
+pub mod input;
+pub mod leaderboard;
+pub mod level;
+pub mod renderer;
+pub mod simulation;
+pub mod storage;

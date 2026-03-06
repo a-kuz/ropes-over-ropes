@@ -56,35 +56,34 @@ enum SoundPlayer {
 
     static func playRopeVanish() {
         let sampleRate: Double = 44100
-        let duration: Double = 0.35
+        let duration: Double = 0.55
         let sampleCount = Int(sampleRate * duration)
 
         var samples = [Float](repeating: 0, count: sampleCount)
-        var phase1: Double = 0
-        var phase2: Double = 0
+        var rng: UInt32 = 0xDEAD_BEEF
 
         for i in 0..<sampleCount {
             let t = Double(i) / sampleRate
             let progress = t / duration
 
-            let freqBase = 800.0 + progress * 1400.0
-            let freq2 = freqBase * 1.5
-
             let env: Float
-            if progress < 0.05 {
-                env = Float(progress / 0.05)
+            if progress < 0.08 {
+                env = Float(progress / 0.08)
             } else {
-                let decay = (progress - 0.05) / 0.95
-                env = Float(1.0 - decay * decay)
+                let decay = (progress - 0.08) / 0.92
+                env = Float(exp(-decay * 4.0))
             }
 
-            let s1 = Float(sin(phase1 * 2.0 * .pi))
-            let s2 = Float(sin(phase2 * 2.0 * .pi)) * 0.4
+            rng = rng &* 1664525 &+ 1013904223
+            let white = Float(Int32(bitPattern: rng)) / Float(Int32.max)
 
-            samples[i] = (s1 + s2) * env * 0.3
+            let sweepFreq = 200.0 + progress * 600.0
+            let sweepPhase = Float(sin(t * sweepFreq * 2.0 * .pi))
+            let filtered = white * 0.6 + sweepPhase * 0.15
 
-            phase1 += freqBase / sampleRate
-            phase2 += freq2 / sampleRate
+            let pitchUp = Float(sin(t * (400.0 + progress * 800.0) * 2.0 * .pi))
+
+            samples[i] = (filtered * 0.7 + pitchUp * 0.12) * env * 0.18
         }
 
         let format = AVAudioFormat(standardFormatWithSampleRate: sampleRate, channels: 1)!
@@ -100,12 +99,12 @@ enum SoundPlayer {
             try file.write(from: buffer)
 
             popPlayer = try AVAudioPlayer(contentsOf: tempURL)
-            popPlayer?.volume = 0.5
+            popPlayer?.volume = 0.35
             popPlayer?.play()
         } catch {
             #if os(macOS)
             if let sound = NSSound(named: "Pop") ?? NSSound(named: "Tink") {
-                sound.volume = 0.4
+                sound.volume = 0.3
                 sound.play()
             }
             #else

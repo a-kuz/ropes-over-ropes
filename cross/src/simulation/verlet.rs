@@ -1,5 +1,27 @@
+use super::super::level::definition::{Board, CrossSection, MaterialFrame};
 use glam::{Vec2, Vec3};
-use super::super::level::definition::{CrossSection, MaterialFrame};
+use std::collections::HashMap;
+
+#[derive(Clone)]
+pub struct BoardDef {
+    pub center_x: f32,
+    pub center_y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub elevation: f32,
+}
+
+impl From<&Board> for BoardDef {
+    fn from(value: &Board) -> Self {
+        Self {
+            center_x: value.center_x,
+            center_y: value.center_y,
+            width: value.width,
+            height: value.height,
+            elevation: value.elevation,
+        }
+    }
+}
 
 // --- Band ---
 
@@ -16,13 +38,16 @@ pub struct Band {
     pub active: bool,
     pub fade_out: f32,
     pub suck_hole: Option<usize>,
+    pub suck_tail_hole: Option<usize>,
     pub suck_from_end: usize,
     pub suck_consumed: f32,
-    pub bounce_timer: f32,
+    pub suck_frame: i32,
+    pub suck_seg_lengths: Vec<f32>,
+    pub suck_orig_positions: Vec<Vec3>,
 }
 
 impl Band {
-    pub const FADE_OUT_SPEED: f32 = 42.0;
+    pub const FADE_OUT_SPEED: f32 = 45.0;
 }
 
 // --- DragInfo ---
@@ -46,7 +71,13 @@ pub struct LowerAnimation {
 }
 
 impl LowerAnimation {
-    pub const DURATION: f32 = 0.3;
+    pub const DURATION: f32 = 0.55;
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Hash)]
+pub struct LowerAnimationKey {
+    pub band_index: usize,
+    pub end_index: usize,
 }
 
 // --- CollisionPair ---
@@ -96,9 +127,12 @@ pub struct BandSnapshot {
     pub active: bool,
     pub fade_out: f32,
     pub suck_hole: Option<usize>,
+    pub suck_tail_hole: Option<usize>,
     pub suck_from_end: usize,
     pub suck_consumed: f32,
-    pub bounce_timer: f32,
+    pub suck_frame: i32,
+    pub suck_seg_lengths: Vec<f32>,
+    pub suck_orig_positions: Vec<Vec3>,
 }
 
 #[derive(Clone)]
@@ -111,8 +145,10 @@ pub struct Snapshot {
 pub struct VerletSimulator {
     pub bands: Vec<Band>,
     pub hole_positions: Vec<Vec2>,
+    pub hole_elevations: Vec<f32>,
     pub hole_radius: f32,
     pub hole_depth: f32,
+    pub boards: Vec<BoardDef>,
 
     pub gravity: f32,
     pub damping: f32,
@@ -127,6 +163,8 @@ pub struct VerletSimulator {
     pub gravity_torque_strength: f32,
     pub bend_compliance: f32,
     pub bend_velocity_coupling: f32,
+    pub stretch_thinning: f32,
+    pub square_cross_section: bool,
 
     current_tension: f32,
     tension_speed: f32,
@@ -138,61 +176,96 @@ pub struct VerletSimulator {
     drag_target_pos: Option<Vec3>,
     drag_start_pos: Option<Vec3>,
 
-    pub lower_animation: Option<LowerAnimation>,
+    pub lower_animations: HashMap<LowerAnimationKey, LowerAnimation>,
 
     pub cached_frames: Vec<Vec<MaterialFrame>>,
+    idle_timeout: f32,
+    idle_timer: f32,
+    pub is_sleeping: bool,
+    friction_accumulator: f32,
+    friction_speed_accumulator: f32,
+    friction_position_accumulator: Vec3,
+    friction_sample_count: usize,
 }
 
 impl VerletSimulator {
-    pub fn new(hole_positions: Vec<Vec2>, hole_radius: f32) -> Self {
+    pub fn new(
+        hole_positions: Vec<Vec2>,
+        hole_elevations: Vec<f32>,
+        hole_radius: f32,
+        boards: Vec<BoardDef>,
+    ) -> Self {
+        let hole_elevations = if hole_elevations.len() == hole_positions.len() {
+            hole_elevations
+        } else {
+            vec![0.0; hole_positions.len()]
+        };
         Self {
             hole_depth: hole_radius * 1.25,
             hole_positions,
+            hole_elevations,
             hole_radius,
+            boards,
             bands: Vec::new(),
-            gravity: -5.0,
-            damping: 0.97,
-            constraint_iterations: 8,
+            gravity: -6.3927,
+            damping: 0.9470582,
+            constraint_iterations: 11,
             settle_steps: 5,
             lift_height: 0.30,
-            rope_tension: 0.98,
+            rope_tension: 0.88084733,
             friction_coefficient: 0.8,
-            particle_count: 45,
-            twist_stiffness: 0.08,
-            twist_damping: 0.75,
+            particle_count: 65,
+            twist_stiffness: 0.15,
+            twist_damping: 0.4,
             gravity_torque_strength: 0.8,
-            bend_compliance: 0.0029,
-            bend_velocity_coupling: 0.364,
+            bend_compliance: 0.00015530341,
+            bend_velocity_coupling: 0.65,
+            stretch_thinning: 0.093161635,
+            square_cross_section: false,
             current_tension: 1.0,
             tension_speed: 0.5,
-            dt: 1.0 / 60.0,
+            dt: 1.0 / 120.0,
             init_dt: 1.0 / 60.0,
             accumulator: 0.0,
             drag_info: None,
             drag_target_pos: None,
             drag_start_pos: None,
-            lower_animation: None,
+            lower_animations: HashMap::new(),
             cached_frames: Vec::new(),
+            idle_timeout: 3.0,
+            idle_timer: 0.0,
+            is_sleeping: false,
+            friction_accumulator: 0.0,
+            friction_speed_accumulator: 0.0,
+            friction_position_accumulator: Vec3::ZERO,
+            friction_sample_count: 0,
         }
     }
 
     pub fn take_snapshot(&self) -> Snapshot {
         Snapshot {
-            bands: self.bands.iter().map(|b| BandSnapshot {
-                positions: b.positions.clone(),
-                previous_positions: b.previous_positions.clone(),
-                twist_angles: b.twist_angles.clone(),
-                previous_twist_angles: b.previous_twist_angles.clone(),
-                segment_length: b.segment_length,
-                pin_start: b.pin_start,
-                pin_end: b.pin_end,
-                active: b.active,
-                fade_out: b.fade_out,
-                suck_hole: b.suck_hole,
-                suck_from_end: b.suck_from_end,
-                suck_consumed: b.suck_consumed,
-                bounce_timer: b.bounce_timer,
-            }).collect(),
+            bands: self
+                .bands
+                .iter()
+                .map(|b| BandSnapshot {
+                    positions: b.positions.clone(),
+                    previous_positions: b.previous_positions.clone(),
+                    twist_angles: b.twist_angles.clone(),
+                    previous_twist_angles: b.previous_twist_angles.clone(),
+                    segment_length: b.segment_length,
+                    pin_start: b.pin_start,
+                    pin_end: b.pin_end,
+                    active: b.active,
+                    fade_out: b.fade_out,
+                    suck_hole: b.suck_hole,
+                    suck_tail_hole: b.suck_tail_hole,
+                    suck_from_end: b.suck_from_end,
+                    suck_consumed: b.suck_consumed,
+                    suck_frame: b.suck_frame,
+                    suck_seg_lengths: b.suck_seg_lengths.clone(),
+                    suck_orig_positions: b.suck_orig_positions.clone(),
+                })
+                .collect(),
         }
     }
 
@@ -208,19 +281,49 @@ impl VerletSimulator {
             band.active = snap.active;
             band.fade_out = snap.fade_out;
             band.suck_hole = snap.suck_hole;
+            band.suck_tail_hole = snap.suck_tail_hole;
             band.suck_from_end = snap.suck_from_end;
             band.suck_consumed = snap.suck_consumed;
-            band.bounce_timer = snap.bounce_timer;
+            band.suck_frame = snap.suck_frame;
+            band.suck_seg_lengths = snap.suck_seg_lengths.clone();
+            band.suck_orig_positions = snap.suck_orig_positions.clone();
         }
         self.drag_info = None;
         self.drag_start_pos = None;
         self.drag_target_pos = None;
-        self.lower_animation = None;
+        self.lower_animations.clear();
         self.current_tension = self.rope_tension;
+        self.wake_up();
+    }
+
+    pub fn has_lower_animations(&self) -> bool {
+        !self.lower_animations.is_empty()
     }
 
     pub fn set_constraint_iterations(&mut self, val: usize) {
-        self.constraint_iterations = val.max(8);
+        self.constraint_iterations = val.max(2);
+    }
+
+    pub fn wake_up(&mut self) {
+        self.idle_timer = 0.0;
+        self.is_sleeping = false;
+    }
+
+    pub fn consume_and_reset_friction(&mut self) -> Option<(f32, f32, Vec3)> {
+        if self.friction_sample_count == 0 {
+            return None;
+        }
+        let n = self.friction_sample_count as f32;
+        let result = (
+            self.friction_accumulator / n,
+            self.friction_speed_accumulator / n,
+            self.friction_position_accumulator / n,
+        );
+        self.friction_accumulator = 0.0;
+        self.friction_speed_accumulator = 0.0;
+        self.friction_position_accumulator = Vec3::ZERO;
+        self.friction_sample_count = 0;
+        Some(result)
     }
 
     // --- Band management ---
@@ -246,9 +349,12 @@ impl VerletSimulator {
             active: false,
             fade_out: 0.0,
             suck_hole: None,
+            suck_tail_hole: None,
             suck_from_end: 1,
             suck_consumed: 0.0,
-            bounce_timer: 0.0,
+            suck_frame: 0,
+            suck_seg_lengths: Vec::new(),
+            suck_orig_positions: Vec::new(),
         };
         self.bands.push(band);
         self.bands.len() - 1
@@ -267,7 +373,11 @@ impl VerletSimulator {
             let t = i as f32 / (n - 1).max(1) as f32;
             let x = p0.x * (1.0 - t) + p1.x * t;
             let y = p0.y * (1.0 - t) + p1.y * t;
-            let z = if i == 0 || i == n - 1 { p0.z } else { self.lift_height };
+            let z = if i == 0 || i == n - 1 {
+                p0.z
+            } else {
+                self.lift_height
+            };
             self.bands[band_index].positions[i] = Vec3::new(x, y, z);
         }
         self.bands[band_index].positions[0] = p0;
@@ -280,9 +390,11 @@ impl VerletSimulator {
         self.bands[band_index].pin_end = Some(end_hole);
         self.bands[band_index].active = true;
 
-        let has_others = self.bands.iter().enumerate().any(|(idx, b)| {
-            idx != band_index && b.active && b.pin_start.is_some()
-        });
+        let has_others = self
+            .bands
+            .iter()
+            .enumerate()
+            .any(|(idx, b)| idx != band_index && b.active && b.pin_start.is_some());
         self.do_steps(self.settle_steps, has_others);
     }
 
@@ -290,9 +402,36 @@ impl VerletSimulator {
 
     pub fn update(&mut self, delta_time: f32) {
         let clamped_dt = delta_time.min(1.0 / 15.0);
+        if self.drag_info.is_some() || self.has_lower_animations() {
+            self.idle_timer = 0.0;
+            self.is_sleeping = false;
+        } else {
+            self.idle_timer += clamped_dt;
+        }
 
-        const BOUNCE_DURATION: f32 = 0.12;
-        const BOUNCE_HEIGHT: f32 = 0.45;
+        if self.idle_timer >= self.idle_timeout && !self.is_sleeping {
+            for band in &mut self.bands {
+                if band.active && band.fade_out == 0.0 {
+                    band.previous_positions.clone_from(&band.positions);
+                    band.previous_twist_angles.clone_from(&band.twist_angles);
+                }
+            }
+            self.is_sleeping = true;
+        }
+
+        if self.is_sleeping {
+            for band in &self.bands {
+                if band.fade_out > 0.0 && band.active {
+                    self.is_sleeping = false;
+                    self.idle_timer = 0.0;
+                    break;
+                }
+            }
+            if self.is_sleeping {
+                self.accumulator = 0.0;
+                return;
+            }
+        }
 
         for i in 0..self.bands.len() {
             if !(self.bands[i].fade_out > 0.0 && self.bands[i].active) {
@@ -303,85 +442,116 @@ impl VerletSimulator {
                 None => continue,
             };
 
-            if self.bands[i].bounce_timer < BOUNCE_DURATION {
-                self.bands[i].bounce_timer += clamped_dt;
-                let t = (self.bands[i].bounce_timer / BOUNCE_DURATION).min(1.0);
-                let lift = BOUNCE_HEIGHT * (t * std::f32::consts::PI).sin();
-                let n = self.bands[i].positions.len();
-                for k in 0..n {
-                    let center_w = {
-                        let frac = k as f32 / (n - 1).max(1) as f32;
-                        (frac * std::f32::consts::PI).sin()
-                    };
-                    let z_lift = lift * (0.4 + 0.6 * center_w);
-                    let base_z = self.bands[i].radius;
-                    if self.bands[i].positions[k].z >= 0.0 {
-                        self.bands[i].positions[k].z = base_z + z_lift;
-                        self.bands[i].previous_positions[k] = self.bands[i].positions[k];
-                    }
-                }
-                continue;
-            }
-
             let n = self.bands[i].positions.len();
             let hole_xy = self.hole_positions[hole];
-            let hole_below = Vec3::new(hole_xy.x, hole_xy.y, -self.hole_depth);
+            let hole_elev = self.hole_surface_z(hole);
+            let hole_below = Vec3::new(hole_xy.x, hole_xy.y, hole_elev - self.hole_depth);
 
             let pull_speed = Band::FADE_OUT_SPEED * self.bands[i].segment_length;
             self.bands[i].suck_consumed += pull_speed * clamped_dt;
 
             let from_end = self.bands[i].suck_from_end;
-            let head_idx: usize = if from_end == 1 { 0 } else { n - 1 };
-            let step: isize = if from_end == 1 { 1 } else { -1 };
-
-            self.bands[i].positions[head_idx] =
-                hole_below - Vec3::new(0.0, 0.0, self.bands[i].suck_consumed);
-            self.bands[i].previous_positions[head_idx] = self.bands[i].positions[head_idx];
-
-            let seg_len = self.bands[i].segment_length;
+            let suck_segs = self.bands[i].suck_seg_lengths.clone();
+            let orig_positions = self.bands[i].suck_orig_positions.clone();
             let r = self.bands[i].radius;
-            let hole_r2 = self.hole_radius * self.hole_radius;
-            let mut all_below = true;
+            let mut arc_len = vec![0.0f32; n];
+            if from_end == 1 {
+                for k in 1..n {
+                    let seg_l = suck_segs
+                        .get(k - 1)
+                        .copied()
+                        .unwrap_or(self.bands[i].segment_length);
+                    arc_len[k] = arc_len[k - 1] + seg_l;
+                }
+            } else if n > 1 {
+                for k in (0..=(n - 2)).rev() {
+                    let seg_l = suck_segs
+                        .get(k)
+                        .copied()
+                        .unwrap_or(self.bands[i].segment_length);
+                    arc_len[k] = arc_len[k + 1] + seg_l;
+                }
+            }
+            let total_arc = if from_end == 1 {
+                arc_len[n - 1]
+            } else {
+                arc_len[0]
+            };
+            let consumed = self.bands[i].suck_consumed;
 
-            let mut prev_idx = head_idx;
-            let mut j = head_idx as isize + step;
-            while j >= 0 && (j as usize) < n {
-                let ju = j as usize;
-                let prev = self.bands[i].positions[prev_idx];
-                let curr = self.bands[i].positions[ju];
-                let diff = curr - prev;
-                let d = diff.length();
-                if d > seg_len && d > 1e-6 {
-                    self.bands[i].positions[ju] = prev + (diff / d) * seg_len;
+            for k in 0..n {
+                let shifted = arc_len[k] - consumed;
+                if shifted <= 0.0 {
+                    self.bands[i].positions[k] = hole_below - Vec3::new(0.0, 0.0, -shifted);
+                } else {
+                    if from_end == 1 {
+                        let mut seg = 0usize;
+                        let mut acc = 0.0f32;
+                        while seg < n - 1 {
+                            let seg_l = suck_segs
+                                .get(seg)
+                                .copied()
+                                .unwrap_or(self.bands[i].segment_length);
+                            if acc + seg_l >= shifted {
+                                break;
+                            }
+                            acc += seg_l;
+                            seg += 1;
+                        }
+                        let seg_l = suck_segs
+                            .get(seg)
+                            .copied()
+                            .unwrap_or(self.bands[i].segment_length);
+                        let t = if seg_l > 1e-9 {
+                            ((shifted - acc) / seg_l).min(1.0)
+                        } else {
+                            0.0
+                        };
+                        let p0 = orig_positions[seg];
+                        let p1 = orig_positions.get(seg + 1).copied().unwrap_or(p0);
+                        self.bands[i].positions[k] = p0 + (p1 - p0) * t;
+                    } else {
+                        let mut seg = n - 1;
+                        let mut acc = 0.0f32;
+                        while seg > 0 {
+                            let seg_l = suck_segs
+                                .get(seg - 1)
+                                .copied()
+                                .unwrap_or(self.bands[i].segment_length);
+                            if acc + seg_l >= shifted {
+                                break;
+                            }
+                            acc += seg_l;
+                            seg -= 1;
+                        }
+                        let seg_l = suck_segs
+                            .get(seg.saturating_sub(1))
+                            .copied()
+                            .unwrap_or(self.bands[i].segment_length);
+                        let t = if seg_l > 1e-9 {
+                            ((shifted - acc) / seg_l).min(1.0)
+                        } else {
+                            0.0
+                        };
+                        let p0 = orig_positions[seg];
+                        let p1 = orig_positions
+                            .get(seg.saturating_sub(1))
+                            .copied()
+                            .unwrap_or(p0);
+                        self.bands[i].positions[k] = p0 + (p1 - p0) * t;
+                    }
+
+                    let p = self.bands[i].positions[k];
+                    let surf_z = self.board_surface_z(p.x, p.y);
+                    if p.z >= surf_z && p.z < surf_z + r {
+                        self.bands[i].positions[k].z = surf_z + r;
+                    }
                 }
 
-                let p = self.bands[i].positions[ju];
-                let dx = p.x - hole_xy.x;
-                let dy = p.y - hole_xy.y;
-                let xy_dist2 = dx * dx + dy * dy;
-
-                if p.z < 0.0 && xy_dist2 > hole_r2 {
-                    let xy_dist = xy_dist2.sqrt();
-                    self.bands[i].positions[ju].x =
-                        hole_xy.x + (dx / xy_dist) * self.hole_radius * 0.9;
-                    self.bands[i].positions[ju].y =
-                        hole_xy.y + (dy / xy_dist) * self.hole_radius * 0.9;
-                    self.bands[i].positions[ju].z = 0.0;
-                }
-
-                if self.bands[i].positions[ju].z >= 0.0 && self.bands[i].positions[ju].z < r {
-                    self.bands[i].positions[ju].z = r;
-                }
-
-                if self.bands[i].positions[ju].z >= 0.0 {
-                    all_below = false;
-                }
-                self.bands[i].previous_positions[ju] = self.bands[i].positions[ju];
-                prev_idx = ju;
-                j += step;
+                self.bands[i].previous_positions[k] = self.bands[i].positions[k];
             }
 
-            if all_below {
+            if consumed >= total_arc {
                 self.bands[i].fade_out = 1.0;
                 self.bands[i].active = false;
                 self.bands[i].pin_start = None;
@@ -390,12 +560,15 @@ impl VerletSimulator {
             } else {
                 let mut above_count = 0usize;
                 for k in 0..n {
-                    if self.bands[i].positions[k].z >= 0.0 {
+                    let surf_z = self.board_surface_z(
+                        self.bands[i].positions[k].x,
+                        self.bands[i].positions[k].y,
+                    );
+                    if self.bands[i].positions[k].z >= surf_z {
                         above_count += 1;
                     }
                 }
-                self.bands[i].fade_out =
-                    (1.0 - above_count as f32 / n as f32).min(0.999);
+                self.bands[i].fade_out = (1.0 - above_count as f32 / n as f32).min(0.999);
             }
         }
 
@@ -458,55 +631,63 @@ impl VerletSimulator {
     }
 
     fn update_lower_animation(&mut self, delta_time: f32) {
-        let mut anim = match self.lower_animation.take() {
-            Some(a) => a,
-            None => return,
-        };
-        anim.timer += delta_time;
+        if self.lower_animations.is_empty() {
+            return;
+        }
 
-        let bi = anim.band_index;
-        let idx = if anim.end_index == 0 {
-            0
-        } else {
-            self.bands[bi].positions.len() - 1
-        };
+        let keys: Vec<LowerAnimationKey> = self.lower_animations.keys().copied().collect();
+        for key in keys {
+            let mut anim = match self.lower_animations.remove(&key) {
+                Some(anim) => anim,
+                None => continue,
+            };
+            anim.timer += delta_time;
 
-        if let Some(return_target) = anim.return_pos {
-            let t = (anim.timer / anim.return_duration).min(1.0);
+            let bi = anim.band_index;
+            let idx = if anim.end_index == 0 {
+                0
+            } else {
+                self.bands[bi].positions.len() - 1
+            };
+
+            if let Some(return_target) = anim.return_pos {
+                let t = (anim.timer / anim.return_duration).min(1.0);
+                let eased = 1.0 - (1.0 - t) * (1.0 - t);
+                let pos = anim.start_pos + (return_target - anim.start_pos) * eased;
+                self.bands[bi].positions[idx] = pos;
+                self.bands[bi].previous_positions[idx] = pos;
+
+                if t >= 1.0 {
+                    anim.start_pos = return_target;
+                    anim.return_pos = None;
+                    anim.timer = 0.0;
+                }
+
+                self.lower_animations.insert(key, anim);
+                continue;
+            }
+
+            let hole_pos = self.hole_position_3d(anim.target_hole);
+
+            let t = (anim.timer / LowerAnimation::DURATION).min(1.0);
             let eased = 1.0 - (1.0 - t) * (1.0 - t);
-            let pos = anim.start_pos + (return_target - anim.start_pos) * eased;
+            let pos = anim.start_pos + (hole_pos - anim.start_pos) * eased;
             self.bands[bi].positions[idx] = pos;
             self.bands[bi].previous_positions[idx] = pos;
 
             if t >= 1.0 {
-                anim.start_pos = return_target;
-                anim.return_pos = None;
-                anim.timer = 0.0;
+                if anim.end_index == 0 {
+                    self.bands[bi].pin_start = Some(anim.target_hole);
+                } else {
+                    self.bands[bi].pin_end = Some(anim.target_hole);
+                }
+                self.bands[bi].positions[idx] = hole_pos;
+                self.bands[bi].previous_positions[idx] = hole_pos;
+                continue;
             }
-            self.lower_animation = Some(anim);
-            return;
+
+            self.lower_animations.insert(key, anim);
         }
-
-        let hole_pos = self.hole_position_3d(anim.target_hole);
-
-        let t = (anim.timer / LowerAnimation::DURATION).min(1.0);
-        let eased = 1.0 - (1.0 - t) * (1.0 - t);
-        let pos = anim.start_pos + (hole_pos - anim.start_pos) * eased;
-        self.bands[bi].positions[idx] = pos;
-        self.bands[bi].previous_positions[idx] = pos;
-
-        if t >= 1.0 {
-            if anim.end_index == 0 {
-                self.bands[bi].pin_start = Some(anim.target_hole);
-            } else {
-                self.bands[bi].pin_end = Some(anim.target_hole);
-            }
-            self.bands[bi].positions[idx] = hole_pos;
-            self.bands[bi].previous_positions[idx] = hole_pos;
-            return;
-        }
-
-        self.lower_animation = Some(anim);
     }
 
     fn do_steps(&mut self, n: usize, collide: bool) {
@@ -541,7 +722,7 @@ impl VerletSimulator {
             }
 
             if self.bands[bi].cross_section.is_rectangular() {
-                let max_twist_vel: f32 = 0.15;
+                let max_twist_vel: f32 = 0.08;
                 let twist_damp = self.twist_damping;
                 for i in 1..(n - 1) {
                     let twist = self.bands[bi].twist_angles[i];
@@ -616,7 +797,7 @@ impl VerletSimulator {
 
         // Post-solve: collision-only passes
         if collide {
-            for _ in 0..1 {
+            for _ in 0..3 {
                 let had_collision = self.resolve_collision_pairs(&collision_pairs, true);
                 for &bi in &active {
                     let n = self.bands[bi].positions.len();
@@ -639,15 +820,23 @@ impl VerletSimulator {
                         for i in 1..(n - 1) {
                             let frame = self.cached_frames[bi][i];
                             let z_extent = cs.effective_radius(up_n, frame.d1, frame.d2);
-                            if self.bands[bi].positions[i].z < z_extent {
-                                self.bands[bi].positions[i].z = z_extent;
+                            let floor_z = self.board_surface_z(
+                                self.bands[bi].positions[i].x,
+                                self.bands[bi].positions[i].y,
+                            ) + z_extent;
+                            if self.bands[bi].positions[i].z < floor_z {
+                                self.bands[bi].positions[i].z = floor_z;
                             }
                         }
                     } else {
                         let r = self.bands[bi].radius;
                         for i in 1..(n - 1) {
-                            if self.bands[bi].positions[i].z < r {
-                                self.bands[bi].positions[i].z = r;
+                            let floor_z = self.board_surface_z(
+                                self.bands[bi].positions[i].x,
+                                self.bands[bi].positions[i].y,
+                            ) + r;
+                            if self.bands[bi].positions[i].z < floor_z {
+                                self.bands[bi].positions[i].z = floor_z;
                             }
                         }
                     }
@@ -665,11 +854,15 @@ impl VerletSimulator {
                 let n = self.bands[bi].positions.len();
                 let r = self.bands[bi].radius;
                 for i in 1..(n - 1) {
-                    if self.bands[bi].positions[i].z <= r + 1e-4 {
-                        let vx = self.bands[bi].positions[i].x
-                            - self.bands[bi].previous_positions[i].x;
-                        let vy = self.bands[bi].positions[i].y
-                            - self.bands[bi].previous_positions[i].y;
+                    let floor_z = self.board_surface_z(
+                        self.bands[bi].positions[i].x,
+                        self.bands[bi].positions[i].y,
+                    ) + r;
+                    if self.bands[bi].positions[i].z <= floor_z + 1e-4 {
+                        let vx =
+                            self.bands[bi].positions[i].x - self.bands[bi].previous_positions[i].x;
+                        let vy =
+                            self.bands[bi].positions[i].y - self.bands[bi].previous_positions[i].y;
                         let vel_len = (vx * vx + vy * vy).sqrt();
                         if vel_len > 1e-8 {
                             let scale = (1.0 - board_mu).max(0.0);
@@ -689,6 +882,8 @@ impl VerletSimulator {
     fn band_constraints(&mut self, bi: usize, current_tension: f32, dt: f32) {
         let n = self.bands[bi].positions.len();
         let seg_len = self.bands[bi].segment_length * current_tension;
+        let alpha = self.bend_compliance.max(0.0) / (dt * dt).max(1e-8);
+        let bend_coupling = self.bend_velocity_coupling.clamp(0.0, 1.0);
         let pin_s = self.bands[bi].pin_start;
         let pin_e = self.bands[bi].pin_end;
         let hole_s = pin_s.map(|h| self.hole_position_3d(h));
@@ -702,8 +897,8 @@ impl VerletSimulator {
             } else {
                 Vec::new()
             };
+        let mut prev = self.bands[bi].previous_positions.clone();
 
-        // Distance constraints (red-black Gauss-Seidel)
         for offset in 0..=1u32 {
             let mut idx = offset as usize;
             while idx < n - 1 {
@@ -723,10 +918,7 @@ impl VerletSimulator {
             }
         }
 
-        // Bend constraint (XPBD curvature minimization)
         if n >= 3 {
-            let alpha = self.bend_compliance.max(0.0) / (dt * dt).max(1e-8);
-            let bend_coupling = self.bend_velocity_coupling.clamp(0.0, 1.0);
             let denom = 6.0 + alpha;
             for i in 1..(n - 1) {
                 let p0 = self.bands[bi].positions[i - 1];
@@ -756,9 +948,9 @@ impl VerletSimulator {
                 self.bands[bi].positions[i] += d1;
                 self.bands[bi].positions[i + 1] += d2;
 
-                self.bands[bi].previous_positions[i - 1] += d0 * bend_coupling;
-                self.bands[bi].previous_positions[i] += d1 * bend_coupling;
-                self.bands[bi].previous_positions[i + 1] += d2 * bend_coupling;
+                prev[i - 1] += d0 * bend_coupling;
+                prev[i] += d1 * bend_coupling;
+                prev[i + 1] += d2 * bend_coupling;
             }
         }
 
@@ -775,14 +967,20 @@ impl VerletSimulator {
             for i in 1..(n - 1) {
                 let frame = frames[i];
                 let z_extent = cs.effective_radius(up_n, frame.d1, frame.d2);
-                if self.bands[bi].positions[i].z < z_extent {
-                    self.bands[bi].positions[i].z = z_extent;
+                let floor_z = self
+                    .board_surface_z(self.bands[bi].positions[i].x, self.bands[bi].positions[i].y)
+                    + z_extent;
+                if self.bands[bi].positions[i].z < floor_z {
+                    self.bands[bi].positions[i].z = floor_z;
                 }
             }
         } else {
             for i in 1..(n - 1) {
-                if self.bands[bi].positions[i].z < r {
-                    self.bands[bi].positions[i].z = r;
+                let floor_z = self
+                    .board_surface_z(self.bands[bi].positions[i].x, self.bands[bi].positions[i].y)
+                    + r;
+                if self.bands[bi].positions[i].z < floor_z {
+                    self.bands[bi].positions[i].z = floor_z;
                 }
             }
         }
@@ -791,8 +989,7 @@ impl VerletSimulator {
         if is_rect {
             let stiffness = self.twist_stiffness;
             for i in 0..(n - 1) {
-                let diff =
-                    self.bands[bi].twist_angles[i + 1] - self.bands[bi].twist_angles[i];
+                let diff = self.bands[bi].twist_angles[i + 1] - self.bands[bi].twist_angles[i];
                 let corr = diff * stiffness * 0.5;
                 if i > 0 {
                     self.bands[bi].twist_angles[i] += corr;
@@ -801,13 +998,18 @@ impl VerletSimulator {
                     self.bands[bi].twist_angles[i + 1] -= corr;
                 }
             }
+            let zero_restoring = 0.15;
+            for i in 1..(n - 1) {
+                self.bands[bi].twist_angles[i] *= 1.0 - zero_restoring;
+            }
         }
+        self.bands[bi].previous_positions = prev;
     }
 
     // --- Collision ---
 
     pub fn build_collision_pairs(&self, active_bands: &[usize]) -> Vec<CollisionPair> {
-        if active_bands.len() < 2 {
+        if active_bands.is_empty() {
             return Vec::new();
         }
         let mut pairs: Vec<CollisionPair> = Vec::with_capacity(512);
@@ -817,6 +1019,44 @@ impl VerletSimulator {
             let pos_i = &self.bands[bi].positions;
             let segs_i = pos_i.len() - 1;
             let ri = self.bands[bi].cross_section.collision_radius();
+
+            if segs_i > 4 {
+                let min_dist = ri + ri;
+                let seg_len = self.bands[bi].segment_length;
+                let self_skip = if seg_len > 1e-6 {
+                    4.max(((min_dist * 2.5) / seg_len).ceil() as usize)
+                } else {
+                    4
+                };
+                for si in 0..segs_i {
+                    let a0 = pos_i[si];
+                    let a1 = pos_i[si + 1];
+                    let a_min_x = a0.x.min(a1.x) - min_dist;
+                    let a_max_x = a0.x.max(a1.x) + min_dist;
+                    let a_min_y = a0.y.min(a1.y) - min_dist;
+                    let a_max_y = a0.y.max(a1.y) + min_dist;
+                    let sj_start = si + self_skip;
+                    if sj_start >= segs_i {
+                        continue;
+                    }
+                    for sj in sj_start..segs_i {
+                        let b0 = pos_i[sj];
+                        let b1 = pos_i[sj + 1];
+                        if b0.x.max(b1.x) < a_min_x || b0.x.min(b1.x) > a_max_x {
+                            continue;
+                        }
+                        if b0.y.max(b1.y) < a_min_y || b0.y.min(b1.y) > a_max_y {
+                            continue;
+                        }
+                        pairs.push(CollisionPair {
+                            band_a: bi as u16,
+                            seg_a: si as u16,
+                            band_b: bi as u16,
+                            seg_b: sj as u16,
+                        });
+                    }
+                }
+            }
 
             for aj in (ai + 1)..active_bands.len() {
                 let bj = active_bands[aj];
@@ -854,11 +1094,7 @@ impl VerletSimulator {
         pairs
     }
 
-    fn resolve_collision_pairs(
-        &mut self,
-        pairs: &[CollisionPair],
-        inject_velocity: bool,
-    ) -> bool {
+    fn resolve_collision_pairs(&mut self, pairs: &[CollisionPair], inject_velocity: bool) -> bool {
         let mut found = false;
         for p in pairs {
             if self.collide_segments(
@@ -883,9 +1119,8 @@ impl VerletSimulator {
         sj: usize,
         inject_velocity: bool,
     ) -> bool {
-        let max_dist =
-            self.bands[bi].cross_section.collision_radius()
-                + self.bands[bj].cross_section.collision_radius();
+        let max_dist = self.bands[bi].cross_section.collision_radius()
+            + self.bands[bj].cross_section.collision_radius();
         let max_dist2 = max_dist * max_dist;
 
         let a0 = self.bands[bi].positions[si];
@@ -924,12 +1159,32 @@ impl VerletSimulator {
         let diff = closest_a - closest_b;
         let dist2 = diff.dot(diff);
 
-        if dist2 >= max_dist2 || dist2 <= 1e-12 {
+        if dist2 >= max_dist2 {
             return false;
         }
 
-        let dist = dist2.sqrt();
-        let normal = diff / dist;
+        let (dist, normal) = if dist2 > 1e-12 {
+            let dist = dist2.sqrt();
+            (dist, diff / dist)
+        } else {
+            let axis = d1.cross(d2);
+            let axis_len2 = axis.length_squared();
+            if axis_len2 > 1e-12 {
+                (1e-6, axis.normalize())
+            } else {
+                let tangent = if d1.length_squared() > 1e-12 {
+                    d1.normalize()
+                } else {
+                    Vec3::new(1.0, 0.0, 0.0)
+                };
+                let up = if tangent.z.abs() < 0.9 {
+                    Vec3::new(0.0, 0.0, 1.0)
+                } else {
+                    Vec3::new(0.0, 1.0, 0.0)
+                };
+                (1e-6, tangent.cross(up).normalize())
+            }
+        };
 
         let eff_radius_a = self.effective_collision_radius(bi, si, s, normal);
         let eff_radius_b = self.effective_collision_radius(bj, sj, t, normal);
@@ -972,6 +1227,11 @@ impl VerletSimulator {
                 self.bands[bi].previous_positions[si + 1] += vel_corr * s;
                 self.bands[bj].previous_positions[sj] -= vel_corr * (1.0 - t);
                 self.bands[bj].previous_positions[sj + 1] -= vel_corr * t;
+                let contact_pos = (closest_a + closest_b) * 0.5;
+                self.friction_accumulator += overlap;
+                self.friction_speed_accumulator += tangent_len;
+                self.friction_position_accumulator += contact_pos;
+                self.friction_sample_count += 1;
             }
         }
 
@@ -986,13 +1246,7 @@ impl VerletSimulator {
     }
 
     #[inline(always)]
-    fn effective_collision_radius(
-        &self,
-        bi: usize,
-        si: usize,
-        param_s: f32,
-        normal: Vec3,
-    ) -> f32 {
+    fn effective_collision_radius(&self, bi: usize, si: usize, param_s: f32, normal: Vec3) -> f32 {
         let cs = self.bands[bi].cross_section;
         if !cs.is_rectangular() {
             return self.bands[bi].radius;
@@ -1037,12 +1291,31 @@ impl VerletSimulator {
         if band_index >= self.bands.len() {
             return;
         }
+        self.wake_up();
+        let lower_animation_key = LowerAnimationKey {
+            band_index,
+            end_index,
+        };
         let original_hole: usize;
         if end_index == 0 {
-            original_hole = self.bands[band_index].pin_start.unwrap_or(0);
+            original_hole = self.bands[band_index]
+                .pin_start
+                .or_else(|| {
+                    self.lower_animations
+                        .get(&lower_animation_key)
+                        .map(|anim| anim.target_hole)
+                })
+                .unwrap_or(0);
             self.bands[band_index].pin_start = None;
         } else {
-            original_hole = self.bands[band_index].pin_end.unwrap_or(0);
+            original_hole = self.bands[band_index]
+                .pin_end
+                .or_else(|| {
+                    self.lower_animations
+                        .get(&lower_animation_key)
+                        .map(|anim| anim.target_hole)
+                })
+                .unwrap_or(0);
             self.bands[band_index].pin_end = None;
         }
         self.drag_info = Some(DragInfo {
@@ -1051,14 +1324,15 @@ impl VerletSimulator {
             original_hole_index: original_hole,
         });
 
-        self.lower_animation = None;
+        self.lower_animations.remove(&lower_animation_key);
 
         let idx = if end_index == 0 {
             0
         } else {
             self.bands[band_index].positions.len() - 1
         };
-        let lift_pos = Vec3::new(world_position.x, world_position.y, self.lift_height);
+        let elev = self.hole_surface_z(original_hole);
+        let lift_pos = Vec3::new(world_position.x, world_position.y, elev + self.lift_height);
         self.bands[band_index].positions[idx] = lift_pos;
         self.bands[band_index].previous_positions[idx] = lift_pos;
         self.drag_start_pos = Some(lift_pos);
@@ -1072,32 +1346,13 @@ impl VerletSimulator {
         };
         let n = self.bands[bi].positions.len();
         let idx = if end_index == 0 { 0 } else { n - 1 };
-        let anchor_idx = if end_index == 0 { n - 1 } else { 0 };
-
-        let mut target = Vec3::new(world_position.x, world_position.y, self.lift_height);
-
-        let rest_length = self.bands[bi].segment_length * (n - 1).max(1) as f32;
-        let max_stretch = rest_length * 1.8;
-        let hard_limit = rest_length * 2.2;
-
-        let anchor = self.bands[bi].positions[anchor_idx];
-        let to_target = target - anchor;
-        let dist = to_target.length();
-
-        if dist > max_stretch {
-            let dir = to_target / dist.max(1e-6);
-            if dist >= hard_limit {
-                target = anchor + dir * hard_limit;
-            } else {
-                let over = (dist - max_stretch) / (hard_limit - max_stretch);
-                let resistance = 1.0 - over * over * 0.85;
-                let effective_dist = max_stretch + (dist - max_stretch) * resistance;
-                target = anchor + dir * effective_dist;
-            }
-        }
-
         self.drag_start_pos = Some(self.bands[bi].positions[idx]);
-        self.drag_target_pos = Some(target);
+        let surf_z = self.board_surface_z(world_position.x, world_position.y);
+        self.drag_target_pos = Some(Vec3::new(
+            world_position.x,
+            world_position.y,
+            surf_z + self.lift_height,
+        ));
     }
 
     pub fn end_drag(&mut self, target_hole_index: usize) {
@@ -1112,52 +1367,77 @@ impl VerletSimulator {
             self.bands[drag.band_index].positions.len() - 1
         };
         let current_pos = self.bands[drag.band_index].positions[idx];
+        let hole_xy = self.hole_positions[target_hole_index];
+        let hole_elev = self.hole_surface_z(target_hole_index);
+        let above_hole = Vec3::new(hole_xy.x, hole_xy.y, hole_elev + self.lift_height);
+        let dist = (current_pos - above_hole).length();
+        let return_duration = (dist * 0.9).clamp(0.25, 0.8);
 
-        self.lower_animation = Some(LowerAnimation {
+        let lower_animation_key = LowerAnimationKey {
             band_index: drag.band_index,
             end_index: drag.end_index,
-            target_hole: target_hole_index,
-            start_pos: current_pos,
-            timer: 0.0,
-            return_pos: None,
-            return_duration: 0.0,
-        });
+        };
+        self.lower_animations.insert(
+            lower_animation_key,
+            LowerAnimation {
+                band_index: drag.band_index,
+                end_index: drag.end_index,
+                target_hole: target_hole_index,
+                start_pos: current_pos,
+                timer: 0.0,
+                return_pos: Some(above_hole),
+                return_duration,
+            },
+        );
 
         self.drag_start_pos = None;
         self.drag_target_pos = None;
     }
 
     pub fn cancel_drag(&mut self) {
-        let drag = match self.drag_info.take() {
+        let drag = match self.drag_info.as_ref() {
             Some(d) => d,
             None => return,
         };
+        self.end_drag(drag.original_hole_index);
+    }
 
-        let idx = if drag.end_index == 0 {
-            0
+    pub fn start_fade_out(
+        &mut self,
+        band_index: usize,
+        fallback_start_hole: Option<usize>,
+        fallback_end_hole: Option<usize>,
+    ) {
+        if band_index >= self.bands.len() {
+            return;
+        }
+        let band = &mut self.bands[band_index];
+        let hole_s = band.pin_start.or(fallback_start_hole);
+        let hole_e = band.pin_end.or(fallback_end_hole);
+        let (suck_target, suck_from_end) = if let Some(pin_start) = hole_s {
+            (pin_start, 1usize)
+        } else if let Some(pin_end) = hole_e {
+            (pin_end, 0usize)
         } else {
-            self.bands[drag.band_index].positions.len() - 1
+            (0usize, 1usize)
         };
-        let current_pos = self.bands[drag.band_index].positions[idx];
+        let tail_hole = if suck_from_end == 1 { hole_e } else { hole_s };
 
-        let hole_xy = self.hole_positions[drag.original_hole_index];
-        let above_hole = Vec3::new(hole_xy.x, hole_xy.y, self.lift_height);
+        band.suck_hole = Some(suck_target);
+        band.suck_tail_hole = tail_hole;
+        band.suck_from_end = suck_from_end;
+        band.suck_consumed = 0.0;
+        band.suck_frame = 0;
 
-        let dist = (current_pos - above_hole).length();
-        let return_duration = (dist * 0.4).clamp(0.1, 0.4);
-
-        self.lower_animation = Some(LowerAnimation {
-            band_index: drag.band_index,
-            end_index: drag.end_index,
-            target_hole: drag.original_hole_index,
-            start_pos: current_pos,
-            timer: 0.0,
-            return_pos: Some(above_hole),
-            return_duration,
-        });
-
-        self.drag_start_pos = None;
-        self.drag_target_pos = None;
+        let mut segs = Vec::with_capacity(band.positions.len().saturating_sub(1));
+        for k in 0..band.positions.len().saturating_sub(1) {
+            segs.push((band.positions[k + 1] - band.positions[k]).length());
+        }
+        band.suck_seg_lengths = segs;
+        band.suck_orig_positions = band.positions.clone();
+        band.fade_out = 0.001;
+        band.pin_start = None;
+        band.pin_end = None;
     }
 
     pub fn endpoint_z(&self, band_index: usize, end_index: usize) -> f32 {
@@ -1179,7 +1459,11 @@ impl VerletSimulator {
         self.current_tension = self.rope_tension;
 
         for config in rope_configs {
-            self.add_band(config.radius, config.cross_section, Some(self.particle_count));
+            self.add_band(
+                config.radius,
+                config.cross_section,
+                Some(self.particle_count),
+            );
         }
 
         if actions.is_empty() {
@@ -1241,19 +1525,23 @@ impl VerletSimulator {
         self.bands[band_index].segment_length = dist / (n - 1).max(1) as f32;
         self.bands[band_index].active = true;
 
-        let has_others = self.bands.iter().enumerate().any(|(idx, b)| {
-            idx != band_index && b.active && b.pin_start.is_some()
-        });
+        let has_others = self
+            .bands
+            .iter()
+            .enumerate()
+            .any(|(idx, b)| idx != band_index && b.active && b.pin_start.is_some());
         let steps = self.settle_steps;
         self.do_steps(steps, has_others);
     }
 
     fn simulate_drag(&mut self, band_index: usize, end_index: usize, to_hole: usize) {
-        let n = self.bands[band_index].positions.len();
-        let idx = if end_index == 0 { 0 } else { n - 1 };
+        let idx = if end_index == 0 {
+            0
+        } else {
+            self.bands[band_index].positions.len() - 1
+        };
         let from_pos = self.bands[band_index].positions[idx];
         let to_pos = self.hole_position_3d(to_hole);
-        let lift = self.lift_height;
 
         if end_index == 0 {
             self.bands[band_index].pin_start = None;
@@ -1261,8 +1549,11 @@ impl VerletSimulator {
             self.bands[band_index].pin_end = None;
         }
 
-        let lift_from = Vec3::new(from_pos.x, from_pos.y, lift);
-        let lift_to = Vec3::new(to_pos.x, to_pos.y, lift);
+        let from_elev = self.board_surface_z(from_pos.x, from_pos.y);
+        let to_elev = self.hole_surface_z(to_hole);
+        let max_elev = from_elev.max(to_elev);
+        let lift_from = Vec3::new(from_pos.x, from_pos.y, max_elev + self.lift_height);
+        let lift_to = Vec3::new(to_pos.x, to_pos.y, max_elev + self.lift_height);
 
         let drag_steps = 4;
 
@@ -1270,8 +1561,7 @@ impl VerletSimulator {
         for s in 1..=3 {
             let t = s as f32 / 3.0;
             self.bands[band_index].positions[idx] = from_pos + (lift_from - from_pos) * t;
-            self.bands[band_index].previous_positions[idx] =
-                self.bands[band_index].positions[idx];
+            self.bands[band_index].previous_positions[idx] = self.bands[band_index].positions[idx];
             self.do_steps(drag_steps, true);
         }
 
@@ -1280,8 +1570,7 @@ impl VerletSimulator {
         for s in 1..=traverse_steps {
             let t = s as f32 / traverse_steps as f32;
             self.bands[band_index].positions[idx] = lift_from + (lift_to - lift_from) * t;
-            self.bands[band_index].previous_positions[idx] =
-                self.bands[band_index].positions[idx];
+            self.bands[band_index].previous_positions[idx] = self.bands[band_index].positions[idx];
             self.do_steps(drag_steps, true);
         }
 
@@ -1289,8 +1578,7 @@ impl VerletSimulator {
         for s in 1..=3 {
             let t = s as f32 / 3.0;
             self.bands[band_index].positions[idx] = lift_to + (to_pos - lift_to) * t;
-            self.bands[band_index].previous_positions[idx] =
-                self.bands[band_index].positions[idx];
+            self.bands[band_index].previous_positions[idx] = self.bands[band_index].positions[idx];
             self.do_steps(drag_steps, true);
         }
 
@@ -1313,7 +1601,28 @@ impl VerletSimulator {
             return Vec3::ZERO;
         }
         let p = self.hole_positions[hole_index];
-        Vec3::new(p.x, p.y, -self.hole_depth)
+        let z = self.hole_elevations.get(hole_index).copied().unwrap_or(0.0) - self.hole_depth;
+        Vec3::new(p.x, p.y, z)
+    }
+
+    pub fn hole_surface_z(&self, hole_index: usize) -> f32 {
+        self.hole_elevations.get(hole_index).copied().unwrap_or(0.0)
+    }
+
+    pub fn board_surface_z(&self, x: f32, y: f32) -> f32 {
+        let mut max_z: f32 = 0.0;
+        for board in &self.boards {
+            let half_w = board.width * 0.5;
+            let half_h = board.height * 0.5;
+            if x >= board.center_x - half_w
+                && x <= board.center_x + half_w
+                && y >= board.center_y - half_h
+                && y <= board.center_y + half_h
+            {
+                max_z = max_z.max(board.elevation);
+            }
+        }
+        max_z
     }
 
     // --- Material frame computation ---
@@ -1383,11 +1692,7 @@ impl VerletSimulator {
             let d1 = u * cos_t + v * sin_t;
             let d2 = -u * sin_t + v * cos_t;
 
-            frames[i] = MaterialFrame {
-                tangent,
-                d1,
-                d2,
-            };
+            frames[i] = MaterialFrame { tangent, d1, d2 };
 
             t_prev = tangent;
             u_prev = u;
@@ -1412,9 +1717,12 @@ impl VerletSimulator {
                 continue;
             }
             if self.bands[bi].cross_section.is_rectangular() {
+                self.cached_frames[bi] =
+                    Self::compute_frames(&self.bands[bi].positions, &self.bands[bi].twist_angles);
+            } else if self.square_cross_section {
                 self.cached_frames[bi] = Self::compute_frames(
                     &self.bands[bi].positions,
-                    &self.bands[bi].twist_angles,
+                    &vec![0.0; self.bands[bi].positions.len()],
                 );
             } else {
                 self.cached_frames[bi] = Vec::new();

@@ -133,6 +133,7 @@ extension Renderer {
             dragWorld = holePositions[best.holeIndex]
             lastDragWorld = dragWorld
             holeOccupied[best.holeIndex] = false
+            Self.logger.info("[WIN-DIAG] beginDrag rope=\(best.ropeIndex) end=\(best.endIndex) originalHole=\(best.holeIndex) occupiedAfterFree=\(self.holeOccupied.enumerated().compactMap { idx, value in value ? String(idx) : nil }.joined(separator: ","))")
 
             dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: best.holeIndex)
 
@@ -168,6 +169,11 @@ extension Renderer {
             self.dragState = nil
             return
         }
+        guard let sim = simulator, sim.bands.indices.contains(dragState.ropeIndex) else {
+            self.dragState = nil
+            highlightHoleIndex = -1
+            return
+        }
 
         let snapRadius = holeRadius * 1.9
         var bestIndex: Int?
@@ -185,9 +191,22 @@ extension Renderer {
 
         let snappedHoleIndex = bestIndex ?? dragState.originalHoleIndex
 
-        // Physics: end drag (lower into hole + settle)
-        simulator?.endDrag(targetHoleIndex: snappedHoleIndex)
+        let band = sim.bands[dragState.ropeIndex]
+        guard band.active, band.fadeOut == 0 else {
+            Self.logger.warning("[WIN-DIAG] endDrag skipped writeback for fading/inactive rope=\(dragState.ropeIndex) end=\(dragState.endIndex) target=\(snappedHoleIndex) active=\(band.active) fade=\(String(format: "%.3f", band.fadeOut))")
+            levelFlow.scheduleSettleCheck()
+            self.dragState = nil
+            highlightHoleIndex = -1
+            return
+        }
+
+        sim.endDrag(targetHoleIndex: snappedHoleIndex)
         Haptics.medium()
+
+        if snappedHoleIndex != dragState.originalHoleIndex {
+            moveCount += 1
+            onMoveCountChanged?(moveCount)
+        }
 
         // Update rope endpoints
         if let _ = bestIndex {
@@ -204,6 +223,8 @@ extension Renderer {
                 holeOccupied[dragState.originalHoleIndex] = true
             }
         }
+
+        Self.logger.info("[WIN-DIAG] endDrag rope=\(dragState.ropeIndex) end=\(dragState.endIndex) target=\(snappedHoleIndex) original=\(dragState.originalHoleIndex) snapped=\(bestIndex != nil) occupiedAfterSet=\(self.holeOccupied.enumerated().compactMap { idx, value in value ? String(idx) : nil }.joined(separator: ","))")
 
         levelFlow.scheduleSettleCheck()
         self.dragState = nil

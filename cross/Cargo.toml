@@ -29,6 +29,8 @@ pollster = "0.4"
 env_logger = "0.11"
 dirs = "6"
 rodio = { version = "0.22.1", default-features = false, features = ["playback"] }
+arboard = "3"
+ureq = "3"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
 wasm-bindgen = "0.2"
@@ -38,7 +40,9 @@ web-sys = { version = "0.3", features = [
     "KeyboardEvent", "Storage",
     "AudioContext", "AudioContextState", "AudioBuffer", "AudioBufferSourceNode",
     "AudioDestinationNode", "GainNode", "GainOptions",
+    "Request", "RequestInit", "RequestMode", "Response", "Headers",
 ] }
+js-sys = "0.3"
 console_log = "1"
 console_error_panic_hook = "0.1"
 wasm-bindgen-futures = "0.4"

@@ -7,12 +7,32 @@ pub struct HolePos {
     pub x_position: f32,
     #[serde(rename = "y")]
     pub y_position: f32,
+    #[serde(default, rename = "z")]
+    pub z_position: f32,
 }
 
 impl HolePos {
     pub fn to_vec2(&self) -> Vec2 {
         Vec2::new(self.x_position, self.y_position)
     }
+
+    pub fn z(&self) -> f32 {
+        self.z_position
+    }
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct Board {
+    #[serde(rename = "cx")]
+    pub center_x: f32,
+    #[serde(rename = "cy")]
+    pub center_y: f32,
+    #[serde(rename = "w")]
+    pub width: f32,
+    #[serde(rename = "h")]
+    pub height: f32,
+    #[serde(default, rename = "z")]
+    pub elevation: f32,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize, Serialize)]
@@ -45,9 +65,14 @@ impl CrossSectionDef {
             "rectangular" => {
                 let w = self.width.unwrap_or(fallback_radius * 2.0);
                 let h = self.height.unwrap_or(fallback_radius * 0.7);
-                CrossSection::Rectangular { width: w, height: h }
+                CrossSection::Rectangular {
+                    width: w,
+                    height: h,
+                }
             }
-            _ => CrossSection::Circular { radius: fallback_radius },
+            _ => CrossSection::Circular {
+                radius: fallback_radius,
+            },
         }
     }
 }
@@ -69,7 +94,9 @@ impl Rope {
         self.cross_section_def
             .as_ref()
             .map(|def| def.to_cross_section(self.radius))
-            .unwrap_or(CrossSection::Circular { radius: self.radius })
+            .unwrap_or(CrossSection::Circular {
+                radius: self.radius,
+            })
     }
 }
 
@@ -117,11 +144,16 @@ pub struct LevelDefinition {
     pub ropes: Vec<Rope>,
     pub hooks: Option<Vec<Hook>>,
     pub actions: Option<Vec<Action>>,
+    pub boards: Option<Vec<Board>>,
 }
 
 impl LevelDefinition {
     pub fn hole_positions(&self) -> Vec<Vec2> {
         self.holes.iter().map(|h| h.to_vec2()).collect()
+    }
+
+    pub fn hole_elevations(&self) -> Vec<f32> {
+        self.holes.iter().map(|h| h.z()).collect()
     }
 }
 

@@ -39,7 +39,7 @@ extension Renderer {
             let band = sim.bands[ropeIndex]
 
             let frames: [MaterialFrame]?
-            if (cs.isRectangular || squareCrossSection) && sim.cachedFrames.indices.contains(ropeIndex) && !sim.cachedFrames[ropeIndex].isEmpty {
+            if cs.isRectangular && sim.cachedFrames.indices.contains(ropeIndex) && !sim.cachedFrames[ropeIndex].isEmpty {
                 frames = sim.cachedFrames[ropeIndex]
             } else {
                 frames = nil
@@ -64,11 +64,11 @@ extension Renderer {
                         clippedFrames = Array(f[lo...hi])
                     }
 
-                    let holeXY = holePositions[suckHole]
                     let sinkZ: Float = -ropeRadius * 2.5
 
                     if lo > 0 {
-                        let entryPt = SIMD3<Float>(holeXY.x, holeXY.y, sinkZ)
+                        let suckXY = holePositions[suckHole]
+                        let entryPt = SIMD3<Float>(suckXY.x, suckXY.y, sinkZ)
                         clipped.insert(entryPt, at: 0)
                         if var cf = clippedFrames, !cf.isEmpty {
                             cf.insert(cf[0], at: 0)
@@ -76,7 +76,9 @@ extension Renderer {
                         }
                     }
                     if hi < n - 1 {
-                        let entryPt = SIMD3<Float>(holeXY.x, holeXY.y, sinkZ)
+                        let tailHoleIdx = band.suckTailHole ?? suckHole
+                        let tailXY = holePositions[tailHoleIdx]
+                        let entryPt = SIMD3<Float>(tailXY.x, tailXY.y, sinkZ)
                         clipped.append(entryPt)
                         if var cf = clippedFrames, !cf.isEmpty {
                             cf.append(cf[cf.count - 1])
@@ -141,7 +143,22 @@ extension Renderer {
                 )
             }
 
-            allVertices.append(contentsOf: ropeMesh.vertices)
+            if fadeOut > 0 && band.suckHole != nil {
+                let suckEnd = band.suckFromEnd
+                let pulse = 0.85 + 0.15 * sin(time * 14.0)
+                let fadeEdge = min(fadeOut * 1.8, 0.95)
+                var modifiedVerts = ropeMesh.vertices
+                for vi in modifiedVerts.indices {
+                    let u = modifiedVerts[vi].texCoord.x
+                    let suckU = suckEnd == 1 ? u : (1.0 - u)
+                    let nearHole = max(0, fadeEdge - suckU) / max(fadeEdge, 1e-6)
+                    let brightness = 1.0 - nearHole * 0.4 + nearHole * (pulse - 0.85) * 3.0
+                    modifiedVerts[vi].color *= brightness
+                }
+                allVertices.append(contentsOf: modifiedVerts)
+            } else {
+                allVertices.append(contentsOf: ropeMesh.vertices)
+            }
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
 
@@ -154,6 +171,21 @@ extension Renderer {
                     func swivelFrame(at idx: Int) -> (d1: SIMD3<Float>, d2: SIMD3<Float>) {
                         if let fr = visibleFrames, fr.count > idx {
                             return (fr[idx].d1, fr[idx].d2)
+                        }
+                        let tan: SIMD3<Float>
+                        if idx == 0 && visiblePoints.count >= 2 {
+                            tan = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                        } else if idx == visiblePoints.count - 1 && visiblePoints.count >= 2 {
+                            tan = simd_normalize(visiblePoints[idx] - visiblePoints[idx - 1])
+                        } else {
+                            tan = SIMD3<Float>(1, 0, 0)
+                        }
+                        let up = SIMD3<Float>(0, 0, 1)
+                        let upProj = up - tan * simd_dot(up, tan)
+                        if simd_length_squared(upProj) > 1e-6 {
+                            let b = simd_normalize(upProj)
+                            let n = simd_normalize(simd_cross(b, tan))
+                            return (n, b)
                         }
                         return (SIMD3<Float>(1, 0, 0), SIMD3<Float>(0, 1, 0))
                     }

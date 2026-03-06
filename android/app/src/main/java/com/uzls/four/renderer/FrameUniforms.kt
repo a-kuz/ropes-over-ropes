@@ -5,16 +5,12 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
 /**
- * UBO layout matching Metal's FrameUniforms (24 vec4 = 384 bytes in std140)
- * mat4 takes 4 vec4 = 64 bytes each, so 3 mat4 = 192 bytes + 21 vec4 = 384 + padding
- * Total std140 size: 3 * 64 + 21 * 16 = 192 + 336 = 528 bytes
- * But std140 mat4 is already 4 * 16 = 64, and vec4 is 16.
- * 3 mat4 (192) + 21 vec4 (336) = 528 bytes
+ * UBO layout matching Metal's FrameUniforms
+ * 3 mat4 (192) + 22 vec4 (352) = 544 bytes
  */
 class FrameUniforms {
-    // 3 mat4 (3*16 floats = 48) + 21 vec4 (21*4 floats = 84) = 132 floats = 528 bytes
-    private val floatCount = 3 * 16 + 21 * 4 // 132
-    private val byteSize = floatCount * 4 // 528
+    private val floatCount = 3 * 16 + 23 * 4 // 140
+    private val byteSize = floatCount * 4 // 560
     private val buffer: ByteBuffer = ByteBuffer.allocateDirect(byteSize).order(ByteOrder.nativeOrder())
     private val floatBuffer = buffer.asFloatBuffer()
 
@@ -54,7 +50,8 @@ class FrameUniforms {
         wormParams1: FloatArray,       // vec4 [116]
         wormParams2: FloatArray,       // vec4 [120]
         wormParams3: FloatArray,       // vec4 [124]
-        wormParams4: FloatArray        // vec4 [128]
+        wormParams4: FloatArray,        // vec4 [128]
+        ropeMatParams4: FloatArray     // vec4 [132]
     ) {
         floatBuffer.position(0)
         floatBuffer.put(viewProj, 0, 16)
@@ -81,6 +78,7 @@ class FrameUniforms {
         floatBuffer.put(wormParams2, 0, 4)
         floatBuffer.put(wormParams3, 0, 4)
         floatBuffer.put(wormParams4, 0, 4)
+        floatBuffer.put(ropeMatParams4, 0, 4)
 
         buffer.position(0)
         GLES30.glBindBuffer(GLES30.GL_UNIFORM_BUFFER, uboId)

@@ -26,6 +26,7 @@ layout(std140) uniform FrameBlock {
     vec4 uWormParams2;
     vec4 uWormParams3;
     vec4 uWormParams4;
+    vec4 uRopeMatParams4;
 };
 
 // Per-vertex attributes

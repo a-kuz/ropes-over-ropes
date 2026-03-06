@@ -85,10 +85,16 @@ extension VerletSimulator {
                 cachedFrames[bi] = []
                 continue
             }
-            if bands[bi].crossSection.isRectangular || squareCrossSection {
+            if bands[bi].crossSection.isRectangular {
                 cachedFrames[bi] = Self.computeFrames(
                     positions: bands[bi].positions,
                     twistAngles: bands[bi].twistAngles
+                )
+            } else if squareCrossSection {
+                let zeroTwist = ContiguousArray<Float>(repeating: 0, count: bands[bi].positions.count)
+                cachedFrames[bi] = Self.computeFrames(
+                    positions: bands[bi].positions,
+                    twistAngles: zeroTwist
                 )
             } else {
                 cachedFrames[bi] = []

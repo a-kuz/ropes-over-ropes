@@ -43,6 +43,10 @@ extension Renderer {
 
         encodeShadowPass(commandBuffer: commandBuffer)
         encodeHDRPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth)
+        if ropeEnvReflect > 0.001, let envTex {
+            encodeEnvBlit(commandBuffer: commandBuffer, src: hdrTex, dst: envTex)
+            encodeRopeReflectionPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth, envTexture: envTex)
+        }
         encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
         encodeCompositePass(commandBuffer: commandBuffer, view: view, hdrTexture: hdrTex, bloomTextureA: bloomA, depthTexture: sceneDepth)
 
@@ -228,6 +232,15 @@ extension Renderer {
         hdrDesc.usage = [.renderTarget, .shaderRead, .shaderWrite]
         hdrTex = device.makeTexture(descriptor: hdrDesc)
 
+        let envDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .rgba16Float,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        envDesc.usage = [.shaderRead, .shaderWrite]
+        envTex = device.makeTexture(descriptor: envDesc)
+
         let sceneDepthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float_stencil8,
             width: width,
@@ -297,7 +310,8 @@ extension Renderer {
             wormParams1: SIMD4<Float>(wormGrooveDepth, wormBellyBright, wormBackDark, wormSkinNoise),
             wormParams2: SIMD4<Float>(wormSSS, wormRoughness, wormSpecular, wormRimStrength),
             wormParams3: SIMD4<Float>(wormEyeSize, wormPulseSpeed, wormPulseAmp, wormSegFreq),
-            wormParams4: SIMD4<Float>(wormCrawlSpeed, wormCrawlAmp, wormSideAmp, 0)
+            wormParams4: SIMD4<Float>(wormCrawlSpeed, wormCrawlAmp, wormSideAmp, 0),
+            ropeMatParams4: SIMD4<Float>(ropeEnvReflect, ropeEnvDebug ? 1 : 0, ropeEnvSpread, Float(shadowDebugMode))
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
 
@@ -306,6 +320,51 @@ extension Renderer {
         let effBloom = useCartoon ? cartoonBloom : bloomStrength
         let postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: cartoonEdgeSmooth)
         postParamsBuffer?.contents().copyMemory(from: [postParams], byteCount: MemoryLayout<PostParams>.stride)
+    }
+
+    private func encodeEnvBlit(commandBuffer: MTLCommandBuffer, src: MTLTexture, dst: MTLTexture) {
+        guard let blitEncoder = commandBuffer.makeBlitCommandEncoder() else { return }
+        let w = min(src.width, dst.width)
+        let h = min(src.height, dst.height)
+        blitEncoder.copy(
+            from: src, sourceSlice: 0, sourceLevel: 0,
+            sourceOrigin: MTLOrigin(x: 0, y: 0, z: 0), sourceSize: MTLSize(width: w, height: h, depth: 1),
+            to: dst, destinationSlice: 0, destinationLevel: 0,
+            destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+        blitEncoder.endEncoding()
+    }
+
+    private func encodeRopeReflectionPass(commandBuffer: MTLCommandBuffer, hdrTexture: MTLTexture, depthTexture: MTLTexture, envTexture: MTLTexture) {
+        let renderPass = MTLRenderPassDescriptor()
+        renderPass.colorAttachments[0].texture = hdrTexture
+        renderPass.colorAttachments[0].loadAction = .load
+        renderPass.colorAttachments[0].storeAction = .store
+        renderPass.depthAttachment.texture = depthTexture
+        renderPass.depthAttachment.loadAction = .load
+        renderPass.depthAttachment.storeAction = .store
+        renderPass.stencilAttachment.texture = depthTexture
+        renderPass.stencilAttachment.loadAction = .load
+        renderPass.stencilAttachment.storeAction = .dontCare
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
+        encoder.setRenderPipelineState(ropePipeline)
+        encoder.setDepthStencilState(depthStateScene)
+        if let ropeVB, let ropeIB, ropeIndexCount > 0 {
+            encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            if let noiseTexture {
+                encoder.setFragmentTexture(noiseTexture, index: 3)
+            }
+            encoder.setFragmentTexture(envTexture, index: 4)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
+        }
+        encoder.endEncoding()
     }
 
     private func makeLightViewProj(lightDir: SIMD3<Float>, halfW: Float, halfH: Float) -> simd_float4x4 {

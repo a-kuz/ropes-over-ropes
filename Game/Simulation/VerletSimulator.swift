@@ -68,8 +68,12 @@ final class VerletSimulator {
         var active: Bool
         var fadeOut: Float = 0
         var suckHole: Int?
+        var suckTailHole: Int?
         var suckFromEnd: Int = 1
         var suckConsumed: Float = 0
+        var suckFrame: Int = 0
+        var suckSegLengths: ContiguousArray<Float> = []
+        var suckOrigPositions: ContiguousArray<SIMD3<Float>> = []
         static let fadeOutSpeed: Float = 45.0
     }
 
@@ -171,8 +175,11 @@ final class VerletSimulator {
         var active: Bool
         var fadeOut: Float
         var suckHole: Int?
+        var suckTailHole: Int?
         var suckFromEnd: Int
         var suckConsumed: Float
+        var suckSegLengths: ContiguousArray<Float>
+        var suckOrigPositions: ContiguousArray<SIMD3<Float>>
     }
 
     struct Snapshot {
@@ -193,7 +200,16 @@ final class VerletSimulator {
         static let duration: Float = 0.55
     }
 
-    var lowerAnimation: LowerAnimation?
+    struct LowerAnimationKey: Hashable {
+        let bandIndex: Int
+        let endIndex: Int
+    }
+
+    var lowerAnimations: [LowerAnimationKey: LowerAnimation] = [:]
+
+    var hasLowerAnimations: Bool {
+        !lowerAnimations.isEmpty
+    }
 
     // MARK: - Init
 
@@ -271,7 +287,7 @@ final class VerletSimulator {
     func update(deltaTime: Float) {
         let clampedDt = min(deltaTime, 1.0 / 15.0)  // spiral-of-death protection
 
-        if dragInfo != nil || lowerAnimation != nil {
+        if dragInfo != nil || hasLowerAnimations {
             idleTimer = 0
             isSleeping = false
         } else {
@@ -298,7 +314,7 @@ final class VerletSimulator {
             }
         }
 
-        // Advance suck-into-hole animations: pull rope through hole like a string being pulled under a table
+        // Advance suck-into-hole animations: slide rope along its arc-length curve into the hole
         for i in bands.indices where bands[i].fadeOut > 0 && bands[i].active {
             guard let hole = bands[i].suckHole else { continue }
             let n = bands[i].positions.count
@@ -310,52 +326,72 @@ final class VerletSimulator {
             bands[i].suckConsumed += pullSpeed * clampedDt
 
             let fromEnd = bands[i].suckFromEnd
-            let headIdx = fromEnd == 1 ? 0 : n - 1
-            let step = fromEnd == 1 ? 1 : -1
-
-            bands[i].positions[headIdx] = holeBelow - SIMD3<Float>(0, 0, bands[i].suckConsumed)
-            bands[i].previousPositions[headIdx] = bands[i].positions[headIdx]
-
-            let segLen = bands[i].segmentLength
+            let suckSegs = bands[i].suckSegLengths
             let R = bands[i].radius
-            let holeR2 = holeRadius * holeRadius
-            var allBelow = true
 
-            var prevIdx = headIdx
-            var j = headIdx + step
-            while j >= 0 && j < n {
-                let prev = bands[i].positions[prevIdx]
-                let curr = bands[i].positions[j]
-                let diff = curr - prev
-                let d = simd_length(diff)
-                if d > segLen && d > 1e-6 {
-                    bands[i].positions[j] = prev + (diff / d) * segLen
+            let origPositions = bands[i].suckOrigPositions
+
+            var arcLen = ContiguousArray<Float>(repeating: 0, count: n)
+            if fromEnd == 1 {
+                for k in 1..<n {
+                    arcLen[k] = arcLen[k - 1] + (k - 1 < suckSegs.count ? suckSegs[k - 1] : bands[i].segmentLength)
                 }
-
-                let p = bands[i].positions[j]
-                let dx = p.x - holeXY.x
-                let dy = p.y - holeXY.y
-                let xyDist2 = dx * dx + dy * dy
-
-                if p.z < holeElev && xyDist2 > holeR2 {
-                    let xyDist = sqrt(xyDist2)
-                    bands[i].positions[j].x = holeXY.x + (dx / xyDist) * holeRadius * 0.9
-                    bands[i].positions[j].y = holeXY.y + (dy / xyDist) * holeRadius * 0.9
-                    bands[i].positions[j].z = holeElev
+            } else {
+                for k in stride(from: n - 2, through: 0, by: -1) {
+                    arcLen[k] = arcLen[k + 1] + (k < suckSegs.count ? suckSegs[k] : bands[i].segmentLength)
                 }
-
-                let surfZ = boardSurfaceZ(x: bands[i].positions[j].x, y: bands[i].positions[j].y)
-                if bands[i].positions[j].z >= surfZ && bands[i].positions[j].z < surfZ + R {
-                    bands[i].positions[j].z = surfZ + R
-                }
-
-                if bands[i].positions[j].z >= surfZ { allBelow = false }
-                bands[i].previousPositions[j] = bands[i].positions[j]
-                prevIdx = j
-                j += step
             }
 
-            if allBelow {
+            let totalArc = fromEnd == 1 ? arcLen[n - 1] : arcLen[0]
+            let consumed = bands[i].suckConsumed
+
+            for k in 0..<n {
+                let myArc = arcLen[k]
+                let shifted = myArc - consumed
+
+                if shifted <= 0 {
+                    bands[i].positions[k] = holeBelow - SIMD3<Float>(0, 0, -shifted)
+                } else {
+                    if fromEnd == 1 {
+                        var seg = 0
+                        var acc: Float = 0
+                        while seg < n - 1 {
+                            let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
+                            if acc + segL >= shifted { break }
+                            acc += segL
+                            seg += 1
+                        }
+                        let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
+                        let t = segL > 1e-9 ? (shifted - acc) / segL : 0
+                        let p0 = origPositions[seg]
+                        let p1 = seg + 1 < n ? origPositions[seg + 1] : p0
+                        bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
+                    } else {
+                        var seg = n - 1
+                        var acc: Float = 0
+                        while seg > 0 {
+                            let segL = (seg - 1) < suckSegs.count ? suckSegs[seg - 1] : bands[i].segmentLength
+                            if acc + segL >= shifted { break }
+                            acc += segL
+                            seg -= 1
+                        }
+                        let segL = (seg - 1 >= 0 && seg - 1 < suckSegs.count) ? suckSegs[seg - 1] : bands[i].segmentLength
+                        let t = segL > 1e-9 ? (shifted - acc) / segL : 0
+                        let p0 = origPositions[seg]
+                        let p1 = seg - 1 >= 0 ? origPositions[seg - 1] : p0
+                        bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
+                    }
+
+                    let surfZ = boardSurfaceZ(x: bands[i].positions[k].x, y: bands[i].positions[k].y)
+                    if bands[i].positions[k].z >= surfZ && bands[i].positions[k].z < surfZ + R {
+                        bands[i].positions[k].z = surfZ + R
+                    }
+                }
+                bands[i].previousPositions[k] = bands[i].positions[k]
+            }
+
+            if consumed >= totalArc {
+                Self.logger.warning("[WIN-DIAG] fadeOutComplete band=\(i) pinStart=\(self.bands[i].pinStart.map(String.init) ?? "nil") pinEnd=\(self.bands[i].pinEnd.map(String.init) ?? "nil") suckHole=\(self.bands[i].suckHole.map(String.init) ?? "nil") activeBefore=\(self.bands[i].active)")
                 bands[i].fadeOut = 1
                 bands[i].active = false
                 bands[i].pinStart = nil
@@ -427,48 +463,53 @@ final class VerletSimulator {
     }
 
     private func updateLowerAnimation(deltaTime: Float) {
-        guard var anim = lowerAnimation else { return }
-        anim.timer += deltaTime
+        guard !lowerAnimations.isEmpty else { return }
 
-        let bi = anim.bandIndex
-        let idx = anim.endIndex == 0 ? 0 : bands[bi].positions.count - 1
+        for key in Array(lowerAnimations.keys) {
+            guard var anim = lowerAnimations[key] else { continue }
+            anim.timer += deltaTime
 
-        if let returnTarget = anim.returnPos {
-            let t = min(anim.timer / anim.returnDuration, 1.0)
+            let bi = anim.bandIndex
+            let idx = anim.endIndex == 0 ? 0 : bands[bi].positions.count - 1
+
+            if let returnTarget = anim.returnPos {
+                let t = min(anim.timer / anim.returnDuration, 1.0)
+                let eased = 1.0 - (1.0 - t) * (1.0 - t)
+                let pos = anim.startPos + (returnTarget - anim.startPos) * eased
+                bands[bi].positions[idx] = pos
+                bands[bi].previousPositions[idx] = pos
+
+                if t >= 1.0 {
+                    anim.startPos = returnTarget
+                    anim.returnPos = nil
+                    anim.timer = 0
+                }
+
+                lowerAnimations[key] = anim
+                continue
+            }
+
+            let holePos = holePosition3D(anim.targetHole)
+            let t = min(anim.timer / LowerAnimation.duration, 1.0)
             let eased = 1.0 - (1.0 - t) * (1.0 - t)
-            let pos = anim.startPos + (returnTarget - anim.startPos) * eased
+            let pos = anim.startPos + (holePos - anim.startPos) * eased
             bands[bi].positions[idx] = pos
             bands[bi].previousPositions[idx] = pos
 
             if t >= 1.0 {
-                anim.startPos = returnTarget
-                anim.returnPos = nil
-                anim.timer = 0
+                if anim.endIndex == 0 {
+                    bands[bi].pinStart = anim.targetHole
+                } else {
+                    bands[bi].pinEnd = anim.targetHole
+                }
+                bands[bi].positions[idx] = holePos
+                bands[bi].previousPositions[idx] = holePos
+                lowerAnimations.removeValue(forKey: key)
+                continue
             }
-            lowerAnimation = anim
-            return
+
+            lowerAnimations[key] = anim
         }
-
-        let holePos = holePosition3D(anim.targetHole)
-        let t = min(anim.timer / LowerAnimation.duration, 1.0)
-        let eased = 1.0 - (1.0 - t) * (1.0 - t)
-        let pos = anim.startPos + (holePos - anim.startPos) * eased
-        bands[bi].positions[idx] = pos
-        bands[bi].previousPositions[idx] = pos
-
-        if t >= 1.0 {
-            if anim.endIndex == 0 {
-                bands[bi].pinStart = anim.targetHole
-            } else {
-                bands[bi].pinEnd = anim.targetHole
-            }
-            bands[bi].positions[idx] = holePos
-            bands[bi].previousPositions[idx] = holePos
-            lowerAnimation = nil
-            return
-        }
-
-        lowerAnimation = anim
     }
 
     /// Log min distances between band pairs and crossing Z info
@@ -577,7 +618,7 @@ final class VerletSimulator {
                 bands[bi].positions[i] = pos + vel + gravVec
             }
 
-            if bands[bi].crossSection.isRectangular || squareCrossSection {
+            if bands[bi].crossSection.isRectangular {
                 let maxTwistVel: Float = 0.08
                 for i in 1..<(n - 1) {
                     let twist = bands[bi].twistAngles[i]
@@ -607,7 +648,7 @@ final class VerletSimulator {
         // d1.z measures how much the wide axis is tilted out of horizontal.
         // Restoring torque proportional to d1.z drives it toward zero.
         for bi in bands.indices {
-            guard bands[bi].active && bands[bi].fadeOut == 0 && (bands[bi].crossSection.isRectangular || squareCrossSection) else { continue }
+            guard bands[bi].active && bands[bi].fadeOut == 0 && bands[bi].crossSection.isRectangular else { continue }
             let n = bands[bi].positions.count
             guard cachedFrames[bi].count == n else { continue }
             for i in 1..<(n - 1) {
@@ -864,7 +905,7 @@ final class VerletSimulator {
         }
         bands[bi].previousPositions = prev
 
-        if isRect || squareCrossSection {
+        if isRect {
             let stiffness = twistStiffness
             for i in 0..<(n - 1) {
                 let diff = bands[bi].twistAngles[i + 1] - bands[bi].twistAngles[i]

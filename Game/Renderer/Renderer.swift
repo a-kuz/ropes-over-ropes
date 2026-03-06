@@ -133,6 +133,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     var ropeLiftGlow: Float = 0.97152864933013916
     var ropeStretchGloss: Float = 0.7
     var ropeStretchSpec: Float = 1.0
+    var ropeEnvReflect: Float = 0.15
+    var ropeEnvSpread: Float = 0.15
+    var ropeEnvDebug: Bool = false
+    var shadowDebugMode: Int = 0
     struct RopeEndpoints {
         var startHole: Int
         var endHole: Int
@@ -163,6 +167,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var ropeIndexCount: Int = 0
 
     var hdrTex: MTLTexture?
+    var envTex: MTLTexture?
     var sceneDepthTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
@@ -194,7 +199,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var lastMeshStats: MeshStats?
 
     var currentLevelId: Int = 1
+    var moveCount: Int = 0
     var onLevelComplete: (() -> Void)?
+    var onMoveCountChanged: ((Int) -> Void)?
     var onUndoStackChanged: ((Bool) -> Void)?
     var onZoomChanged: ((Float) -> Void)?
 
@@ -204,6 +211,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         var simulatorSnapshot: VerletSimulator.Snapshot
         var ropeEndpoints: [RopeEndpoints]
         var holeOccupied: [Bool]
+        var moveCount: Int
     }
 
     private var undoStore = RendererUndoStore<UndoEntry>()
@@ -216,7 +224,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         let entry = UndoEntry(
             simulatorSnapshot: sim.takeSnapshot(),
             ropeEndpoints: ropes,
-            holeOccupied: holeOccupied
+            holeOccupied: holeOccupied,
+            moveCount: moveCount
         )
         undoStore.push(entry)
         onUndoStackChanged?(true)
@@ -230,6 +239,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.restoreSnapshot(entry.simulatorSnapshot)
         ropes = entry.ropeEndpoints
         holeOccupied = entry.holeOccupied
+        moveCount = entry.moveCount
+        onMoveCountChanged?(moveCount)
         onUndoStackChanged?(undoStore.canUndo)
     }
     
@@ -305,6 +316,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         simulator = nil
         undoStore.clear()
         levelFlow.clearAll()
+        moveCount = 0
+        onMoveCountChanged?(0)
         onUndoStackChanged?(false)
         
         var t0 = CACurrentMediaTime()

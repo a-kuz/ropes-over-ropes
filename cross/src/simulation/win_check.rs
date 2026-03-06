@@ -1,5 +1,5 @@
-use glam::Vec2;
 use super::verlet::VerletSimulator;
+use glam::Vec2;
 
 impl VerletSimulator {
     pub fn find_untangled_ropes(&self) -> Vec<usize> {
@@ -18,7 +18,7 @@ impl VerletSimulator {
         untangled
     }
 
-    fn is_rope_untangled(&self, rope_index: usize) -> bool {
+    pub fn is_rope_untangled(&self, rope_index: usize) -> bool {
         let band_a = &self.bands[rope_index];
         let n_a = band_a.positions.len();
         let skip = 3usize;
@@ -34,9 +34,17 @@ impl VerletSimulator {
             let n_b = band_b.positions.len();
 
             let start_a = skip;
-            let end_a = if n_a > 1 + skip { n_a - 1 - skip } else { start_a };
+            let end_a = if n_a > 1 + skip {
+                n_a - 1 - skip
+            } else {
+                start_a
+            };
             let start_b = skip;
-            let end_b = if n_b > 1 + skip { n_b - 1 - skip } else { start_b };
+            let end_b = if n_b > 1 + skip {
+                n_b - 1 - skip
+            } else {
+                start_b
+            };
 
             for i in start_a..end_a {
                 let a0 = Vec2::new(band_a.positions[i].x, band_a.positions[i].y);

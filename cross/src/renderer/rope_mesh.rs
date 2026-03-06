@@ -1,6 +1,6 @@
-use glam::{Vec2, Vec3, Vec4};
-use crate::level::definition::{CrossSection, MaterialFrame};
 use super::frame_types::RopeVertex;
+use crate::level::definition::{CrossSection, MaterialFrame};
+use glam::{Vec2, Vec3, Vec4};
 
 fn rv(position: Vec3, normal: Vec3, color: Vec3, tex_coord: Vec2, params: Vec4) -> RopeVertex {
     RopeVertex {
@@ -77,7 +77,11 @@ fn circular_profile(radius: f32, segments: usize) -> Profile2D {
         normals.push(Vec2::new(ca, sa).normalize());
         v.push(i as f32 / seg as f32);
     }
-    Profile2D { positions, normals, v }
+    Profile2D {
+        positions,
+        normals,
+        v,
+    }
 }
 
 fn rectangular_profile(width: f32, height: f32) -> Profile2D {
@@ -87,10 +91,26 @@ fn rectangular_profile(width: f32, height: f32) -> Profile2D {
     let corner_segs: usize = 3;
 
     let corners: [(Vec2, f32, f32); 4] = [
-        (Vec2::new(hw - corner_r, hh - corner_r), 0.0, std::f32::consts::FRAC_PI_2),
-        (Vec2::new(-hw + corner_r, hh - corner_r), std::f32::consts::FRAC_PI_2, std::f32::consts::PI),
-        (Vec2::new(-hw + corner_r, -hh + corner_r), std::f32::consts::PI, std::f32::consts::PI * 1.5),
-        (Vec2::new(hw - corner_r, -hh + corner_r), std::f32::consts::PI * 1.5, std::f32::consts::TAU),
+        (
+            Vec2::new(hw - corner_r, hh - corner_r),
+            0.0,
+            std::f32::consts::FRAC_PI_2,
+        ),
+        (
+            Vec2::new(-hw + corner_r, hh - corner_r),
+            std::f32::consts::FRAC_PI_2,
+            std::f32::consts::PI,
+        ),
+        (
+            Vec2::new(-hw + corner_r, -hh + corner_r),
+            std::f32::consts::PI,
+            std::f32::consts::PI * 1.5,
+        ),
+        (
+            Vec2::new(hw - corner_r, -hh + corner_r),
+            std::f32::consts::PI * 1.5,
+            std::f32::consts::TAU,
+        ),
     ];
 
     let total_verts = corners.len() * (corner_segs + 1);
@@ -112,28 +132,36 @@ fn rectangular_profile(width: f32, height: f32) -> Profile2D {
         }
     }
 
-    Profile2D { positions, normals, v }
+    Profile2D {
+        positions,
+        normals,
+        v,
+    }
 }
 
 fn square_profile(width: f32, height: f32) -> Profile2D {
     let hw = (width * 0.5).max(0.0005);
     let hh = (height * 0.5).max(0.0005);
 
-    let right  = Vec2::new( 1.0,  0.0);
-    let top    = Vec2::new( 0.0,  1.0);
-    let left   = Vec2::new(-1.0,  0.0);
-    let bottom = Vec2::new( 0.0, -1.0);
+    let right = Vec2::new(1.0, 0.0);
+    let top = Vec2::new(0.0, 1.0);
+    let left = Vec2::new(-1.0, 0.0);
+    let bottom = Vec2::new(0.0, -1.0);
 
-    let tr = Vec2::new( hw,  hh);
-    let tl = Vec2::new(-hw,  hh);
+    let tr = Vec2::new(hw, hh);
+    let tl = Vec2::new(-hw, hh);
     let bl = Vec2::new(-hw, -hh);
-    let br = Vec2::new( hw, -hh);
+    let br = Vec2::new(hw, -hh);
 
     let positions = vec![tr, tl, tl, bl, bl, br, br, tr];
     let normals = vec![top, top, left, left, bottom, bottom, right, right];
     let v = (0..8).map(|i| i as f32 / 8.0).collect();
 
-    Profile2D { positions, normals, v }
+    Profile2D {
+        positions,
+        normals,
+        v,
+    }
 }
 
 fn segment_index(point_index: usize, segment_starts: &[usize]) -> usize {
@@ -171,10 +199,14 @@ pub fn build_rect(
     force_square: bool,
     rope_contact_points: &[Vec2],
     rope_contact_radius: f32,
+    stretch_thinning: f32,
 ) -> RopeMesh {
     let point_count = points.len();
     if point_count < 2 {
-        return RopeMesh { vertices: Vec::new(), indices: Vec::new() };
+        return RopeMesh {
+            vertices: Vec::new(),
+            indices: Vec::new(),
+        };
     }
 
     let use_physics_frames = (cross_section.is_rectangular() || force_square)
@@ -192,12 +224,8 @@ pub fn build_rect(
         }
     };
     let profile_count = profile.positions.len();
-    let faceted_profile = !cross_section.is_rectangular() && profile_segments <= 4;
-    let ring_vert_count = if faceted_profile {
-        profile_count * 2
-    } else {
-        profile_count
-    };
+    let faceted_profile = false;
+    let ring_vert_count = profile_count;
 
     let mut total_len: f32 = 0.0;
     for i in 1..point_count {
@@ -205,7 +233,11 @@ pub fn build_rect(
     }
     total_len = total_len.max(1e-6);
 
-    let effective_rest_length = if rest_length > 0.0 { rest_length } else { total_len };
+    let effective_rest_length = if rest_length > 0.0 {
+        rest_length
+    } else {
+        total_len
+    };
     let global_stretch_factor = total_len / effective_rest_length.max(1e-6);
 
     let mut vertices = Vec::with_capacity(point_count * ring_vert_count);
@@ -215,14 +247,6 @@ pub fn build_rect(
     let up = Vec3::Z;
 
     let mut distance_along: f32 = 0.0;
-    let mut t_prev = (points[1] - points[0]).normalize();
-    let mut nrm_prev = {
-        let mut nrm = up.cross(t_prev);
-        if nrm.length_squared() < 1e-8 {
-            nrm = Vec3::X;
-        }
-        nrm.normalize()
-    };
 
     for point_index in 0..point_count {
         let mut position = points[point_index];
@@ -237,57 +261,37 @@ pub fn build_rect(
             (points[point_index + 1] - points[point_index - 1]).normalize()
         };
 
-        let nrm: Vec3;
-        let bin: Vec3;
+        let mut nrm: Vec3;
+        let mut bin: Vec3;
 
         if use_physics_frames {
             let frame = &material_frames.unwrap()[point_index];
             nrm = frame.d1;
             bin = frame.d2;
         } else {
-            let mut n = nrm_prev;
-            if point_index > 0 {
-                let axis = t_prev.cross(tangent_world);
-                let axis_len = axis.length();
-                if axis_len > 1e-6 {
-                    let axis_n = axis / axis_len;
-                    let dot_clamped = t_prev.dot(tangent_world).clamp(-1.0, 1.0);
-                    let angle = axis_len.atan2(dot_clamped);
-                    n = rotate(nrm_prev, axis_n, angle);
-                    let proj = n - tangent_world * n.dot(tangent_world);
-                    if proj.length_squared() > 1e-10 {
-                        n = proj.normalize();
-                    }
+            let up_proj = up - tangent_world * up.dot(tangent_world);
+            let up_proj_len2 = up_proj.length_squared();
+            if up_proj_len2 > 1e-6 {
+                bin = up_proj.normalize();
+                nrm = bin.cross(tangent_world).normalize();
+            } else {
+                nrm = up.cross(tangent_world).normalize();
+                if nrm.length_squared() < 1e-8 {
+                    nrm = Vec3::X;
                 }
+                bin = tangent_world.cross(nrm).normalize();
             }
-
-            let mut b = tangent_world.cross(n);
-            if b.length_squared() < 1e-8 {
-                let mut fallback = up.cross(tangent_world);
-                if fallback.length_squared() < 1e-8 {
-                    fallback = Vec3::X;
-                }
-                n = fallback.normalize();
-                b = tangent_world.cross(n);
-            }
-            b = b.normalize();
 
             let twist = twist_angle(distance_along, twist_events);
             if twist.abs() > 1e-6 {
-                let n2 = n * twist.cos() + b * twist.sin();
-                let b2 = -n * twist.sin() + b * twist.cos();
-                n = n2;
-                b = b2;
+                let n2 = nrm * twist.cos() + bin * twist.sin();
+                let b2 = -nrm * twist.sin() + bin * twist.cos();
+                nrm = n2;
+                bin = b2;
             }
-
-            t_prev = tangent_world;
-            nrm_prev = n;
-
-            nrm = n;
-            bin = b;
         }
 
-        let u_coord = point_index as f32 / (point_count as f32 - 1.0).max(1.0);
+        let u_coord = point_index as f32 / (point_count - 1).max(1) as f32;
         let center = (u_coord * std::f32::consts::PI).sin();
         let center_mask = center * center;
         let center_mask_strong = center_mask * center_mask;
@@ -342,12 +346,8 @@ pub fn build_rect(
             position.z += (repel_mag_total * 0.22).min(0.02) * end_fade;
         }
 
-        let params = Vec4::new(
-            adjusted_tautness,
-            pinch,
-            rope_index as f32,
-            fade_out,
-        );
+        let params_z = (repel_mag_total / radius.max(1e-4)).min(1.0);
+        let params = Vec4::new(adjusted_tautness, pinch, params_z, 0.0);
 
         let mut contact_deform: f32 = 0.0;
         if !rope_contact_points.is_empty() && rope_contact_radius > 1e-6 {
@@ -363,9 +363,17 @@ pub fn build_rect(
             }
         }
 
-        let latex_thinning = 1.0 / (1.0 + total_tension * 1.5 * center_mask_strong).max(1.0).sqrt();
+        let latex_thinning = 1.0
+            / (1.0 + total_tension * stretch_thinning * 3.0 * center_mask_strong)
+                .max(1.0)
+                .sqrt();
         let relax_thickening = 1.0 + stretch_relax * 0.15;
-        let scale = latex_thinning * relax_thickening * (1.0 - contact_deform);
+        let mut base_scale = latex_thinning * relax_thickening;
+        let end_taper = smoothstep(0.08, 0.02, u_coord) * smoothstep(0.08, 0.02, 1.0 - u_coord);
+        base_scale *= 1.0 - end_taper * 0.06;
+        let flatten_amt = (total_tension * 0.2 * stretch_thinning * center_mask_strong).min(0.3);
+        let scale_nrm = base_scale * (1.0 - flatten_amt) * (1.0 - contact_deform);
+        let scale_bin = base_scale * (1.0 + flatten_amt * 0.5) * (1.0 - contact_deform);
 
         let lighten_amount = total_tension * center_mask_strong * 0.35;
         let base_color = if !segment_starts.is_empty() {
@@ -374,8 +382,8 @@ pub fn build_rect(
         } else {
             color
         };
-        let adjusted_color = base_color * (1.0 + lighten_amount)
-            + Vec3::splat(lighten_amount * 0.15);
+        let adjusted_color =
+            base_color * (1.0 + lighten_amount) + Vec3::splat(lighten_amount * 0.15);
 
         let osc_wave = (u_coord * std::f32::consts::PI * 3.0 + oscillation * 6.0).sin();
         let osc_amplitude = oscillation.abs() * 0.12;
@@ -402,8 +410,10 @@ pub fn build_rect(
                 let k_next = (k + 1) % profile_count;
                 let local_pos0 = profile.positions[k];
                 let local_pos1 = profile.positions[k_next];
-                let world_pos0 = position + nrm * (local_pos0.x * scale) + bin * (local_pos0.y * scale);
-                let world_pos1 = position + nrm * (local_pos1.x * scale) + bin * (local_pos1.y * scale);
+                let world_pos0 =
+                    position + nrm * (local_pos0.x * scale_nrm) + bin * (local_pos0.y * scale_bin);
+                let world_pos1 =
+                    position + nrm * (local_pos1.x * scale_nrm) + bin * (local_pos1.y * scale_bin);
                 let edge = world_pos1 - world_pos0;
                 let mut face_n = edge.cross(tangent_world);
                 let radial = (nrm * ((local_pos0.x + local_pos1.x) * 0.5)
@@ -436,9 +446,18 @@ pub fn build_rect(
             for k in 0..profile_count {
                 let local_pos = profile.positions[k];
                 let local_n = profile.normals[k];
-                let world_pos = position + nrm * (local_pos.x * scale) + bin * (local_pos.y * scale);
-                let world_n = (nrm * local_n.x + bin * local_n.y).normalize();
-                vertices.push(rv(world_pos, world_n, adjusted_color, Vec2::new(u_coord, profile.v[k]), params));
+                let world_pos =
+                    position + nrm * (local_pos.x * scale_nrm) + bin * (local_pos.y * scale_bin);
+                let world_n = (nrm * (local_n.x / scale_nrm.max(0.01))
+                    + bin * (local_n.y / scale_bin.max(0.01)))
+                .normalize();
+                vertices.push(rv(
+                    world_pos,
+                    world_n,
+                    adjusted_color,
+                    Vec2::new(u_coord, profile.v[k]),
+                    params,
+                ));
             }
         }
     }
@@ -468,6 +487,47 @@ pub fn build_rect(
                 indices.push(base_b + k1);
                 indices.push(base_a + k1);
             }
+        }
+    }
+
+    // Hemisphere end caps (always)
+    {
+        let cap_seg = profile_count.max(8);
+        let cap_rings_count = 6usize;
+        let smooth_k = 0.18;
+
+        let start_tan = (points[1] - points[0]).normalize();
+        let start_hemi = build_hemisphere_smooth(
+            points[0],
+            r,
+            -start_tan,
+            color,
+            cap_seg,
+            cap_rings_count,
+            0.0,
+            smooth_k,
+        );
+        let base = vertices.len() as u32;
+        vertices.extend_from_slice(&start_hemi.vertices);
+        for idx in &start_hemi.indices {
+            indices.push(idx + base);
+        }
+
+        let end_tan = (points[point_count - 1] - points[point_count - 2]).normalize();
+        let end_hemi = build_hemisphere_smooth(
+            points[point_count - 1],
+            r,
+            end_tan,
+            color,
+            cap_seg,
+            cap_rings_count,
+            0.0,
+            smooth_k,
+        );
+        let base = vertices.len() as u32;
+        vertices.extend_from_slice(&end_hemi.vertices);
+        for idx in &end_hemi.indices {
+            indices.push(idx + base);
         }
     }
 
@@ -506,7 +566,10 @@ pub fn build_plug(
             let n = (Vec3::new(dx, dy, 0.0) + n_bias).normalize();
             verts.push(rv(
                 Vec3::new(center.x + dx * r, center.y + dy * r, z),
-                n, c, Vec2::new(0.5, 0.5), params,
+                n,
+                c,
+                Vec2::new(0.5, 0.5),
+                params,
             ));
         }
         base
@@ -522,11 +585,23 @@ pub fn build_plug(
         }
     };
 
-    let r0 = ring(&mut vertices, shaft_r, center.z - shaft_depth, Vec3::ZERO, dark);
+    let r0 = ring(
+        &mut vertices,
+        shaft_r,
+        center.z - shaft_depth,
+        Vec3::ZERO,
+        dark,
+    );
     let r1 = ring(&mut vertices, shaft_r, center.z, Vec3::ZERO, dark);
     connect(&mut indices, r0, r1);
 
-    let r2 = ring(&mut vertices, cap_r, center.z + lip_z, Vec3::new(0.0, 0.0, 0.4), color);
+    let r2 = ring(
+        &mut vertices,
+        cap_r,
+        center.z + lip_z,
+        Vec3::new(0.0, 0.0, 0.4),
+        color,
+    );
     connect(&mut indices, r1, r2);
 
     let dome_base = center.z + lip_z;
@@ -548,7 +623,10 @@ pub fn build_plug(
     let tip_z = dome_base + dome_height;
     vertices.push(rv(
         Vec3::new(center.x, center.y, tip_z),
-        Vec3::Z, color * 0.85, Vec2::new(0.5, 0.5), params,
+        Vec3::Z,
+        color * 0.85,
+        Vec2::new(0.5, 0.5),
+        params,
     ));
     for s in 0..seg {
         let curr = (prev_ring + s) as u32;
@@ -577,10 +655,10 @@ pub fn build_square_cap(
 
     let top_n = Vec3::Z;
     let corners = [
-        Vec2::new( h,  h),
-        Vec2::new(-h,  h),
+        Vec2::new(h, h),
+        Vec2::new(-h, h),
         Vec2::new(-h, -h),
-        Vec2::new( h, -h),
+        Vec2::new(h, -h),
     ];
 
     let pos3 = |c: Vec2, z: f32| Vec3::new(center.x + c.x, center.y + c.y, z);
@@ -591,35 +669,50 @@ pub fn build_square_cap(
         vertices.push(rv(p1, n, c, Vec2::new(0.5, 0.5), params));
         vertices.push(rv(p2, n, c, Vec2::new(0.5, 0.5), params));
         vertices.push(rv(p3, n, c, Vec2::new(0.5, 0.5), params));
-        indices.extend_from_slice(&[base, base+1, base+2, base, base+2, base+3]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
     };
 
     let top_z = center.z;
     let bot_z = center.z - d;
 
-    quad(pos3(corners[0], top_z), pos3(corners[1], top_z),
-         pos3(corners[2], top_z), pos3(corners[3], top_z),
-         top_n, color);
+    quad(
+        pos3(corners[0], top_z),
+        pos3(corners[1], top_z),
+        pos3(corners[2], top_z),
+        pos3(corners[3], top_z),
+        top_n,
+        color,
+    );
 
     let side_color = color * (1.0 - darken * 0.4);
     let wall_normals = [
-        Vec3::new( 0.0,  1.0, 0.0),
-        Vec3::new(-1.0,  0.0, 0.0),
-        Vec3::new( 0.0, -1.0, 0.0),
-        Vec3::new( 1.0,  0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, -1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
     ];
     let wall_edges: [(usize, usize); 4] = [(0, 1), (1, 2), (2, 3), (3, 0)];
     for (ei, &(a, b)) in wall_edges.iter().enumerate() {
         let n = wall_normals[ei];
-        quad(pos3(corners[a], top_z), pos3(corners[b], top_z),
-             pos3(corners[b], bot_z), pos3(corners[a], bot_z),
-             n, side_color);
+        quad(
+            pos3(corners[a], top_z),
+            pos3(corners[b], top_z),
+            pos3(corners[b], bot_z),
+            pos3(corners[a], bot_z),
+            n,
+            side_color,
+        );
     }
 
     let bottom_color = color * (1.0 - darken);
-    quad(pos3(corners[3], bot_z), pos3(corners[2], bot_z),
-         pos3(corners[1], bot_z), pos3(corners[0], bot_z),
-         Vec3::new(0.0, 0.0, -1.0), bottom_color);
+    quad(
+        pos3(corners[3], bot_z),
+        pos3(corners[2], bot_z),
+        pos3(corners[1], bot_z),
+        pos3(corners[0], bot_z),
+        Vec3::new(0.0, 0.0, -1.0),
+        bottom_color,
+    );
 
     RopeMesh { vertices, indices }
 }
@@ -632,6 +725,19 @@ pub fn build_hemisphere(
     segments: usize,
     rings: usize,
     darken: f32,
+) -> RopeMesh {
+    build_hemisphere_smooth(center, radius, facing, color, segments, rings, darken, 0.0)
+}
+
+pub fn build_hemisphere_smooth(
+    center: Vec3,
+    radius: f32,
+    facing: Vec3,
+    color: Vec3,
+    segments: usize,
+    rings: usize,
+    darken: f32,
+    smooth_k: f32,
 ) -> RopeMesh {
     let r = radius.max(0.001);
     let seg = segments.max(6);
@@ -654,17 +760,34 @@ pub fn build_hemisphere(
         let t = ring as f32 / rng as f32;
         let blend = t * t;
         let ring_color = color * (1.0 - blend) + dark_color * blend;
-        let ring_r = r * phi.cos();
+        // smooth union inflation: outward bulge at base, fades toward tip
+        let inflation = if smooth_k > 0.0 {
+            smooth_k * (-t * 4.0).exp()
+        } else {
+            0.0
+        };
+        let ring_r = r * (phi.cos() + inflation);
         let ring_z = r * phi.sin();
         for s in 0..seg {
             let theta = (s as f32 / seg as f32) * std::f32::consts::TAU;
             let local_x = theta.cos() * ring_r;
             let local_y = theta.sin() * ring_r;
             let pos = center + right * local_x + forward * local_y + facing * ring_z;
-            let n = (right * (theta.cos() * phi.cos())
-                + forward * (theta.sin() * phi.cos())
-                + facing * phi.sin())
-            .normalize();
+            // For inflated rings, compute actual surface normal from the gradient of the smin surface
+            let n = if smooth_k > 0.0 && inflation > 1e-5 {
+                // Normal points radially outward with slight forward tilt proportional to phi
+                let radial = (right * theta.cos() + forward * theta.sin()).normalize();
+                let sphere_n = (right * (theta.cos() * phi.cos())
+                    + forward * (theta.sin() * phi.cos())
+                    + facing * phi.sin()).normalize();
+                // At base (t=0) use mostly radial; at tip use sphere normal
+                sphere_n.lerp(radial, inflation / (inflation + phi.cos() + 1e-5)).normalize()
+            } else {
+                (right * (theta.cos() * phi.cos())
+                    + forward * (theta.sin() * phi.cos())
+                    + facing * phi.sin())
+                .normalize()
+            };
             vertices.push(rv(pos, n, ring_color, Vec2::new(0.5, 0.5), Vec4::ZERO));
         }
     }
@@ -680,7 +803,13 @@ pub fn build_hemisphere(
     }
 
     let tip_idx = vertices.len() as u32;
-    vertices.push(rv(center + facing * r, facing, dark_color, Vec2::new(0.5, 0.5), Vec4::ZERO));
+    vertices.push(rv(
+        center + facing * r,
+        facing,
+        dark_color,
+        Vec2::new(0.5, 0.5),
+        Vec4::ZERO,
+    ));
     let top_ring = rng * seg;
     for s in 0..seg {
         let curr = (top_ring + s) as u32;

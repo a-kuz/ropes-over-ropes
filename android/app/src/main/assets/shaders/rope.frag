@@ -28,6 +28,7 @@ layout(std140) uniform FrameBlock {
     vec4 uWormParams2;
     vec4 uWormParams3;
     vec4 uWormParams4;
+    vec4 uRopeMatParams4;
 };
 
 uniform sampler2DShadow uShadowMap;  // binding 2
@@ -226,12 +227,15 @@ vec3 rubberPBR(vec3 baseColor, vec3 n, vec3 l, vec3 v,
     float wrapDiff = clamp((nl + diffuseWrap) / (1.0 + diffuseWrap), 0.0, 1.0);
     if (cartoonMode > 0.5) wrapDiff = toonStep(wrapDiff, cartoonLevels);
 
-    float sssNL     = clamp(dot(-n, l), 0.0, 1.0);
-    float sssWrap   = clamp((sssNL + 0.3) / 1.3, 0.0, 1.0);
-    float sssContrib = sssWrap * subsurface * 0.3;
+    float sssBackNL = clamp(dot(-n, l), 0.0, 1.0);
+    float sssBackWrap = clamp((sssBackNL + 0.5) / 1.5, 0.0, 1.0);
+    float sssForwardWrap = clamp((-nl + 0.8) / 1.8, 0.0, 1.0);
+    float sssViewEdge = pow(1.0 - nv, 2.0);
+    float sssContrib = (sssBackWrap * 0.5 + sssForwardWrap * 0.35 + sssViewEdge * 0.15) * subsurface;
+    vec3 sssTint = albedo * vec3(1.25, 0.85, 0.7);
 
     float ambientBase = mix(0.20, 0.45, matteAmount);
-    vec3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff + sssContrib);
+    vec3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff) + sssTint * sssContrib;
 
     float rough = mix(0.18, 0.92, matteAmount) + roughness * 0.1;
     float taut2 = taut * taut;

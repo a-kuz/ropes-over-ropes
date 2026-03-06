@@ -77,7 +77,7 @@ fn generate_vanish_samples(sr: f32) -> Vec<f32> {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod native {
-    use super::{generate_victory_jingle, generate_snap_samples, generate_vanish_samples};
+    use super::{generate_snap_samples, generate_vanish_samples, generate_victory_jingle};
     use rodio::source::Source;
     use rodio::stream::{DeviceSinkBuilder, MixerDeviceSink};
     use std::num::NonZero;
@@ -91,23 +91,37 @@ mod native {
 
     impl SampleSource {
         fn from_samples(samples: Vec<f32>, sample_rate: u32) -> Self {
-            Self { samples, pos: 0, sample_rate }
+            Self {
+                samples,
+                pos: 0,
+                sample_rate,
+            }
         }
     }
 
     impl Source for SampleSource {
-        fn current_span_len(&self) -> Option<usize> { None }
-        fn channels(&self) -> NonZero<u16> { NonZero::new(1).unwrap() }
-        fn sample_rate(&self) -> NonZero<u32> { NonZero::new(self.sample_rate).unwrap() }
+        fn current_span_len(&self) -> Option<usize> {
+            None
+        }
+        fn channels(&self) -> NonZero<u16> {
+            NonZero::new(1).unwrap()
+        }
+        fn sample_rate(&self) -> NonZero<u32> {
+            NonZero::new(self.sample_rate).unwrap()
+        }
         fn total_duration(&self) -> Option<Duration> {
-            Some(Duration::from_secs_f32(self.samples.len() as f32 / self.sample_rate as f32))
+            Some(Duration::from_secs_f32(
+                self.samples.len() as f32 / self.sample_rate as f32,
+            ))
         }
     }
 
     impl Iterator for SampleSource {
         type Item = f32;
         fn next(&mut self) -> Option<f32> {
-            if self.pos >= self.samples.len() { return None; }
+            if self.pos >= self.samples.len() {
+                return None;
+            }
             let v = self.samples[self.pos];
             self.pos += 1;
             Some(v)
@@ -130,24 +144,30 @@ mod native {
 
         pub fn play_firework(&self, _current_time: f32) {
             let samples = generate_victory_jingle(44100.0);
-            self.sink.mixer().add(SampleSource::from_samples(samples, 44100));
+            self.sink
+                .mixer()
+                .add(SampleSource::from_samples(samples, 44100));
         }
 
         pub fn play_snap(&self) {
             let samples = generate_snap_samples(44100.0);
-            self.sink.mixer().add(SampleSource::from_samples(samples, 44100));
+            self.sink
+                .mixer()
+                .add(SampleSource::from_samples(samples, 44100));
         }
 
         pub fn play_vanish(&self) {
             let samples = generate_vanish_samples(44100.0);
-            self.sink.mixer().add(SampleSource::from_samples(samples, 44100));
+            self.sink
+                .mixer()
+                .add(SampleSource::from_samples(samples, 44100));
         }
     }
 }
 
 #[cfg(target_arch = "wasm32")]
 mod web {
-    use super::{generate_victory_jingle, generate_snap_samples, generate_vanish_samples};
+    use super::{generate_snap_samples, generate_vanish_samples, generate_victory_jingle};
     use web_sys::AudioContext;
 
     pub struct AudioPlayer {

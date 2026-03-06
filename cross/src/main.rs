@@ -1,3 +1,4 @@
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
 use web_time::Instant;
@@ -6,18 +7,25 @@ use winit::event::WindowEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoop};
 use winit::window::{Window, WindowId};
 
-use uzls_cross::level::definition::LevelDefinition;
-use uzls_cross::level::generator;
-use uzls_cross::renderer::frame_types::RopeVertex;
-use uzls_cross::renderer::gpu::{GpuRenderer, GpuTimings};
-use uzls_cross::renderer::rope_mesh;
-use uzls_cross::simulation::verlet::{Snapshot, VerletSimulator};
+use uzls_cross::audio::AudioPlayer;
+use uzls_cross::celebration::{self, CameraSnapshot, CelebrationBand};
+use uzls_cross::hud::{self, render_mode_scale, HudAction, ProfilingSnapshot};
 use uzls_cross::input;
 use uzls_cross::input::DragResult;
-use uzls_cross::audio::AudioPlayer;
-use uzls_cross::storage::{save_level_to_storage, load_level_from_storage};
-use uzls_cross::hud::{self, HudAction, ProfilingSnapshot, render_mode_scale};
-use uzls_cross::celebration::{self, CelebrationBand, CameraSnapshot};
+use uzls_cross::leaderboard;
+use uzls_cross::level::definition::LevelDefinition;
+use uzls_cross::level::generator;
+use uzls_cross::renderer::frame_types::{
+    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, RopeVertex,
+    TableSettings, VisualSettings, WormSettings,
+};
+use uzls_cross::renderer::gpu::{GpuRenderer, GpuTimings};
+use uzls_cross::renderer::rope_mesh;
+use uzls_cross::simulation::verlet::{BoardDef, Snapshot, VerletSimulator};
+use uzls_cross::storage::{
+    load_level_from_storage, load_settings_from_storage, save_level_to_storage,
+    save_settings_to_storage,
+};
 
 #[cfg(target_arch = "wasm32")]
 use wasm_bindgen::prelude::*;
@@ -29,6 +37,21 @@ struct UndoEntry {
     simulator_snapshot: Snapshot,
     rope_endpoints: Vec<(usize, usize)>,
     hole_occupied: Vec<bool>,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+struct PersistedSettings {
+    rope_material: RopeMaterialSettings,
+    lighting: LightingSettings,
+    visual: VisualSettings,
+    table: TableSettings,
+    cartoon: CartoonSettings,
+    cap: CapSettings,
+    worm: WormSettings,
+    render_scale: f32,
+    square_cross_section: bool,
+    render_mode: u8,
+    cel_mode: bool,
 }
 
 struct App {
@@ -94,9 +117,64 @@ struct App {
     prof_frame_num: u64,
     prof_events: Vec<&'static str>,
     settings_open: bool,
+    leaderboard: leaderboard::Leaderboard,
+    level_start_ms: u64,
+    victory_submitted: bool,
 }
 
 impl App {
+    fn current_persisted_settings(&self) -> Option<PersistedSettings> {
+        let renderer = self.renderer.as_ref()?;
+        Some(PersistedSettings {
+            rope_material: renderer.rope_material.clone(),
+            lighting: renderer.lighting.clone(),
+            visual: renderer.visual.clone(),
+            table: renderer.table.clone(),
+            cartoon: renderer.cartoon.clone(),
+            cap: renderer.cap.clone(),
+            worm: renderer.worm.clone(),
+            render_scale: renderer.render_scale,
+            square_cross_section: self.square_cross_section,
+            render_mode: self.render_mode,
+            cel_mode: self.cel_mode,
+        })
+    }
+
+    fn apply_persisted_settings(&mut self, settings: PersistedSettings) {
+        if let Some(renderer) = &mut self.renderer {
+            renderer.rope_material = settings.rope_material;
+            renderer.lighting = settings.lighting;
+            renderer.visual = settings.visual;
+            renderer.table = settings.table;
+            renderer.cartoon = settings.cartoon;
+            renderer.cap = settings.cap;
+            renderer.worm = settings.worm;
+            renderer.set_render_scale(settings.render_scale);
+        }
+        self.square_cross_section = settings.square_cross_section;
+        self.render_mode = settings.render_mode;
+        self.cel_mode = settings.cel_mode;
+    }
+
+    fn load_persisted_settings(&mut self) {
+        let Some(text) = load_settings_from_storage() else {
+            return;
+        };
+        let Ok(settings) = serde_json::from_str::<PersistedSettings>(&text) else {
+            return;
+        };
+        self.apply_persisted_settings(settings);
+    }
+
+    fn save_persisted_settings(&self) {
+        let Some(settings) = self.current_persisted_settings() else {
+            return;
+        };
+        if let Ok(text) = serde_json::to_string(&settings) {
+            save_settings_to_storage(&text);
+        }
+    }
+
     fn new() -> Self {
         Self {
             window: None,
@@ -138,7 +216,7 @@ impl App {
             cel_mode: false,
             downscaled: false,
             low_fps_frames: 0,
-            square_cross_section: true,
+            square_cross_section: false,
             active_touches: HashMap::new(),
             touch_camera_active: false,
             #[cfg(target_arch = "wasm32")]
@@ -161,6 +239,9 @@ impl App {
             prof_frame_num: 0,
             prof_events: Vec::new(),
             settings_open: false,
+            leaderboard: leaderboard::Leaderboard::new(),
+            level_start_ms: 0,
+            victory_submitted: false,
         }
     }
 
@@ -174,8 +255,28 @@ impl App {
             .unwrap_or_else(|| generator::generate(level_id as u32));
 
         let hole_positions = level.hole_positions();
-        let mut sim = VerletSimulator::new(hole_positions.clone(), level.hole_radius);
-        sim.particle_count = level.particles_per_rope;
+        let hole_elevations = level.hole_elevations();
+        let board_defs: Vec<BoardDef> = level
+            .boards
+            .as_ref()
+            .map(|boards| boards.iter().map(BoardDef::from).collect())
+            .unwrap_or_default();
+        let mut sim = VerletSimulator::new(
+            hole_positions.clone(),
+            hole_elevations,
+            level.hole_radius,
+            board_defs,
+        );
+        sim.gravity = -6.3927;
+        sim.damping = 0.9470582;
+        sim.constraint_iterations = 11;
+        sim.particle_count = 65;
+        sim.settle_steps = 5;
+        sim.lift_height = 0.3;
+        sim.rope_tension = 0.88084733;
+        sim.bend_compliance = 0.00015530341;
+        sim.bend_velocity_coupling = 0.65;
+        sim.square_cross_section = self.square_cross_section;
 
         let rope_configs: Vec<_> = level
             .ropes
@@ -217,8 +318,16 @@ impl App {
             .iter()
             .enumerate()
             .map(|(i, r)| {
-                let start = sim.bands.get(i).and_then(|b| b.pin_start).unwrap_or(r.start_hole);
-                let end = sim.bands.get(i).and_then(|b| b.pin_end).unwrap_or(r.end_hole);
+                let start = sim
+                    .bands
+                    .get(i)
+                    .and_then(|b| b.pin_start)
+                    .unwrap_or(r.start_hole);
+                let end = sim
+                    .bands
+                    .get(i)
+                    .and_then(|b| b.pin_end)
+                    .unwrap_or(r.end_hole);
                 (start, end)
             })
             .collect();
@@ -226,26 +335,76 @@ impl App {
         self.rope_colors = level
             .ropes
             .iter()
-            .map(|r| [r.color.red_channel, r.color.green_channel, r.color.blue_channel])
+            .map(|r| {
+                [
+                    r.color.red_channel,
+                    r.color.green_channel,
+                    r.color.blue_channel,
+                ]
+            })
             .collect();
         self.rope_radii = level.ropes.iter().map(|r| r.radius).collect();
 
         self.hole_occupied = vec![false; hole_positions.len()];
         for &(s, e) in &self.rope_endpoints {
-            if s < self.hole_occupied.len() { self.hole_occupied[s] = true; }
-            if e < self.hole_occupied.len() { self.hole_occupied[e] = true; }
+            if s < self.hole_occupied.len() {
+                self.hole_occupied[s] = true;
+            }
+            if e < self.hole_occupied.len() {
+                self.hole_occupied[e] = true;
+            }
         }
 
         if let Some(renderer) = &mut self.renderer {
+            let hole_elevations_for_render: Vec<f32> =
+                level.holes.iter().map(|h| h.z_position).collect();
+            let scaled_hole_radius = level.hole_radius * renderer.visual.hole_radius_scale;
             if self.square_cross_section {
-                renderer.update_hole_instances_square(&hole_positions, level.hole_radius);
+                renderer.update_hole_instances_square(
+                    &hole_positions,
+                    &hole_elevations_for_render,
+                    scaled_hole_radius,
+                );
             } else {
-                renderer.update_hole_instances(&hole_positions, level.hole_radius);
+                renderer.update_hole_instances(
+                    &hole_positions,
+                    &hole_elevations_for_render,
+                    scaled_hole_radius,
+                );
             }
+            let boards: Vec<(glam::Vec2, glam::Vec2, f32)> = level
+                .boards
+                .as_ref()
+                .map(|items| {
+                    items
+                        .iter()
+                        .map(|b| {
+                            (
+                                glam::Vec2::new(b.center_x, b.center_y),
+                                glam::Vec2::new(b.width, b.height),
+                                b.elevation,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            renderer.update_board_mesh(&boards);
 
             let (sw, sh) = renderer.surface_size();
             let aspect = sw as f32 / sh.max(1) as f32;
-            fit_camera(&mut renderer.camera, &hole_positions, level.hole_radius, aspect);
+            let max_elevation = level
+                .holes
+                .iter()
+                .map(|h| h.z_position)
+                .fold(0.0_f32, f32::max);
+            fit_camera(
+                &mut renderer.camera,
+                &hole_positions,
+                level.hole_radius,
+                aspect,
+                max_elevation,
+            );
+            renderer.needs_wood_bake = true;
         }
 
         self.min_moves = uzls_cross::level::solver::min_moves_for_level(level_id);
@@ -259,6 +418,9 @@ impl App {
         self.celebration_active = false;
         self.celebration_bands.clear();
         self.move_count = 0;
+        self.level_start_ms = web_time::Instant::now().elapsed().as_millis() as u64;
+        self.victory_submitted = false;
+        self.leaderboard.reset_result();
         if let Some(snap) = self.pre_victory_camera.take() {
             if let Some(r) = &mut self.renderer {
                 snap.restore(&mut r.camera);
@@ -292,18 +454,35 @@ impl App {
 
     fn try_begin_drag(&mut self, screen_pos: (f32, f32)) {
         let result = {
-            let renderer = match &self.renderer { Some(r) => r, None => return };
-            let level = match &self.level { Some(l) => l, None => return };
-            let sim = match &self.simulator { Some(s) => s, None => return };
+            let renderer = match &self.renderer {
+                Some(r) => r,
+                None => return,
+            };
+            let level = match &self.level {
+                Some(l) => l,
+                None => return,
+            };
+            let sim = match &self.simulator {
+                Some(s) => s,
+                None => return,
+            };
 
-            let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+            let vp = (
+                renderer.surface_size().0 as f32,
+                renderer.surface_size().1 as f32,
+            );
             let hole_positions = level.hole_positions();
             let hole_radius = level.hole_radius;
             let endpoint_z = |rope: usize, end: usize| -> f32 { sim.endpoint_z(rope, end) };
 
             input::begin_drag_action(
-                screen_pos, vp, &renderer.camera, &hole_positions,
-                &self.rope_endpoints, &endpoint_z, hole_radius,
+                screen_pos,
+                vp,
+                &renderer.camera,
+                &hole_positions,
+                &self.rope_endpoints,
+                &endpoint_z,
+                hole_radius,
             )
         };
 
@@ -313,7 +492,10 @@ impl App {
                 self.hole_occupied[hole_to_free] = false;
             }
             if let Some(renderer) = &self.renderer {
-                let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+                let vp = (
+                    renderer.surface_size().0 as f32,
+                    renderer.surface_size().1 as f32,
+                );
                 let world = input::screen_to_world(screen_pos, vp, &renderer.camera);
                 if let Some(sim) = &mut self.simulator {
                     sim.begin_drag(drag.rope_index, drag.end_index, world);
@@ -326,19 +508,47 @@ impl App {
 
     fn finish_drag(&mut self, screen_pos: (f32, f32)) {
         self.highlight_hole = -1;
-        let drag = match self.drag_state.take() { Some(d) => d, None => return };
-        let renderer = match &self.renderer { Some(r) => r, None => return };
-        let level = match &self.level { Some(l) => l, None => return };
+        let drag = match self.drag_state.take() {
+            Some(d) => d,
+            None => return,
+        };
+        let renderer = match &self.renderer {
+            Some(r) => r,
+            None => return,
+        };
+        let level = match &self.level {
+            Some(l) => l,
+            None => return,
+        };
 
-        let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+        let vp = (
+            renderer.surface_size().0 as f32,
+            renderer.surface_size().1 as f32,
+        );
         let hole_positions = level.hole_positions();
 
         match input::end_drag_action(
-            &drag, screen_pos, vp, &renderer.camera,
-            &hole_positions, &self.hole_occupied, level.hole_radius,
+            &drag,
+            screen_pos,
+            vp,
+            &renderer.camera,
+            &hole_positions,
+            &self.hole_occupied,
+            level.hole_radius,
         ) {
             DragResult::Snapped { hole, moved } => {
-                if let Some(sim) = &mut self.simulator { sim.end_drag(hole); }
+                let can_write_back = self.simulator.as_ref().map_or(false, |sim| {
+                    sim.bands
+                        .get(drag.rope_index)
+                        .map_or(false, |band| band.active && band.fade_out == 0.0)
+                });
+                if !can_write_back {
+                    self.settle_check_timer = Some(0.5);
+                    return;
+                }
+                if let Some(sim) = &mut self.simulator {
+                    sim.end_drag(hole);
+                }
                 if drag.end_index == 0 {
                     self.rope_endpoints[drag.rope_index].0 = hole;
                 } else {
@@ -349,13 +559,27 @@ impl App {
                 }
                 if moved {
                     self.move_count += 1;
-                    if let Some(audio) = &self.audio { audio.play_snap(); }
+                    if let Some(audio) = &self.audio {
+                        audio.play_snap();
+                    }
                 }
                 self.settle_check_timer = Some(0.5);
                 self.prof_events.push("drag_snap");
             }
             DragResult::Cancelled => {
-                if let Some(sim) = &mut self.simulator { sim.cancel_drag(); }
+                let can_write_back = self.simulator.as_ref().map_or(false, |sim| {
+                    sim.bands
+                        .get(drag.rope_index)
+                        .map_or(false, |band| band.active && band.fade_out == 0.0)
+                });
+                if !can_write_back {
+                    self.undo_stack.pop();
+                    self.settle_check_timer = Some(0.5);
+                    return;
+                }
+                if let Some(sim) = &mut self.simulator {
+                    sim.cancel_drag();
+                }
                 if drag.end_index == 0 {
                     self.rope_endpoints[drag.rope_index].0 = drag.original_hole_index;
                 } else {
@@ -372,9 +596,24 @@ impl App {
     }
 
     fn cancel_drag(&mut self) {
-        let drag = match self.drag_state.take() { Some(d) => d, None => return };
+        let drag = match self.drag_state.take() {
+            Some(d) => d,
+            None => return,
+        };
         self.highlight_hole = -1;
-        if let Some(sim) = &mut self.simulator { sim.cancel_drag(); }
+        let can_write_back = self.simulator.as_ref().map_or(false, |sim| {
+            sim.bands
+                .get(drag.rope_index)
+                .map_or(false, |band| band.active && band.fade_out == 0.0)
+        });
+        if !can_write_back {
+            self.undo_stack.pop();
+            self.settle_check_timer = Some(0.5);
+            return;
+        }
+        if let Some(sim) = &mut self.simulator {
+            sim.cancel_drag();
+        }
         if drag.end_index == 0 {
             self.rope_endpoints[drag.rope_index].0 = drag.original_hole_index;
         } else {
@@ -387,9 +626,17 @@ impl App {
     }
 
     fn update_drag_highlight(&mut self, screen_pos: (f32, f32)) {
-        if self.drag_state.is_none() { return; }
-        let renderer = match &self.renderer { Some(r) => r, None => return };
-        let vp = (renderer.surface_size().0 as f32, renderer.surface_size().1 as f32);
+        if self.drag_state.is_none() {
+            return;
+        }
+        let renderer = match &self.renderer {
+            Some(r) => r,
+            None => return,
+        };
+        let vp = (
+            renderer.surface_size().0 as f32,
+            renderer.surface_size().1 as f32,
+        );
         let world = input::screen_to_world(screen_pos, vp, &renderer.camera);
         if let Some(sim) = &mut self.simulator {
             sim.update_drag(world);
@@ -397,15 +644,23 @@ impl App {
         if let Some(level) = &self.level {
             let hole_positions = level.hole_positions();
             self.highlight_hole = input::find_snap_hole(
-                world, &hole_positions, &self.hole_occupied, level.hole_radius,
-            ).map(|i| i as i32).unwrap_or(-1);
+                world,
+                &hole_positions,
+                &self.hole_occupied,
+                level.hole_radius,
+            )
+            .map(|i| i as i32)
+            .unwrap_or(-1);
         }
     }
 
     fn update_and_render(&mut self) {
         #[cfg(target_arch = "wasm32")]
         if !self.init_done {
-            let ready = self.pending_renderer.as_ref().and_then(|c| c.borrow_mut().take());
+            let ready = self
+                .pending_renderer
+                .as_ref()
+                .and_then(|c| c.borrow_mut().take());
             if let Some(renderer) = ready {
                 self.pending_renderer = None;
                 self.finish_init_standalone(renderer);
@@ -440,30 +695,11 @@ impl App {
         self.time += dt;
 
         let instant_fps = 1.0 / raw_dt.max(0.0001);
-        self.fps = if self.fps == 0.0 { instant_fps } else { self.fps * 0.95 + instant_fps * 0.05 };
-
-        if self.render_mode >= 1 && self.drag_state.is_some() {
-            if self.fps < 30.0 {
-                self.low_fps_frames += 1;
-                if self.low_fps_frames > 5 && !self.downscaled {
-                    self.downscaled = true;
-                    if let Some(r) = &mut self.renderer {
-                        r.set_render_scale(0.5);
-                    }
-                    self.prof_events.push("downscale");
-                }
-            } else {
-                self.low_fps_frames = 0;
-            }
-        }
-        if self.downscaled && self.drag_state.is_none() {
-            self.downscaled = false;
-            self.low_fps_frames = 0;
-            if let Some(r) = &mut self.renderer {
-                r.set_render_scale(render_mode_scale(self.render_mode));
-            }
-            self.prof_events.push("upscale");
-        }
+        self.fps = if self.fps == 0.0 {
+            instant_fps
+        } else {
+            self.fps * 0.95 + instant_fps * 0.05
+        };
 
         let t_physics = Instant::now();
         if let Some(sim) = &mut self.simulator {
@@ -475,15 +711,24 @@ impl App {
         if let Some(ref mut timer) = self.settle_check_timer {
             *timer -= dt;
             if *timer <= 0.0 {
-                self.settle_check_timer = None;
-                self.check_win();
+                if self.simulator.as_ref().map_or(false, |sim| {
+                    self.drag_state.is_some()
+                        || sim.drag_info.is_some()
+                        || sim.has_lower_animations()
+                }) {
+                    *timer = 0.5;
+                } else {
+                    self.settle_check_timer = None;
+                    self.check_win();
+                }
             }
         }
         let check_win_elapsed = Instant::now().duration_since(t_check_win).as_secs_f32() * 1000.0;
 
         let t_mesh = Instant::now();
         let shadow_segs_elapsed = self.update_rope_buffers();
-        let mesh_elapsed = Instant::now().duration_since(t_mesh).as_secs_f32() * 1000.0 - shadow_segs_elapsed;
+        let mesh_elapsed =
+            Instant::now().duration_since(t_mesh).as_secs_f32() * 1000.0 - shadow_segs_elapsed;
 
         let window = match &self.window {
             Some(w) => w.clone(),
@@ -492,7 +737,11 @@ impl App {
 
         let level = self.current_level_id;
         let fps = self.fps as u32;
-        let active_ropes = self.rope_endpoints.iter().filter(|&&(s, _)| s != usize::MAX).count();
+        let active_ropes = self
+            .rope_endpoints
+            .iter()
+            .filter(|&&(s, _)| s != usize::MAX)
+            .count();
         let total_ropes = self.rope_endpoints.len();
 
         let any_sucking = self.simulator.as_ref().map_or(false, |sim| {
@@ -501,6 +750,18 @@ impl App {
         let is_victory = active_ropes == 0 && total_ropes > 0 && !any_sucking;
         let mut celebration_elapsed = 0.0_f32;
         if is_victory {
+            if !self.victory_submitted {
+                self.victory_submitted = true;
+                let elapsed =
+                    web_time::Instant::now().elapsed().as_millis() as u64 - self.level_start_ms;
+                let is_new_record = self.move_count < self.min_moves || self.min_moves == 0;
+                self.leaderboard.submit_and_fetch(
+                    self.current_level_id,
+                    self.move_count,
+                    elapsed as u32,
+                    is_new_record,
+                );
+            }
             self.victory_time += dt;
             if !self.victory_sound_played {
                 self.victory_sound_played = true;
@@ -514,7 +775,10 @@ impl App {
                 if let Some(level) = &self.level {
                     let holes = level.hole_positions();
                     self.celebration_bands = celebration::spawn_celebration_bands(
-                        &holes, level.ropes.len(), &self.rope_colors, &self.rope_radii,
+                        &holes,
+                        level.ropes.len(),
+                        &self.rope_colors,
+                        &self.rope_radii,
                     );
                 }
                 if let Some(r) = &self.renderer {
@@ -524,7 +788,12 @@ impl App {
             let t_celeb = Instant::now();
             celebration::update_celebration(&mut self.celebration_bands, self.victory_time);
             if let (Some(renderer), Some(snap)) = (&mut self.renderer, &self.pre_victory_camera) {
-                celebration::animate_victory_camera(&mut renderer.camera, snap, self.victory_time, dt);
+                celebration::animate_victory_camera(
+                    &mut renderer.camera,
+                    snap,
+                    self.victory_time,
+                    dt,
+                );
             }
             celebration_elapsed = Instant::now().duration_since(t_celeb).as_secs_f32() * 1000.0;
         } else {
@@ -536,7 +805,11 @@ impl App {
         let render_mode = self.render_mode;
         let cel_mode = self.cel_mode;
         let prof_show = self.prof_show;
-        let draw_flags = self.renderer.as_ref().map(|r| r.draw_flags).unwrap_or_default();
+        let draw_flags = self
+            .renderer
+            .as_ref()
+            .map(|r| r.draw_flags)
+            .unwrap_or_default();
         let prof_data = ProfilingSnapshot {
             physics_ms: self.prof_physics_ms,
             mesh_ms: self.prof_mesh_ms,
@@ -555,26 +828,111 @@ impl App {
             table_shadow_mode: draw_flags.table_shadow_mode,
         };
         let t_egui = Instant::now();
+        let prev_settings = self.current_persisted_settings();
+        let mut settings_changed = false;
         let egui_output = if let Some(egui_state) = &mut self.egui_state {
             let ctx = egui_state.egui_ctx().clone();
             let raw_input = egui_state.take_egui_input(&window);
             let mut hud_action = HudAction::default();
             let min_moves = self.min_moves;
             let settings_open = self.settings_open;
-            let (mut rope_mat, mut lighting_settings) = self.renderer.as_ref()
-                .map(|r| (r.rope_material.clone(), r.lighting.clone()))
-                .unwrap_or_default();
+            let (
+                mut rope_mat,
+                mut lighting_settings,
+                mut visual_settings,
+                mut table_settings,
+                mut cartoon_settings,
+                mut cap_settings,
+                mut exact_render_scale,
+            ) = self
+                .renderer
+                .as_ref()
+                .map(|r| {
+                    (
+                        r.rope_material.clone(),
+                        r.lighting.clone(),
+                        r.visual.clone(),
+                        r.table.clone(),
+                        r.cartoon.clone(),
+                        r.cap.clone(),
+                        r.render_scale,
+                    )
+                })
+                .unwrap_or((
+                    RopeMaterialSettings::default(),
+                    LightingSettings::default(),
+                    VisualSettings::default(),
+                    TableSettings::default(),
+                    CartoonSettings::default(),
+                    CapSettings::default(),
+                    render_mode_scale(self.render_mode),
+                ));
+            let mut cel_mode_local = self.cel_mode;
             let mut sq_cross = self.square_cross_section;
             let move_count = self.move_count;
             let full_output = ctx.run(raw_input, |ctx| {
-                hud_action = hud::draw_hud(ctx, level, fps, active_ropes, total_ropes, victory_time, can_undo, render_mode, move_count, min_moves, cel_mode, prof_show, &prof_data, settings_open, &mut rope_mat, &mut lighting_settings, &mut sq_cross);
+                let lb_result = self.leaderboard.result();
+                hud_action = hud::draw_hud(
+                    ctx,
+                    level,
+                    fps,
+                    active_ropes,
+                    total_ropes,
+                    victory_time,
+                    can_undo,
+                    render_mode,
+                    move_count,
+                    min_moves,
+                    &mut cel_mode_local,
+                    prof_show,
+                    &prof_data,
+                    settings_open,
+                    &mut rope_mat,
+                    &mut lighting_settings,
+                    &mut visual_settings,
+                    &mut table_settings,
+                    &mut cartoon_settings,
+                    &mut cap_settings,
+                    &mut exact_render_scale,
+                    &mut sq_cross,
+                    &lb_result,
+                );
             });
             if let Some(r) = &mut self.renderer {
                 r.rope_material = rope_mat;
                 r.lighting = lighting_settings;
+                r.visual = visual_settings;
+                r.visual.square_cross_section = sq_cross;
+                r.table = table_settings;
+                r.cartoon = cartoon_settings;
+                r.cap = cap_settings;
+                r.set_render_scale(exact_render_scale);
+                if let Some(level) = &self.level {
+                    let hole_positions = level.hole_positions();
+                    let hole_elevations_for_render = level.hole_elevations();
+                    let scaled_hole_radius = level.hole_radius * r.visual.hole_radius_scale;
+                    if sq_cross {
+                        r.update_hole_instances_square(
+                            &hole_positions,
+                            &hole_elevations_for_render,
+                            scaled_hole_radius,
+                        );
+                    } else {
+                        r.update_hole_instances(
+                            &hole_positions,
+                            &hole_elevations_for_render,
+                            scaled_hole_radius,
+                        );
+                    }
+                }
             }
             self.square_cross_section = sq_cross;
+            if let Some(sim) = &mut self.simulator {
+                sim.square_cross_section = sq_cross;
+            }
+            self.cel_mode = cel_mode_local;
             egui_state.handle_platform_output(&window, full_output.platform_output.clone());
+            settings_changed = self.current_persisted_settings() != prev_settings;
             if let Some(lvl) = hud_action.go_to_level {
                 self.pending_level = Some(lvl);
             }
@@ -596,10 +954,13 @@ impl App {
                     2 => "mode_uhd",
                     _ => "mode_hd",
                 });
+                settings_changed = true;
             }
             if hud_action.toggle_cel {
                 self.cel_mode = !self.cel_mode;
-                self.prof_events.push(if self.cel_mode { "cel_on" } else { "cel_off" });
+                self.prof_events
+                    .push(if self.cel_mode { "cel_on" } else { "cel_off" });
+                settings_changed = true;
             }
             if hud_action.toggle_prof {
                 self.prof_show = !self.prof_show;
@@ -613,22 +974,40 @@ impl App {
         } else {
             None
         };
+        if settings_changed {
+            self.save_persisted_settings();
+        }
         let egui_elapsed = Instant::now().duration_since(t_egui).as_secs_f32() * 1000.0;
 
-        let renderer = match &mut self.renderer { Some(r) => r, None => return };
+        let renderer = match &mut self.renderer {
+            Some(r) => r,
+            None => return,
+        };
         let scale = window.scale_factor() as f32;
         let (w, h) = renderer.surface_size();
 
         let level_seed = self.current_level_id as f32;
         renderer.highlight_hole = self.highlight_hole;
-        let mut frame = match renderer.begin_frame(self.time, self.drag_state.is_some(), victory_time, level_seed, self.render_mode as u32, self.cel_mode) {
+        let mut frame = match renderer.begin_frame(
+            self.time,
+            self.drag_state.is_some(),
+            victory_time,
+            level_seed,
+            self.render_mode as u32,
+            self.cel_mode,
+        ) {
             Some(f) => f,
             None => return,
         };
 
         {
-            if let (Some((egui_output, egui_ctx)), Some(egui_rend)) = (egui_output, self.egui_renderer.as_mut()) {
-                let sd = egui_wgpu::ScreenDescriptor { size_in_pixels: [w, h], pixels_per_point: scale };
+            if let (Some((egui_output, egui_ctx)), Some(egui_rend)) =
+                (egui_output, self.egui_renderer.as_mut())
+            {
+                let sd = egui_wgpu::ScreenDescriptor {
+                    size_in_pixels: [w, h],
+                    pixels_per_point: scale,
+                };
                 let prims = egui_ctx.tessellate(egui_output.shapes, scale);
                 let dev = renderer.device();
                 let q = renderer.queue();
@@ -636,15 +1015,23 @@ impl App {
                     egui_rend.update_texture(dev, q, *id, delta);
                 }
                 egui_rend.update_buffers(dev, q, &mut frame.encoder, &prims, &sd);
-                let mut pass = frame.encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    label: Some("egui_pass"),
-                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                        view: &frame.screen_view, resolve_target: None,
-                        ops: wgpu::Operations { load: wgpu::LoadOp::Load, store: wgpu::StoreOp::Store },
-                    })],
-                    depth_stencil_attachment: None, timestamp_writes: None, occlusion_query_set: None,
-                })
-                .forget_lifetime();
+                let mut pass = frame
+                    .encoder
+                    .begin_render_pass(&wgpu::RenderPassDescriptor {
+                        label: Some("egui_pass"),
+                        color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                            view: &frame.screen_view,
+                            resolve_target: None,
+                            ops: wgpu::Operations {
+                                load: wgpu::LoadOp::Load,
+                                store: wgpu::StoreOp::Store,
+                            },
+                        })],
+                        depth_stencil_attachment: None,
+                        timestamp_writes: None,
+                        occlusion_query_set: None,
+                    })
+                    .forget_lifetime();
                 egui_rend.render(&mut pass, &prims, &sd);
                 drop(pass);
                 for id in &egui_output.textures_delta.free {
@@ -686,8 +1073,13 @@ impl App {
             let rw = ((sw as f32 * rscale) as u32).max(1);
             let rh = ((sh as f32 * rscale) as u32).max(1);
             let df = &renderer.draw_flags;
-            let tsm_letter = match df.table_shadow_mode { 0 => "P", 1 => "L", _ => "N" };
-            let skip = format!("{}{}{}{}",
+            let tsm_letter = match df.table_shadow_mode {
+                0 => "P",
+                1 => "L",
+                _ => "N",
+            };
+            let skip = format!(
+                "{}{}{}{}",
                 if df.skip_table { "T" } else { "" },
                 if df.skip_holes { "H" } else { "" },
                 if df.skip_ropes { "R" } else { "" },
@@ -739,6 +1131,7 @@ fn fit_camera(
     holes: &[glam::Vec2],
     hole_radius: f32,
     aspect: f32,
+    max_elevation: f32,
 ) {
     if holes.is_empty() {
         return;
@@ -761,14 +1154,22 @@ fn fit_camera(
 
     let half_h_from_height = content_h * 0.5;
     let half_h_from_width = (content_w * 0.5) / aspect.max(0.01);
-    let required_half_h = half_h_from_height.max(half_h_from_width) * 1.2;
+    let elevation_padding = if max_elevation > 0.01 {
+        max_elevation * 1.5
+    } else {
+        0.0
+    };
+    let required_half_h = half_h_from_height.max(half_h_from_width) * 1.2 + elevation_padding;
     camera.ortho_half_height = required_half_h;
     camera.center = glam::Vec3::new(center_x, center_y, 0.0);
-
-    let half_fov = (59.0f32 / 2.0).to_radians();
-    let dist_from_h = required_half_h / half_fov.tan();
-    let dist_from_w = (content_w * 0.5 * 1.2) / (half_fov.tan() * aspect.max(0.01));
-    camera.distance = dist_from_h.max(dist_from_w).max(1.0);
+    camera.orbit_angle = 0.0;
+    if max_elevation > 0.01 && camera.tilt_angle < 0.15 {
+        camera.tilt_angle = 0.25;
+    } else {
+        camera.tilt_angle = 0.0;
+    }
+    camera.distance = 2.8;
+    camera.perspective_blend = 0.0;
 }
 
 impl App {
@@ -782,23 +1183,42 @@ impl App {
         let mut all_indices: Vec<u32> = Vec::new();
         let mut base_vertex: u32 = 0;
 
-        let rope_scale = self.renderer.as_ref()
+        let rope_scale = self
+            .renderer
+            .as_ref()
             .map(|r| r.lighting.rope_radius_scale)
-            .unwrap_or(0.871);
+            .unwrap_or(1.062);
         let rope_visual_mul = 1.3 * rope_scale;
+        let (profile_segments, hole_radius_scale, cap_segments) = self
+            .renderer
+            .as_ref()
+            .map(|r| {
+                (
+                    r.visual.profile_segments,
+                    r.visual.hole_radius_scale,
+                    r.cap.segments,
+                )
+            })
+            .unwrap_or((10, 0.734, 12));
 
         let mut all_rope_points: Vec<&[glam::Vec3]> = Vec::new();
         let mut all_rope_radii_scaled: Vec<f32> = Vec::new();
         for rope_index in 0..self.rope_endpoints.len() {
-            if rope_index >= sim.bands.len() || !sim.bands[rope_index].active
-                || (sim.bands[rope_index].fade_out == 0.0 && self.rope_endpoints[rope_index].0 == usize::MAX)
+            if rope_index >= sim.bands.len()
+                || !sim.bands[rope_index].active
+                || (sim.bands[rope_index].fade_out == 0.0
+                    && self.rope_endpoints[rope_index].0 == usize::MAX)
             {
                 all_rope_points.push(&[]);
                 all_rope_radii_scaled.push(0.0);
                 continue;
             }
             all_rope_points.push(&sim.bands[rope_index].positions);
-            let r = if rope_index < self.rope_radii.len() { self.rope_radii[rope_index] } else { 0.038 };
+            let r = if rope_index < self.rope_radii.len() {
+                self.rope_radii[rope_index]
+            } else {
+                0.038
+            };
             all_rope_radii_scaled.push(r * rope_visual_mul);
         }
 
@@ -825,7 +1245,9 @@ impl App {
 
             let mut contact_points: Vec<glam::Vec2> = Vec::new();
             for other_idx in 0..all_rope_points.len() {
-                if other_idx == rope_index || all_rope_points[other_idx].is_empty() { continue; }
+                if other_idx == rope_index || all_rope_points[other_idx].is_empty() {
+                    continue;
+                }
                 let other_pts = all_rope_points[other_idx];
                 let rj = all_rope_radii_scaled[other_idx];
                 let threshold = (visual_radius + rj) * 1.5;
@@ -836,7 +1258,9 @@ impl App {
                     let mut min_d2 = f32::MAX;
                     for p in &band.positions {
                         let d2 = (glam::Vec2::new(p.x, p.y) - mid2).length_squared();
-                        if d2 < min_d2 { min_d2 = d2; }
+                        if d2 < min_d2 {
+                            min_d2 = d2;
+                        }
                     }
                     if min_d2 < threshold_sq {
                         contact_points.push(mid2);
@@ -844,11 +1268,69 @@ impl App {
                 }
             }
 
-            let rest_length = band.segment_length * (band.positions.len() as f32 - 1.0).max(1.0);
+            // Clip positions during suck animation (hide consumed particles below board)
+            let visible_positions: Vec<glam::Vec3>;
+            let render_positions: &[glam::Vec3] = if band.fade_out > 0.0 && band.suck_hole.is_some()
+            {
+                let pts = &band.positions;
+                let n = pts.len();
+                let clip_z = -visual_radius * 1.5;
+                let mut lo = 0;
+                let mut hi = n as i32 - 1;
+                while lo < n && pts[lo].z < clip_z {
+                    lo += 1;
+                }
+                while hi >= 0 && pts[hi as usize].z < clip_z {
+                    hi -= 1;
+                }
+                if hi < 0 {
+                    continue;
+                }
+                let hi = hi as usize;
+                if hi > lo {
+                    let mut clipped: Vec<glam::Vec3> = pts[lo..=hi].to_vec();
+                    let sink_z = -visual_radius * 2.5;
+                    if lo > 0 {
+                        if let Some(sh) = band.suck_hole {
+                            if let Some(level) = &self.level {
+                                if sh < level.holes.len() {
+                                    let h = &level.holes[sh];
+                                    clipped.insert(
+                                        0,
+                                        glam::Vec3::new(h.x_position, h.y_position, sink_z),
+                                    );
+                                }
+                            }
+                        }
+                    }
+                    if hi < n - 1 {
+                        let tail_h = band.suck_tail_hole.or(band.suck_hole);
+                        if let Some(th) = tail_h {
+                            if let Some(level) = &self.level {
+                                if th < level.holes.len() {
+                                    let h = &level.holes[th];
+                                    clipped.push(glam::Vec3::new(
+                                        h.x_position,
+                                        h.y_position,
+                                        sink_z,
+                                    ));
+                                }
+                            }
+                        }
+                    }
+                    visible_positions = clipped;
+                    &visible_positions
+                } else {
+                    continue;
+                }
+            } else {
+                &band.positions
+            };
 
-            let prof_segs = if self.render_mode == 0 { 6 } else { 8 };
+            let rest_length = band.segment_length * (render_positions.len() as f32 - 1.0).max(1.0);
+
             let mesh = rope_mesh::build_rect(
-                &band.positions,
+                render_positions,
                 visual_radius,
                 color,
                 &[],
@@ -862,10 +1344,14 @@ impl App {
                 None,
                 band.fade_out,
                 rope_index,
-                prof_segs,
+                profile_segments,
                 self.square_cross_section,
                 &contact_points,
                 visual_radius,
+                self.renderer
+                    .as_ref()
+                    .map(|r| r.visual.stretch_thinning)
+                    .unwrap_or(0.5),
             );
 
             for idx in &mesh.indices {
@@ -876,28 +1362,42 @@ impl App {
 
             if let Some(level) = &self.level {
                 let (start_hole, end_hole) = self.rope_endpoints[rope_index];
-                let dragging_start = self.drag_state.as_ref()
+                let dragging_start = self
+                    .drag_state
+                    .as_ref()
                     .map_or(false, |d| d.rope_index == rope_index && d.end_index == 0);
-                let dragging_end = self.drag_state.as_ref()
+                let dragging_end = self
+                    .drag_state
+                    .as_ref()
                     .map_or(false, |d| d.rope_index == rope_index && d.end_index == 1);
-                let hole_r = level.hole_radius;
+                let hole_r = level.hole_radius * hole_radius_scale;
                 let holes = &level.holes;
 
                 if !self.square_cross_section {
                     let start_pos = if dragging_start {
                         band.positions.first().copied().unwrap_or(glam::Vec3::ZERO)
                     } else if start_hole < holes.len() {
-                        let hc = holes[start_hole].to_vec2();
-                        glam::Vec3::new(hc.x, hc.y, 0.0)
+                        glam::Vec3::new(
+                            holes[start_hole].x_position,
+                            holes[start_hole].y_position,
+                            holes[start_hole].z_position,
+                        )
                     } else {
                         glam::Vec3::ZERO
                     };
-                    let plug_segs = if self.cel_mode { 8 } else { 20 };
+                    let plug_segs = cap_segments;
                     if start_hole < holes.len() || dragging_start {
                         let plug = rope_mesh::build_plug(
-                            start_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                            start_pos,
+                            hole_r,
+                            color,
+                            rope_index,
+                            band.fade_out,
+                            plug_segs,
                         );
-                        for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                        for idx in &plug.indices {
+                            all_indices.push(idx + base_vertex);
+                        }
                         all_vertices.extend_from_slice(&plug.vertices);
                         base_vertex += plug.vertices.len() as u32;
                     }
@@ -905,16 +1405,26 @@ impl App {
                     let end_pos = if dragging_end {
                         band.positions.last().copied().unwrap_or(glam::Vec3::ZERO)
                     } else if end_hole < holes.len() {
-                        let hc = holes[end_hole].to_vec2();
-                        glam::Vec3::new(hc.x, hc.y, 0.0)
+                        glam::Vec3::new(
+                            holes[end_hole].x_position,
+                            holes[end_hole].y_position,
+                            holes[end_hole].z_position,
+                        )
                     } else {
                         glam::Vec3::ZERO
                     };
                     if end_hole < holes.len() || dragging_end {
                         let plug = rope_mesh::build_plug(
-                            end_pos, hole_r, color, rope_index, band.fade_out, plug_segs,
+                            end_pos,
+                            hole_r,
+                            color,
+                            rope_index,
+                            band.fade_out,
+                            plug_segs,
                         );
-                        for idx in &plug.indices { all_indices.push(idx + base_vertex); }
+                        for idx in &plug.indices {
+                            all_indices.push(idx + base_vertex);
+                        }
                         all_vertices.extend_from_slice(&plug.vertices);
                         base_vertex += plug.vertices.len() as u32;
                     }
@@ -923,13 +1433,16 @@ impl App {
         }
 
         for (ci, cband) in self.celebration_bands.iter().enumerate() {
-            if cband.positions.len() < 2 { continue; }
+            if cband.positions.len() < 2 {
+                continue;
+            }
             let color = glam::Vec3::from_array(cband.color);
             let visual_radius = cband.radius * 1.3;
             let rest_length = cband.segment_length * (cband.positions.len() as f32 - 1.0).max(1.0);
-            let cross_section = uzls_cross::level::definition::CrossSection::Circular { radius: cband.radius };
+            let cross_section = uzls_cross::level::definition::CrossSection::Circular {
+                radius: cband.radius,
+            };
 
-            let prof_segs = if self.render_mode == 0 { 6 } else { 8 };
             let mesh = rope_mesh::build_rect(
                 &cband.positions,
                 visual_radius,
@@ -945,10 +1458,14 @@ impl App {
                 None,
                 0.0,
                 1000 + ci,
-                prof_segs,
+                profile_segments,
                 false,
                 &[],
                 0.0,
+                self.renderer
+                    .as_ref()
+                    .map(|r| r.visual.stretch_thinning)
+                    .unwrap_or(0.5),
             );
 
             for idx in &mesh.indices {
@@ -956,6 +1473,18 @@ impl App {
             }
             all_vertices.extend_from_slice(&mesh.vertices);
             base_vertex += mesh.vertices.len() as u32;
+
+            // Celebration band plug at hole
+            if let Some(level) = &self.level {
+                let hole_r = level.hole_radius * hole_radius_scale;
+                let pos = glam::Vec3::new(cband.hole_pos.x, cband.hole_pos.y, 0.0);
+                let plug = rope_mesh::build_plug(pos, hole_r, color, 1000 + ci, 0.0, cap_segments);
+                for idx in &plug.indices {
+                    all_indices.push(idx + base_vertex);
+                }
+                all_vertices.extend_from_slice(&plug.vertices);
+                base_vertex += plug.vertices.len() as u32;
+            }
         }
 
         let table_shadow_mode = self
@@ -963,7 +1492,8 @@ impl App {
             .as_ref()
             .map(|r| r.draw_flags.table_shadow_mode)
             .unwrap_or(0);
-        let need_shadow_segments = !self.cel_mode && (self.render_mode > 0 || table_shadow_mode == 1);
+        let need_shadow_segments =
+            !self.cel_mode && (self.render_mode > 0 || table_shadow_mode == 1);
 
         self.prof_rope_verts = all_vertices.len() as u32;
         self.prof_rope_tris = all_indices.len() as u32 / 3;
@@ -980,8 +1510,12 @@ impl App {
                     continue;
                 }
                 let band = &sim.bands[rope_index];
-                if band.fade_out > 0.5 { continue; }
-                if self.rope_endpoints[rope_index].0 == usize::MAX { continue; }
+                if band.fade_out > 0.5 {
+                    continue;
+                }
+                if self.rope_endpoints[rope_index].0 == usize::MAX {
+                    continue;
+                }
 
                 let radius = if rope_index < self.rope_radii.len() {
                     self.rope_radii[rope_index]
@@ -989,14 +1523,19 @@ impl App {
                     0.038
                 };
                 let pts = &band.positions;
-                if pts.len() < 2 { continue; }
+                if pts.len() < 2 {
+                    continue;
+                }
                 let step = if pts.len() > 12 { 4 } else { 1 };
                 let mut i = 0;
                 while i < pts.len() - 1 {
                     let next = (i + step).min(pts.len() - 1);
                     let az = pts[i].z;
                     let bz = pts[next].z;
-                    if az <= 0.0 && bz <= 0.0 { i = next; continue; }
+                    if az <= 0.0 && bz <= 0.0 {
+                        i = next;
+                        continue;
+                    }
                     let mut a = pts[i];
                     let mut b = pts[next];
                     if a.z < 0.0 {
@@ -1009,8 +1548,14 @@ impl App {
                         b.z = 0.0;
                     }
                     shadow_segs.push(uzls_cross::renderer::frame_types::ShadowSegment {
-                        ax: a.x, ay: a.y, az: a.z, radius,
-                        bx: b.x, by: b.y, bz: b.z, rope_id: rope_index as f32,
+                        ax: a.x,
+                        ay: a.y,
+                        az: a.z,
+                        radius,
+                        bx: b.x,
+                        by: b.y,
+                        bz: b.z,
+                        rope_id: rope_index as f32,
                     });
                     i = next;
                 }
@@ -1024,46 +1569,61 @@ impl App {
     }
 
     fn check_win(&mut self) {
-        let sim = match &self.simulator {
-            Some(s) => s,
-            None => return,
-        };
-        let untangled = sim.find_untangled_ropes();
-        if !untangled.is_empty() {
-            self.prof_events.push("untangle");
-            if let Some(audio) = &self.audio {
-                audio.play_vanish();
-            }
-            for &rope_index in &untangled {
+        let mut removed = true;
+        while removed {
+            removed = false;
+            for rope_index in 0..self.rope_endpoints.len() {
+                if self.rope_endpoints[rope_index].0 == usize::MAX {
+                    continue;
+                }
+                let should_fade = match &self.simulator {
+                    Some(sim) => {
+                        if rope_index >= sim.bands.len() {
+                            false
+                        } else {
+                            sim.bands[rope_index].fade_out == 0.0
+                                && sim.is_rope_untangled(rope_index)
+                        }
+                    }
+                    None => false,
+                };
+                if !should_fade {
+                    continue;
+                }
                 if let Some(sim) = &mut self.simulator {
                     if rope_index < sim.bands.len() {
-                        let pin_s = sim.bands[rope_index].pin_start;
-                        let pin_e = sim.bands[rope_index].pin_end;
-                        let suck_target = pin_s.or(pin_e).unwrap_or(0);
-                        let suck_from_end: usize = if pin_s.is_some() { 1 } else { 0 };
-                        sim.bands[rope_index].suck_hole = Some(suck_target);
-                        sim.bands[rope_index].suck_from_end = suck_from_end;
-                        sim.bands[rope_index].suck_consumed = 0.0;
-                        sim.bands[rope_index].fade_out = 0.001;
-                        sim.bands[rope_index].pin_start = None;
-                        sim.bands[rope_index].pin_end = None;
+                        let (start_hole, end_hole) = self.rope_endpoints[rope_index];
+                        let fallback_start_hole = (start_hole != usize::MAX).then_some(start_hole);
+                        let fallback_end_hole = (end_hole != usize::MAX).then_some(end_hole);
+                        sim.start_fade_out(rope_index, fallback_start_hole, fallback_end_hole);
                     }
                 }
-                if rope_index < self.rope_endpoints.len() {
-                    let (s, e) = self.rope_endpoints[rope_index];
-                    if s < self.hole_occupied.len() { self.hole_occupied[s] = false; }
-                    if e < self.hole_occupied.len() { self.hole_occupied[e] = false; }
-                    self.rope_endpoints[rope_index] = (usize::MAX, usize::MAX);
+                let (s, e) = self.rope_endpoints[rope_index];
+                if s < self.hole_occupied.len() {
+                    self.hole_occupied[s] = false;
                 }
+                if e < self.hole_occupied.len() {
+                    self.hole_occupied[e] = false;
+                }
+                self.rope_endpoints[rope_index] = (usize::MAX, usize::MAX);
+                removed = true;
+                self.prof_events.push("untangle");
+                if let Some(audio) = &self.audio {
+                    audio.play_vanish();
+                }
+                break;
             }
-
-            let _all_done = self.rope_endpoints.iter().all(|&(s, _)| s == usize::MAX);
         }
     }
 }
 
 impl App {
-    fn finish_init_with_event_loop(&mut self, window: Arc<Window>, renderer: GpuRenderer, event_loop: &ActiveEventLoop) {
+    fn finish_init_with_event_loop(
+        &mut self,
+        window: Arc<Window>,
+        renderer: GpuRenderer,
+        event_loop: &ActiveEventLoop,
+    ) {
         let egui_ctx = egui::Context::default();
         let egui_state = egui_winit::State::new(
             egui_ctx,
@@ -1073,20 +1633,22 @@ impl App {
             None,
             None,
         );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            renderer.device(),
-            renderer.surface_format(),
-            None,
-            1,
-            false,
-        );
+        let egui_renderer =
+            egui_wgpu::Renderer::new(renderer.device(), renderer.surface_format(), None, 1, false);
 
         self.egui_state = Some(egui_state);
         self.egui_renderer = Some(egui_renderer);
         self.window = Some(window);
         self.renderer = Some(renderer);
+        if let Some(r) = &mut self.renderer {
+            r.set_render_scale(render_mode_scale(self.render_mode));
+        }
+        self.load_persisted_settings();
+        if let Some(r) = &mut self.renderer {
+            r.visual.square_cross_section = self.square_cross_section;
+        }
         self.init_done = true;
-        self.load_level(load_level_from_storage().unwrap_or(49));
+        self.load_level(load_level_from_storage().unwrap_or(1));
     }
 
     fn finish_init_standalone(&mut self, renderer: GpuRenderer) {
@@ -1100,17 +1662,19 @@ impl App {
             None,
             None,
         );
-        let egui_renderer = egui_wgpu::Renderer::new(
-            renderer.device(),
-            renderer.surface_format(),
-            None,
-            1,
-            false,
-        );
+        let egui_renderer =
+            egui_wgpu::Renderer::new(renderer.device(), renderer.surface_format(), None, 1, false);
 
         self.egui_state = Some(egui_state);
         self.egui_renderer = Some(egui_renderer);
         self.renderer = Some(renderer);
+        if let Some(r) = &mut self.renderer {
+            r.set_render_scale(render_mode_scale(self.render_mode));
+        }
+        self.load_persisted_settings();
+        if let Some(r) = &mut self.renderer {
+            r.visual.square_cross_section = self.square_cross_section;
+        }
         self.init_done = true;
 
         let size = window.inner_size();
@@ -1120,7 +1684,7 @@ impl App {
             }
         }
 
-        self.load_level(load_level_from_storage().unwrap_or(49));
+        self.load_level(load_level_from_storage().unwrap_or(1));
     }
 }
 
@@ -1144,7 +1708,8 @@ impl ApplicationHandler for App {
             let inner_h = web_window.inner_height().unwrap().as_f64().unwrap();
             canvas.set_width((inner_w * dpr) as u32);
             canvas.set_height((inner_h * dpr) as u32);
-            web_window.document()
+            web_window
+                .document()
                 .and_then(|doc| doc.body())
                 .map(|body| body.append_child(&canvas).unwrap());
 
@@ -1189,7 +1754,18 @@ impl ApplicationHandler for App {
                     if let Some(level) = &self.level {
                         let hole_positions = level.hole_positions();
                         let aspect = size.width as f32 / size.height.max(1) as f32;
-                        fit_camera(&mut renderer.camera, &hole_positions, level.hole_radius, aspect);
+                        let max_elevation = level
+                            .holes
+                            .iter()
+                            .map(|h| h.z_position)
+                            .fold(0.0_f32, f32::max);
+                        fit_camera(
+                            &mut renderer.camera,
+                            &hole_positions,
+                            level.hole_radius,
+                            aspect,
+                            max_elevation,
+                        );
                     }
                 }
             }
@@ -1214,18 +1790,31 @@ impl ApplicationHandler for App {
                             match code {
                                 winit::keyboard::KeyCode::Digit1 => {
                                     r.draw_flags.skip_table = !r.draw_flags.skip_table;
-                                    self.prof_events.push(if r.draw_flags.skip_table { "table_off" } else { "table_on" });
+                                    self.prof_events.push(if r.draw_flags.skip_table {
+                                        "table_off"
+                                    } else {
+                                        "table_on"
+                                    });
                                 }
                                 winit::keyboard::KeyCode::Digit2 => {
                                     r.draw_flags.skip_holes = !r.draw_flags.skip_holes;
-                                    self.prof_events.push(if r.draw_flags.skip_holes { "holes_off" } else { "holes_on" });
+                                    self.prof_events.push(if r.draw_flags.skip_holes {
+                                        "holes_off"
+                                    } else {
+                                        "holes_on"
+                                    });
                                 }
                                 winit::keyboard::KeyCode::Digit3 => {
                                     r.draw_flags.skip_ropes = !r.draw_flags.skip_ropes;
-                                    self.prof_events.push(if r.draw_flags.skip_ropes { "ropes_off" } else { "ropes_on" });
+                                    self.prof_events.push(if r.draw_flags.skip_ropes {
+                                        "ropes_off"
+                                    } else {
+                                        "ropes_on"
+                                    });
                                 }
                                 winit::keyboard::KeyCode::Digit4 => {
-                                    r.draw_flags.table_shadow_mode = (r.draw_flags.table_shadow_mode + 1) % 3;
+                                    r.draw_flags.table_shadow_mode =
+                                        (r.draw_flags.table_shadow_mode + 1) % 3;
                                     self.prof_events.push(match r.draw_flags.table_shadow_mode {
                                         0 => "tshadow_pcf",
                                         1 => "tshadow_planar",
@@ -1257,12 +1846,12 @@ impl ApplicationHandler for App {
                 };
                 if let Some(renderer) = &mut self.renderer {
                     if self.shift_held {
-                        renderer.camera.tilt_angle = (renderer.camera.tilt_angle + scroll * 0.05)
-                            .clamp(0.0, 1.2);
+                        renderer.camera.tilt_angle =
+                            (renderer.camera.tilt_angle + scroll * 0.05).clamp(0.0, 1.2);
                     } else {
                         let factor = 1.0 - scroll * 0.1;
-                        renderer.camera.ortho_half_height = (renderer.camera.ortho_half_height * factor)
-                            .clamp(0.5, 12.0);
+                        renderer.camera.ortho_half_height =
+                            (renderer.camera.ortho_half_height * factor).clamp(0.5, 12.0);
                     }
                 }
             }
@@ -1270,52 +1859,46 @@ impl ApplicationHandler for App {
                 state,
                 button: winit::event::MouseButton::Right,
                 ..
-            } => {
-                match state {
-                    winit::event::ElementState::Pressed => {
-                        self.right_mouse_down = true;
-                        self.pan_last_pos = Some(self.last_cursor_pos);
-                    }
-                    winit::event::ElementState::Released => {
-                        self.right_mouse_down = false;
-                        self.pan_last_pos = None;
-                    }
+            } => match state {
+                winit::event::ElementState::Pressed => {
+                    self.right_mouse_down = true;
+                    self.pan_last_pos = Some(self.last_cursor_pos);
                 }
-            }
+                winit::event::ElementState::Released => {
+                    self.right_mouse_down = false;
+                    self.pan_last_pos = None;
+                }
+            },
             WindowEvent::MouseInput {
                 state,
                 button: winit::event::MouseButton::Middle,
                 ..
-            } => {
-                match state {
-                    winit::event::ElementState::Pressed => {
-                        self.middle_mouse_down = true;
-                        self.pan_last_pos = Some(self.last_cursor_pos);
-                    }
-                    winit::event::ElementState::Released => {
-                        self.middle_mouse_down = false;
-                        self.pan_last_pos = None;
-                    }
+            } => match state {
+                winit::event::ElementState::Pressed => {
+                    self.middle_mouse_down = true;
+                    self.pan_last_pos = Some(self.last_cursor_pos);
                 }
-            }
+                winit::event::ElementState::Released => {
+                    self.middle_mouse_down = false;
+                    self.pan_last_pos = None;
+                }
+            },
             WindowEvent::MouseInput {
                 state,
                 button: winit::event::MouseButton::Left,
                 ..
-            } => {
-                match state {
-                    winit::event::ElementState::Pressed => {
-                        if let Some(audio) = &mut self.audio {
-                            audio.ensure_context();
-                            audio.resume();
-                        }
-                        self.try_begin_drag(self.last_cursor_pos);
+            } => match state {
+                winit::event::ElementState::Pressed => {
+                    if let Some(audio) = &mut self.audio {
+                        audio.ensure_context();
+                        audio.resume();
                     }
-                    winit::event::ElementState::Released => {
-                        self.finish_drag(self.last_cursor_pos);
-                    }
+                    self.try_begin_drag(self.last_cursor_pos);
                 }
-            }
+                winit::event::ElementState::Released => {
+                    self.finish_drag(self.last_cursor_pos);
+                }
+            },
             WindowEvent::Touch(touch) => {
                 let pos = (touch.location.x as f32, touch.location.y as f32);
                 let id = touch.id;
@@ -1340,7 +1923,8 @@ impl ApplicationHandler for App {
                         self.active_touches.insert(id, pos);
 
                         if self.active_touches.len() >= 2 && self.touch_camera_active {
-                            let touches: Vec<(u64, (f32, f32))> = self.active_touches.iter().map(|(&k, &v)| (k, v)).collect();
+                            let touches: Vec<(u64, (f32, f32))> =
+                                self.active_touches.iter().map(|(&k, &v)| (k, v)).collect();
                             if touches.len() >= 2 {
                                 let (id_a, cur_a) = touches[0];
                                 let (_, cur_b) = touches[1];
@@ -1362,19 +1946,37 @@ impl ApplicationHandler for App {
 
                                         if prev_dist > 1.0 && cur_dist > 1.0 {
                                             let scale = prev_dist / cur_dist;
-                                            renderer.camera.ortho_half_height = (renderer.camera.ortho_half_height * scale).clamp(0.5, 12.0);
+                                            renderer.camera.ortho_half_height =
+                                                (renderer.camera.ortho_half_height * scale)
+                                                    .clamp(0.5, 12.0);
                                         }
 
                                         let prev_angle = prev_dy.atan2(prev_dx);
                                         let cur_angle = cur_dy.atan2(cur_dx);
                                         let mut d_angle = cur_angle - prev_angle;
-                                        if d_angle > std::f32::consts::PI { d_angle -= 2.0 * std::f32::consts::PI; }
-                                        if d_angle < -std::f32::consts::PI { d_angle += 2.0 * std::f32::consts::PI; }
+                                        if d_angle > std::f32::consts::PI {
+                                            d_angle -= 2.0 * std::f32::consts::PI;
+                                        }
+                                        if d_angle < -std::f32::consts::PI {
+                                            d_angle += 2.0 * std::f32::consts::PI;
+                                        }
                                         renderer.camera.orbit_angle -= d_angle;
 
-                                        let mid_prev = ((my_prev.0 + other_pos.0) * 0.5, (my_prev.1 + other_pos.1) * 0.5);
-                                        let mid_cur = ((my_cur.0 + other_pos.0) * 0.5, (my_cur.1 + other_pos.1) * 0.5);
-                                        input::apply_camera_pan(&mut renderer.camera, mid_prev, mid_cur, sw, sh);
+                                        let mid_prev = (
+                                            (my_prev.0 + other_pos.0) * 0.5,
+                                            (my_prev.1 + other_pos.1) * 0.5,
+                                        );
+                                        let mid_cur = (
+                                            (my_cur.0 + other_pos.0) * 0.5,
+                                            (my_cur.1 + other_pos.1) * 0.5,
+                                        );
+                                        input::apply_camera_pan(
+                                            &mut renderer.camera,
+                                            mid_prev,
+                                            mid_cur,
+                                            sw,
+                                            sh,
+                                        );
                                     }
                                 }
                             }

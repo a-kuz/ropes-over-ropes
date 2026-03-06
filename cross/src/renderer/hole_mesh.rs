@@ -39,15 +39,24 @@ pub fn build(segments: usize, inner_radius: f32, outer_radius: f32, depth: f32) 
         let i1 = ring_point(inner, a1, top_z);
 
         let base = vertices.len() as u16;
-        vertices.push(HoleVertex { position: o0, normal: up });
-        vertices.push(HoleVertex { position: o1, normal: up });
-        vertices.push(HoleVertex { position: i0, normal: up });
-        vertices.push(HoleVertex { position: i1, normal: up });
+        vertices.push(HoleVertex {
+            position: o0,
+            normal: up,
+        });
+        vertices.push(HoleVertex {
+            position: o1,
+            normal: up,
+        });
+        vertices.push(HoleVertex {
+            position: i0,
+            normal: up,
+        });
+        vertices.push(HoleVertex {
+            position: i1,
+            normal: up,
+        });
 
-        indices.extend_from_slice(&[
-            base, base + 1, base + 2,
-            base + 2, base + 1, base + 3,
-        ]);
+        indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
     }
 
     for seg_index in 0..seg_count {
@@ -63,21 +72,35 @@ pub fn build(segments: usize, inner_radius: f32, outer_radius: f32, depth: f32) 
         let n1 = Vec3::new(-a1.cos(), -a1.sin(), 0.0).normalize();
 
         let base = vertices.len() as u16;
-        vertices.push(HoleVertex { position: top0, normal: n0 });
-        vertices.push(HoleVertex { position: bot0, normal: n0 });
-        vertices.push(HoleVertex { position: top1, normal: n1 });
-        vertices.push(HoleVertex { position: bot1, normal: n1 });
+        vertices.push(HoleVertex {
+            position: top0,
+            normal: n0,
+        });
+        vertices.push(HoleVertex {
+            position: bot0,
+            normal: n0,
+        });
+        vertices.push(HoleVertex {
+            position: top1,
+            normal: n1,
+        });
+        vertices.push(HoleVertex {
+            position: bot1,
+            normal: n1,
+        });
 
-        indices.extend_from_slice(&[
-            base, base + 2, base + 1,
-            base + 1, base + 2, base + 3,
-        ]);
+        indices.extend_from_slice(&[base, base + 2, base + 1, base + 1, base + 2, base + 3]);
     }
 
     HoleMesh { vertices, indices }
 }
 
-pub fn build_square(inner_half: f32, outer_half: f32, depth: f32, segs_per_side: usize) -> HoleMesh {
+pub fn build_square(
+    inner_half: f32,
+    outer_half: f32,
+    depth: f32,
+    segs_per_side: usize,
+) -> HoleMesh {
     let ih = inner_half.max(0.01);
     let oh = outer_half.max(ih + 0.005);
     let d = depth.max(0.1);
@@ -90,16 +113,16 @@ pub fn build_square(inner_half: f32, outer_half: f32, depth: f32, segs_per_side:
     let top_z: f32 = 0.005;
 
     let corners_inner = [
-        Vec3::new( ih,  ih, top_z),
-        Vec3::new(-ih,  ih, top_z),
+        Vec3::new(ih, ih, top_z),
+        Vec3::new(-ih, ih, top_z),
         Vec3::new(-ih, -ih, top_z),
-        Vec3::new( ih, -ih, top_z),
+        Vec3::new(ih, -ih, top_z),
     ];
     let corners_outer = [
-        Vec3::new( oh,  oh, top_z),
-        Vec3::new(-oh,  oh, top_z),
+        Vec3::new(oh, oh, top_z),
+        Vec3::new(-oh, oh, top_z),
         Vec3::new(-oh, -oh, top_z),
-        Vec3::new( oh, -oh, top_z),
+        Vec3::new(oh, -oh, top_z),
     ];
 
     for side in 0..4 {
@@ -117,19 +140,31 @@ pub fn build_square(inner_half: f32, outer_half: f32, depth: f32, segs_per_side:
             let o1 = c0o + (c1o - c0o) * t1;
 
             let base = vertices.len() as u16;
-            vertices.push(HoleVertex { position: o0, normal: up });
-            vertices.push(HoleVertex { position: o1, normal: up });
-            vertices.push(HoleVertex { position: i0, normal: up });
-            vertices.push(HoleVertex { position: i1, normal: up });
-            indices.extend_from_slice(&[base, base+1, base+2, base+2, base+1, base+3]);
+            vertices.push(HoleVertex {
+                position: o0,
+                normal: up,
+            });
+            vertices.push(HoleVertex {
+                position: o1,
+                normal: up,
+            });
+            vertices.push(HoleVertex {
+                position: i0,
+                normal: up,
+            });
+            vertices.push(HoleVertex {
+                position: i1,
+                normal: up,
+            });
+            indices.extend_from_slice(&[base, base + 1, base + 2, base + 2, base + 1, base + 3]);
         }
     }
 
     let wall_normals = [
-        Vec3::new( 0.0,  1.0, 0.0),
-        Vec3::new(-1.0,  0.0, 0.0),
-        Vec3::new( 0.0, -1.0, 0.0),
-        Vec3::new( 1.0,  0.0, 0.0),
+        Vec3::new(0.0, 1.0, 0.0),
+        Vec3::new(-1.0, 0.0, 0.0),
+        Vec3::new(0.0, -1.0, 0.0),
+        Vec3::new(1.0, 0.0, 0.0),
     ];
 
     for side in 0..4 {
@@ -146,11 +181,23 @@ pub fn build_square(inner_half: f32, outer_half: f32, depth: f32, segs_per_side:
             let bot1 = Vec3::new(top1.x, top1.y, -d);
 
             let base = vertices.len() as u16;
-            vertices.push(HoleVertex { position: top0, normal: wn });
-            vertices.push(HoleVertex { position: bot0, normal: wn });
-            vertices.push(HoleVertex { position: top1, normal: wn });
-            vertices.push(HoleVertex { position: bot1, normal: wn });
-            indices.extend_from_slice(&[base, base+2, base+1, base+1, base+2, base+3]);
+            vertices.push(HoleVertex {
+                position: top0,
+                normal: wn,
+            });
+            vertices.push(HoleVertex {
+                position: bot0,
+                normal: wn,
+            });
+            vertices.push(HoleVertex {
+                position: top1,
+                normal: wn,
+            });
+            vertices.push(HoleVertex {
+                position: bot1,
+                normal: wn,
+            });
+            indices.extend_from_slice(&[base, base + 2, base + 1, base + 1, base + 2, base + 3]);
         }
     }
 

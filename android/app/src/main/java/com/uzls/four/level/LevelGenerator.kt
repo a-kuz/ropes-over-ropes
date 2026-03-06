@@ -29,7 +29,8 @@ object LevelGenerator {
         val maxRopes = maxOf(1, (holes.size - 3) / 2)
         val ropeCount = minOf(diff.ropeCount, maxRopes)
 
-        val ropePairs = pickStructuredPairs(holes, ropeCount, rng)
+        val shortCount = minOf(diff.shortRopeCount, ropeCount - 1)
+        val ropePairs = pickStructuredPairs(holes, ropeCount, shortCount, rng)
         val ropes = ropePairs.mapIndexed { i, pair ->
             LevelDefinition.Rope(
                 startHole = pair.first,
@@ -39,7 +40,7 @@ object LevelGenerator {
             )
         }
 
-        val actions = buildActions(ropes, holes, diff.totalDrags)
+        val actions = buildActions(ropes, holes, diff.totalDrags, shortCount)
 
         return LevelDefinition(
             id = levelId,
@@ -77,19 +78,21 @@ object LevelGenerator {
 
     private data class Difficulty(
         val ropeCount: Int,
-        val totalDrags: Int
+        val totalDrags: Int,
+        val shortRopeCount: Int
     )
 
     private fun difficulty(levelId: Int): Difficulty = when (levelId) {
-        in 1..2 -> Difficulty(ropeCount = 3, totalDrags = 3)
-        in 3..5 -> Difficulty(ropeCount = 4, totalDrags = 4)
-        in 6..9 -> Difficulty(ropeCount = 5, totalDrags = 6)
-        in 10..15 -> Difficulty(ropeCount = 6, totalDrags = 8)
-        in 16..25 -> Difficulty(ropeCount = 7, totalDrags = 10)
-        in 26..50 -> Difficulty(ropeCount = 8, totalDrags = 12 + (levelId - 25) / 5)
+        in 1..2 -> Difficulty(ropeCount = 3, totalDrags = 3, shortRopeCount = 0)
+        in 3..5 -> Difficulty(ropeCount = 4, totalDrags = 4, shortRopeCount = if (levelId >= 4) 2 else 0)
+        in 6..9 -> Difficulty(ropeCount = 5, totalDrags = 6, shortRopeCount = 3)
+        in 10..15 -> Difficulty(ropeCount = 6, totalDrags = 8, shortRopeCount = 4)
+        in 16..25 -> Difficulty(ropeCount = 7, totalDrags = 10, shortRopeCount = 5)
+        in 26..50 -> Difficulty(ropeCount = 8, totalDrags = 12 + (levelId - 25) / 5, shortRopeCount = 6)
         else -> Difficulty(
             ropeCount = minOf(10, 8 + (levelId - 50) / 25),
-            totalDrags = minOf(22, 16 + (levelId - 50) / 10)
+            totalDrags = minOf(22, 16 + (levelId - 50) / 10),
+            shortRopeCount = minOf(8, 6 + (levelId - 50) / 30)
         )
     }
 
@@ -130,7 +133,7 @@ object LevelGenerator {
     // MARK: - Rope pair selection
 
     private fun pickStructuredPairs(
-        holes: List<LevelDefinition.Vec2>, count: Int, rng: SeededRNG
+        holes: List<LevelDefinition.Vec2>, count: Int, shortCount: Int, rng: SeededRNG
     ): List<Pair<Int, Int>> {
         if (holes.size < 4) return emptyList()
 
@@ -144,9 +147,39 @@ object LevelGenerator {
         val offset = rng.next(sorted.size)
         val n = sorted.size
         val half = n / 2
+        val quarter = maxOf(1, n / 4)
 
         val pairs = mutableListOf<Pair<Int, Int>>()
         val usedHoles = mutableSetOf<Int>()
+
+        if (shortCount > 0) {
+            val sectorStart = offset % n
+            val sectorLen = minOf(quarter + shortCount, n / 2)
+
+            val sectorHoles = mutableListOf<Int>()
+            for (k in 0 until sectorLen) {
+                sectorHoles.add(sorted[(sectorStart + k) % n].idx)
+            }
+
+            val minShortDist = 0.3f
+            for (i in sectorHoles.indices) {
+                if (pairs.size >= shortCount) break
+                val a = sectorHoles[i]
+                if (a in usedHoles) continue
+                val shift = maxOf(2, minOf(quarter / 2, sectorHoles.size / 3))
+                for (delta in shift until sectorHoles.size) {
+                    val b = sectorHoles[(i + delta) % sectorHoles.size]
+                    if (b == a || b in usedHoles) continue
+                    val dx = holes[a].xPosition - holes[b].xPosition
+                    val dy = holes[a].yPosition - holes[b].yPosition
+                    if (sqrt(dx * dx + dy * dy) < minShortDist) continue
+                    pairs.add(Pair(a, b))
+                    usedHoles.add(a)
+                    usedHoles.add(b)
+                    break
+                }
+            }
+        }
 
         for (i in 0 until count) {
             if (pairs.size >= count) break
@@ -195,11 +228,33 @@ object LevelGenerator {
     private fun buildActions(
         ropes: List<LevelDefinition.Rope>,
         holes: List<LevelDefinition.Vec2>,
-        totalDrags: Int
+        totalDrags: Int,
+        shortCount: Int
     ): List<LevelDefinition.Action> {
         val actions = mutableListOf<LevelDefinition.Action>()
         val holeX = FloatArray(holes.size) { holes[it].xPosition }
         val holeY = FloatArray(holes.size) { holes[it].yPosition }
+
+        var shortCenterX = 0f
+        var shortCenterY = 0f
+        var shortRadius = 0f
+        if (shortCount > 0) {
+            var sx = 0f; var sy = 0f; var cnt = 0f
+            for (i in 0 until shortCount) {
+                sx += holeX[ropes[i].startHole] + holeX[ropes[i].endHole]
+                sy += holeY[ropes[i].startHole] + holeY[ropes[i].endHole]
+                cnt += 2f
+            }
+            shortCenterX = sx / cnt; shortCenterY = sy / cnt
+            var maxD = 0f
+            for (i in 0 until shortCount) {
+                for (h in intArrayOf(ropes[i].startHole, ropes[i].endHole)) {
+                    val dx = holeX[h] - shortCenterX; val dy = holeY[h] - shortCenterY
+                    maxD = maxOf(maxD, sqrt(dx * dx + dy * dy))
+                }
+            }
+            shortRadius = maxD + 0.35f
+        }
 
         for (i in ropes.indices) {
             actions.add(LevelDefinition.Action(type = "pin", ropeIndex = i, endIndex = 0, holeIndex = ropes[i].startHole))
@@ -213,7 +268,7 @@ object LevelGenerator {
             usedHoles.add(ep[1])
         }
 
-        fun tryDrag(ropeIdx: Int, endIdx: Int, targetRopeIdx: Int): Boolean {
+        fun tryDrag(ropeIdx: Int, endIdx: Int, targetRopeIdx: Int, unconstrained: Boolean = false): Boolean {
             val currentHole = endpoints[ropeIdx][endIdx]
             val anchorHole = endpoints[ropeIdx][1 - endIdx]
             val anchorX = holeX[anchorHole]
@@ -222,6 +277,7 @@ object LevelGenerator {
             val tSY = holeY[endpoints[targetRopeIdx][0]]
             val tEX = holeX[endpoints[targetRopeIdx][1]]
             val tEY = holeY[endpoints[targetRopeIdx][1]]
+            val isShort = !unconstrained && ropeIdx < shortCount
 
             val otherUsed = mutableSetOf<Int>()
             for (ri in ropes.indices) {
@@ -239,6 +295,10 @@ object LevelGenerator {
                 if (candidate in otherUsed) continue
                 val cX = holeX[candidate]
                 val cY = holeY[candidate]
+                if (isShort) {
+                    val dx = cX - shortCenterX; val dy = cY - shortCenterY
+                    if (sqrt(dx * dx + dy * dy) > shortRadius) continue
+                }
                 if (segmentsCross(anchorX, anchorY, cX, cY, tSX, tSY, tEX, tEY)) {
                     val midX = (tSX + tEX) * 0.5f
                     val midY = (tSY + tEY) * 0.5f
@@ -261,6 +321,18 @@ object LevelGenerator {
             return true
         }
 
+        if (shortCount >= 2) {
+            for (d in 0 until shortCount) {
+                val ropeIdx = d
+                for (targetIdx in 0 until shortCount) {
+                    if (targetIdx == ropeIdx) continue
+                    val endIdx = d % 2
+                    if (tryDrag(ropeIdx, endIdx, targetIdx)) break
+                    if (tryDrag(ropeIdx, 1 - endIdx, targetIdx)) break
+                }
+            }
+        }
+
         for (d in 0 until totalDrags) {
             val ropeIdx = d % ropes.size
             val targetRopeIdx = (ropeIdx + 1 + d / ropes.size) % ropes.size
@@ -271,7 +343,7 @@ object LevelGenerator {
             }
         }
 
-        for (attempt in 0 until ropes.size * 4) {
+        for (attempt in 0 until ropes.size * 8) {
             val crossings = ropeCrossings(endpoints, holeX, holeY)
             val isolated = (ropes.indices).filter { crossings[it] == 0 }
             if (isolated.isEmpty()) break
@@ -282,7 +354,41 @@ object LevelGenerator {
                 if (other == ropeIdx || fixed) continue
                 for (endIdx in 0..1) {
                     if (fixed) continue
-                    fixed = tryDrag(ropeIdx, endIdx, other)
+                    fixed = tryDrag(ropeIdx, endIdx, other, unconstrained = true)
+                }
+            }
+            if (!fixed) {
+                for (other in ropes.indices) {
+                    if (other == ropeIdx || fixed) continue
+                    for (endIdx in 0..1) {
+                        if (fixed) continue
+                        fixed = tryDrag(other, endIdx, ropeIdx, unconstrained = true)
+                    }
+                }
+            }
+            if (!fixed) {
+                val allUsed = mutableSetOf<Int>()
+                for (ep in endpoints) { allUsed.add(ep[0]); allUsed.add(ep[1]) }
+                val freeHoles = holes.indices.filter { it !in allUsed }
+                for (other in ropes.indices) {
+                    if (other == ropeIdx || fixed) continue
+                    val oSX = holeX[endpoints[other][0]]; val oSY = holeY[endpoints[other][0]]
+                    val oEX = holeX[endpoints[other][1]]; val oEY = holeY[endpoints[other][1]]
+                    for (h0 in freeHoles) {
+                        if (fixed) break
+                        for (h1 in freeHoles) {
+                            if (h1 == h0 || fixed) continue
+                            if (segmentsCross(holeX[h0], holeY[h0], holeX[h1], holeY[h1], oSX, oSY, oEX, oEY)) {
+                                val old0 = endpoints[ropeIdx][0]; val old1 = endpoints[ropeIdx][1]
+                                usedHoles.remove(old0); usedHoles.remove(old1)
+                                endpoints[ropeIdx][0] = h0; endpoints[ropeIdx][1] = h1
+                                usedHoles.add(h0); usedHoles.add(h1)
+                                actions.add(LevelDefinition.Action(type = "drag", ropeIndex = ropeIdx, endIndex = 0, holeIndex = h0))
+                                actions.add(LevelDefinition.Action(type = "drag", ropeIndex = ropeIdx, endIndex = 1, holeIndex = h1))
+                                fixed = true
+                            }
+                        }
+                    }
                 }
             }
         }

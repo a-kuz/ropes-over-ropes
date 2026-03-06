@@ -22,11 +22,14 @@ import com.uzls.four.game.Haptics
 fun GameScreen(viewModel: GameViewModel) {
     val currentLevel by viewModel.currentLevel.collectAsState()
     val fps by viewModel.fps.collectAsState()
+    val moveCount by viewModel.moveCount.collectAsState()
     val showComplete by viewModel.showLevelComplete.collectAsState()
     val showSettings by viewModel.showSettings.collectAsState()
+    val completionStars by viewModel.completionStars.collectAsState()
+    val completionPercentile by viewModel.completionPercentile.collectAsState()
+    val canUndo by viewModel.canUndo.collectAsState()
 
     Box(modifier = Modifier.fillMaxSize()) {
-        // GL Surface
         AndroidView(
             factory = { ctx ->
                 Haptics.init(ctx)
@@ -34,6 +37,8 @@ fun GameScreen(viewModel: GameViewModel) {
                     viewModel.renderer = view.gameRenderer
                     view.gameRenderer.onLevelComplete = { viewModel.onLevelComplete() }
                     view.gameRenderer.onFpsUpdate = { viewModel.updateFps(it) }
+                    view.gameRenderer.onMoveCountUpdate = { viewModel.updateMoveCount(it) }
+                    view.gameRenderer.onUndoStackChanged = { viewModel.updateCanUndo(it) }
                     viewModel.syncParamsToRenderer()
                     view.gameRenderer.pendingLevelId = currentLevel
                 }
@@ -41,54 +46,70 @@ fun GameScreen(viewModel: GameViewModel) {
             modifier = Modifier.fillMaxSize()
         )
 
-        // Top toolbar
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .statusBarsPadding()
-                .padding(horizontal = 12.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            // Restart
-            ToolbarButton(text = "↻") { viewModel.restartLevel() }
+        if (!showComplete) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .statusBarsPadding()
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                ToolbarButton(text = "\u21BB") { viewModel.restartLevel() }
+                ToolbarButton(text = "\u2299") { viewModel.resetCamera() }
+                ToolbarButton(text = "\u25C0", enabled = currentLevel > 1) { viewModel.prevLevel() }
 
-            // Previous level
-            ToolbarButton(text = "◀", enabled = currentLevel > 1) { viewModel.prevLevel() }
+                Text(
+                    text = "Level $currentLevel  ${fps.toInt()} fps",
+                    color = Color.White.copy(alpha = 0.8f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium,
+                    modifier = Modifier.weight(1f)
+                )
 
-            // Level display + FPS
+                ToolbarButton(text = "\u25B6", enabled = currentLevel < 200) { viewModel.nextLevel() }
+                ToolbarButton(text = "\u2699") { viewModel.toggleSettings() }
+            }
+
+            AnimatedVisibility(
+                visible = showSettings,
+                enter = slideInVertically() + fadeIn(),
+                exit = slideOutVertically() + fadeOut(),
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 52.dp)
+            ) {
+                SettingsPanel(viewModel)
+            }
+
+            Box(
+                modifier = Modifier
+                    .align(Alignment.BottomStart)
+                    .padding(start = 20.dp, bottom = 40.dp)
+            ) {
+                ToolbarButton(
+                    text = "\u21A9",
+                    enabled = canUndo
+                ) { viewModel.undo() }
+            }
+
             Text(
-                text = "Level $currentLevel  ${fps.toInt()} fps",
-                color = Color.White.copy(alpha = 0.8f),
-                fontSize = 14.sp,
+                text = "$moveCount",
+                color = Color.White.copy(alpha = 0.35f),
+                fontSize = 15.sp,
                 fontWeight = FontWeight.Medium,
-                modifier = Modifier.weight(1f)
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 20.dp, bottom = 48.dp)
             )
-
-            // Next level
-            ToolbarButton(text = "▶", enabled = currentLevel < 200) { viewModel.nextLevel() }
-
-            // Settings
-            ToolbarButton(text = "⚙") { viewModel.toggleSettings() }
         }
 
-        // Settings panel
-        AnimatedVisibility(
-            visible = showSettings,
-            enter = slideInVertically() + fadeIn(),
-            exit = slideOutVertically() + fadeOut(),
-            modifier = Modifier
-                .align(Alignment.TopCenter)
-                .statusBarsPadding()
-                .padding(top = 52.dp)
-        ) {
-            SettingsPanel(viewModel)
-        }
-
-        // Victory overlay
         if (showComplete) {
             VictoryOverlay(
                 level = currentLevel,
+                stars = completionStars,
+                percentile = completionPercentile,
                 onNextLevel = { viewModel.nextLevel() }
             )
         }

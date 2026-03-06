@@ -1,6 +1,6 @@
+use bytemuck;
 use std::borrow::Cow;
 use std::sync::Arc;
-use bytemuck;
 use wgpu;
 use wgpu::util::DeviceExt;
 
@@ -56,9 +56,11 @@ pub struct GpuRenderer {
     surface_config: wgpu::SurfaceConfiguration,
 
     table_pipeline: wgpu::RenderPipeline,
+    board_pipeline: wgpu::RenderPipeline,
     hole_pipeline: wgpu::RenderPipeline,
     rope_pipeline: wgpu::RenderPipeline,
     post_pipeline: wgpu::RenderPipeline,
+    shadow_board_pipeline: wgpu::RenderPipeline,
     shadow_rope_pipeline: wgpu::RenderPipeline,
     shadow_hole_pipeline: wgpu::RenderPipeline,
     planar_mask_pipeline: wgpu::ComputePipeline,
@@ -83,6 +85,8 @@ pub struct GpuRenderer {
     hole_instance_buffer: Option<wgpu::Buffer>,
     hole_vertex_buffer: Option<wgpu::Buffer>,
     hole_index_buffer: Option<wgpu::Buffer>,
+    board_vertex_buffer: Option<wgpu::Buffer>,
+    board_index_buffer: Option<wgpu::Buffer>,
     rope_vertex_buffer: Option<wgpu::Buffer>,
     rope_index_buffer: Option<wgpu::Buffer>,
     rope_vertex_capacity: usize,
@@ -109,8 +113,17 @@ pub struct GpuRenderer {
     noise_sampler: wgpu::Sampler,
     empty_bind_group: wgpu::BindGroup,
 
+    wood_baked_texture: wgpu::Texture,
+    wood_baked_view: wgpu::TextureView,
+    wood_baked_storage_view: wgpu::TextureView,
+    bake_wood_pipeline: wgpu::ComputePipeline,
+    bake_wood_bind_group_layout: wgpu::BindGroupLayout,
+    bake_wood_bind_group: wgpu::BindGroup,
+    pub needs_wood_bake: bool,
+
     hole_index_count: u32,
     hole_instance_count: u32,
+    board_index_count: u32,
     rope_index_count: u32,
 
     hole_mask_view: wgpu::TextureView,
@@ -121,6 +134,11 @@ pub struct GpuRenderer {
     pub render_scale: f32,
     pub rope_material: RopeMaterialSettings,
     pub lighting: LightingSettings,
+    pub visual: VisualSettings,
+    pub table: TableSettings,
+    pub cartoon: CartoonSettings,
+    pub cap: CapSettings,
+    pub worm: WormSettings,
     width: u32,
     height: u32,
 
@@ -132,6 +150,7 @@ pub struct GpuRenderer {
     pub gpu_timings: GpuTimings,
     timestamp_pending: bool,
     frame_index: u64,
+    surface_error_streak: u32,
     pub draw_flags: DrawFlags,
 }
 
@@ -142,11 +161,31 @@ fn rope_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
         array_stride: std::mem::size_of::<RopeVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 12, shader_location: 1 },
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 24, shader_location: 2 },
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x2, offset: 36, shader_location: 3 },
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x4, offset: 44, shader_location: 4 },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 12,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 24,
+                shader_location: 2,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 36,
+                shader_location: 3,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x4,
+                offset: 44,
+                shader_location: 4,
+            },
         ],
     }
 }
@@ -156,8 +195,40 @@ fn hole_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
         array_stride: std::mem::size_of::<HoleVertex>() as u64,
         step_mode: wgpu::VertexStepMode::Vertex,
         attributes: &[
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 0, shader_location: 0 },
-            wgpu::VertexAttribute { format: wgpu::VertexFormat::Float32x3, offset: 12, shader_location: 1 },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 12,
+                shader_location: 1,
+            },
+        ],
+    }
+}
+
+fn board_vertex_layout() -> wgpu::VertexBufferLayout<'static> {
+    wgpu::VertexBufferLayout {
+        array_stride: std::mem::size_of::<BoardVertex>() as u64,
+        step_mode: wgpu::VertexStepMode::Vertex,
+        attributes: &[
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 0,
+                shader_location: 0,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x3,
+                offset: 12,
+                shader_location: 1,
+            },
+            wgpu::VertexAttribute {
+                format: wgpu::VertexFormat::Float32x2,
+                offset: 24,
+                shader_location: 2,
+            },
         ],
     }
 }
@@ -168,7 +239,11 @@ fn create_depth_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> w
     device
         .create_texture(&wgpu::TextureDescriptor {
             label: Some(label),
-            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            size: wgpu::Extent3d {
+                width: w,
+                height: h,
+                depth_or_array_layers: 1,
+            },
             mip_level_count: 1,
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
@@ -179,10 +254,19 @@ fn create_depth_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> w
         .create_view(&wgpu::TextureViewDescriptor::default())
 }
 
-fn create_hdr_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_hdr_texture(
+    device: &wgpu::Device,
+    w: u32,
+    h: u32,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -196,10 +280,19 @@ fn create_hdr_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> (wg
     (tex, view)
 }
 
-fn create_planar_mask_texture(device: &wgpu::Device, w: u32, h: u32, label: &str) -> (wgpu::Texture, wgpu::TextureView) {
+fn create_planar_mask_texture(
+    device: &wgpu::Device,
+    w: u32,
+    h: u32,
+    label: &str,
+) -> (wgpu::Texture, wgpu::TextureView) {
     let tex = device.create_texture(&wgpu::TextureDescriptor {
         label: Some(label),
-        size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        size: wgpu::Extent3d {
+            width: w,
+            height: h,
+            depth_or_array_layers: 1,
+        },
         mip_level_count: 1,
         sample_count: 1,
         dimension: wgpu::TextureDimension::D2,
@@ -219,7 +312,9 @@ fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
         entries: &[
             wgpu::BindGroupLayoutEntry {
                 binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT | wgpu::ShaderStages::COMPUTE,
+                visibility: wgpu::ShaderStages::VERTEX
+                    | wgpu::ShaderStages::FRAGMENT
+                    | wgpu::ShaderStages::COMPUTE,
                 ty: wgpu::BindingType::Buffer {
                     ty: wgpu::BufferBindingType::Uniform,
                     has_dynamic_offset: false,
@@ -273,6 +368,16 @@ fn create_frame_bind_group_layout(device: &wgpu::Device) -> wgpu::BindGroupLayou
                 binding: 6,
                 visibility: wgpu::ShaderStages::FRAGMENT,
                 ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 7,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
                 count: None,
             },
         ],
@@ -401,18 +506,44 @@ fn build_frame_bind_group(
     planar_mask_view: &wgpu::TextureView,
     noise_view: &wgpu::TextureView,
     noise_sampler: &wgpu::Sampler,
+    wood_baked_view: &wgpu::TextureView,
 ) -> wgpu::BindGroup {
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         label: Some("frame_bind_group"),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: uniforms_buf.as_entire_binding() },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(shadow_view) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(shadow_sampler) },
-            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::Sampler(linear_sampler) },
-            wgpu::BindGroupEntry { binding: 4, resource: wgpu::BindingResource::TextureView(planar_mask_view) },
-            wgpu::BindGroupEntry { binding: 5, resource: wgpu::BindingResource::TextureView(noise_view) },
-            wgpu::BindGroupEntry { binding: 6, resource: wgpu::BindingResource::Sampler(noise_sampler) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: uniforms_buf.as_entire_binding(),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(shadow_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(shadow_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::Sampler(linear_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 4,
+                resource: wgpu::BindingResource::TextureView(planar_mask_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 5,
+                resource: wgpu::BindingResource::TextureView(noise_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 6,
+                resource: wgpu::BindingResource::Sampler(noise_sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 7,
+                resource: wgpu::BindingResource::TextureView(wood_baked_view),
+            },
         ],
     })
 }
@@ -429,10 +560,22 @@ fn build_post_bind_group(
         label: Some("post_bind_group"),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(hdr_view) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(bloom_view) },
-            wgpu::BindGroupEntry { binding: 2, resource: wgpu::BindingResource::Sampler(sampler) },
-            wgpu::BindGroupEntry { binding: 3, resource: wgpu::BindingResource::TextureView(depth_view) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(hdr_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(bloom_view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 3,
+                resource: wgpu::BindingResource::TextureView(depth_view),
+            },
         ],
     })
 }
@@ -448,8 +591,14 @@ fn build_bloom_bind_group(
         label: Some(label),
         layout,
         entries: &[
-            wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(src) },
-            wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::TextureView(dst) },
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(src),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::TextureView(dst),
+            },
         ],
     })
 }
@@ -500,7 +649,11 @@ fn build_render_pipeline(
         depth_stencil: depth_format.map(|fmt| wgpu::DepthStencilState {
             format: fmt,
             depth_write_enabled: depth_write,
-            depth_compare: if depth_write { wgpu::CompareFunction::LessEqual } else { wgpu::CompareFunction::Always },
+            depth_compare: if depth_write {
+                wgpu::CompareFunction::LessEqual
+            } else {
+                wgpu::CompareFunction::Always
+            },
             stencil: wgpu::StencilState::default(),
             bias: wgpu::DepthBiasState::default(),
         }),
@@ -531,7 +684,7 @@ fn build_shadow_pipeline(
         primitive: wgpu::PrimitiveState {
             topology: wgpu::PrimitiveTopology::TriangleList,
             front_face: wgpu::FrontFace::Ccw,
-            cull_mode: Some(wgpu::Face::Back),
+            cull_mode: None,
             ..Default::default()
         },
         depth_stencil: Some(wgpu::DepthStencilState {
@@ -539,11 +692,7 @@ fn build_shadow_pipeline(
             depth_write_enabled: true,
             depth_compare: wgpu::CompareFunction::Less,
             stencil: wgpu::StencilState::default(),
-            bias: wgpu::DepthBiasState {
-                constant: 1,
-                slope_scale: 1.0,
-                clamp: 0.0,
-            },
+            bias: wgpu::DepthBiasState::default(),
         }),
         multisample: wgpu::MultisampleState::default(),
         multiview: None,
@@ -595,16 +744,23 @@ impl GpuRenderer {
         }
 
         let (device, queue) = adapter
-            .request_device(&wgpu::DeviceDescriptor {
-                label: Some("uzls_device"),
-                required_features,
-                required_limits: wgpu::Limits::default(),
-                memory_hints: wgpu::MemoryHints::Performance,
-            }, None)
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    label: Some("uzls_device"),
+                    required_features,
+                    required_limits: wgpu::Limits::default(),
+                    memory_hints: wgpu::MemoryHints::Performance,
+                },
+                None,
+            )
             .await
             .expect("failed to create device");
 
-        let timestamp_period = if timestamp_supported { queue.get_timestamp_period() } else { 0.0 };
+        let timestamp_period = if timestamp_supported {
+            queue.get_timestamp_period()
+        } else {
+            0.0
+        };
 
         let surface_caps = surface.get_capabilities(&adapter);
         let surface_format = surface_caps
@@ -663,7 +819,11 @@ impl GpuRenderer {
             const GRID: u32 = 128;
             let tex = device.create_texture(&wgpu::TextureDescriptor {
                 label: Some("noise_texture"),
-                size: wgpu::Extent3d { width: NOISE_SIZE, height: NOISE_SIZE, depth_or_array_layers: 1 },
+                size: wgpu::Extent3d {
+                    width: NOISE_SIZE,
+                    height: NOISE_SIZE,
+                    depth_or_array_layers: 1,
+                },
                 mip_level_count: 1,
                 sample_count: 1,
                 dimension: wgpu::TextureDimension::D2,
@@ -681,7 +841,9 @@ impl GpuRenderer {
                 let wy = ((gy % sz as i32) + sz as i32) as u32 % sz;
                 grid[((wy * sz + wx) * 2 + ch as u32) as usize]
             }
-            fn smoothstep_f(t: f32) -> f32 { t * t * (3.0 - 2.0 * t) }
+            fn smoothstep_f(t: f32) -> f32 {
+                t * t * (3.0 - 2.0 * t)
+            }
 
             fn value_noise(grid: &[f32], x: f32, y: f32, freq: u32, sz: u32, ch: usize) -> f32 {
                 let fx = x * freq as f32;
@@ -724,28 +886,44 @@ impl GpuRenderer {
                 }
             }
             queue.write_texture(
-                wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+                wgpu::TexelCopyTextureInfo {
+                    texture: &tex,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
                 &pixels,
-                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(NOISE_SIZE * 2), rows_per_image: None },
-                wgpu::Extent3d { width: NOISE_SIZE, height: NOISE_SIZE, depth_or_array_layers: 1 },
+                wgpu::TexelCopyBufferLayout {
+                    offset: 0,
+                    bytes_per_row: Some(NOISE_SIZE * 2),
+                    rows_per_image: None,
+                },
+                wgpu::Extent3d {
+                    width: NOISE_SIZE,
+                    height: NOISE_SIZE,
+                    depth_or_array_layers: 1,
+                },
             );
             tex.create_view(&wgpu::TextureViewDescriptor::default())
         };
 
         // ── textures ──
 
-        let render_scale: f32 = 1.0;
+        let render_scale: f32 = 0.5;
         let rw = ((width as f32 * render_scale) as u32).clamp(1, 8192);
         let rh = ((height as f32 * render_scale) as u32).clamp(1, 8192);
 
-        let shadow_depth_view = create_depth_texture(&device, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, "shadow_depth");
+        let shadow_depth_view =
+            create_depth_texture(&device, SHADOW_MAP_SIZE, SHADOW_MAP_SIZE, "shadow_depth");
         let (hdr_texture, hdr_view) = create_hdr_texture(&device, rw, rh, "hdr");
         let depth_view = create_depth_texture(&device, rw, rh, "scene_depth");
 
         let bloom_w = (rw / BLOOM_DIVISOR).max(1);
         let bloom_h = (rh / BLOOM_DIVISOR).max(1);
-        let (bloom_a_texture, bloom_a_view) = create_hdr_texture(&device, bloom_w, bloom_h, "bloom_a");
-        let (bloom_b_texture, bloom_b_view) = create_hdr_texture(&device, bloom_w, bloom_h, "bloom_b");
+        let (bloom_a_texture, bloom_a_view) =
+            create_hdr_texture(&device, bloom_w, bloom_h, "bloom_a");
+        let (bloom_b_texture, bloom_b_view) =
+            create_hdr_texture(&device, bloom_w, bloom_h, "bloom_b");
         let planar_mask_w = (rw / 4).clamp(128, 1024);
         let planar_mask_h = (rh / 4).clamp(128, 1024);
         let (planar_mask_texture, planar_mask_view) =
@@ -760,9 +938,21 @@ impl GpuRenderer {
             mapped_at_creation: false,
         });
 
-        let empty_seg = ShadowSegment { ax: 0.0, ay: 0.0, az: 0.0, radius: 0.0, bx: 0.0, by: 0.0, bz: 0.0, rope_id: 0.0 };
+        let empty_seg = ShadowSegment {
+            ax: 0.0,
+            ay: 0.0,
+            az: 0.0,
+            radius: 0.0,
+            bx: 0.0,
+            by: 0.0,
+            bz: 0.0,
+            rope_id: 0.0,
+        };
         let mut initial_data: Vec<u8> = Vec::new();
-        initial_data.extend_from_slice(bytemuck::bytes_of(&ShadowSegmentCount { count: 0, _pad: [0; 3] }));
+        initial_data.extend_from_slice(bytemuck::bytes_of(&ShadowSegmentCount {
+            count: 0,
+            _pad: [0; 3],
+        }));
         initial_data.extend_from_slice(bytemuck::bytes_of(&empty_seg));
         let shadow_segment_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
             label: Some("shadow_segments"),
@@ -772,18 +962,36 @@ impl GpuRenderer {
 
         let hole_mask_tex = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hole_mask_placeholder"),
-            size: wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &hole_mask_tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &hole_mask_tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &[255u8],
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(1), rows_per_image: None },
-            wgpu::Extent3d { width: 1, height: 1, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(1),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
         );
         let hole_mask_view = hole_mask_tex.create_view(&wgpu::TextureViewDescriptor::default());
 
@@ -794,19 +1002,20 @@ impl GpuRenderer {
         let post_bind_group_layout = create_post_bind_group_layout(&device);
         let bloom_bind_group_layout = create_bloom_bind_group_layout(&device);
 
-        let shadow_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("shadow_bind_group_layout"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
+        let shadow_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("shadow_bind_group_layout"),
+                entries: &[wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                }],
+            });
 
         let shadow_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("shadow_bind_group"),
@@ -815,6 +1024,72 @@ impl GpuRenderer {
                 binding: 0,
                 resource: frame_uniforms_buffer.as_entire_binding(),
             }],
+        });
+
+        // ── Wood baked texture ──
+        const WOOD_TEX_SIZE: u32 = 8192;
+        let wood_baked_texture = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("wood_baked"),
+            size: wgpu::Extent3d { width: WOOD_TEX_SIZE, height: WOOD_TEX_SIZE, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::STORAGE_BINDING,
+            view_formats: &[],
+        });
+        let wood_baked_view = wood_baked_texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let wood_baked_storage_view = wood_baked_texture.create_view(&wgpu::TextureViewDescriptor {
+            format: Some(wgpu::TextureFormat::Rgba8Unorm),
+            ..Default::default()
+        });
+
+        // ── Bake wood pipeline ──
+        let bake_wood_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("bake_wood_bgl"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 8,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::StorageTexture {
+                        access: wgpu::StorageTextureAccess::WriteOnly,
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                    },
+                    count: None,
+                },
+            ],
+        });
+        let bake_wood_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("bake_wood_bg"),
+            layout: &bake_wood_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: frame_uniforms_buffer.as_entire_binding() },
+                wgpu::BindGroupEntry { binding: 8, resource: wgpu::BindingResource::TextureView(&wood_baked_storage_view) },
+            ],
+        });
+        let bake_wood_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("bake_wood_layout"),
+            bind_group_layouts: &[&bake_wood_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+        let bake_wood_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("bake_wood"),
+            layout: Some(&bake_wood_pipeline_layout),
+            module: &shader,
+            entry_point: Some("bake_wood_kernel"),
+            compilation_options: Default::default(),
+            cache: None,
         });
 
         let frame_bind_group = build_frame_bind_group(
@@ -827,6 +1102,7 @@ impl GpuRenderer {
             &planar_mask_view,
             &noise_view,
             &noise_sampler,
+            &wood_baked_view,
         );
 
         let post_bind_group = build_post_bind_group(
@@ -839,16 +1115,32 @@ impl GpuRenderer {
         );
 
         let bloom_threshold_bind_group = build_bloom_bind_group(
-            &device, &bloom_bind_group_layout, &hdr_view, &bloom_a_view, "bloom_threshold_bg",
+            &device,
+            &bloom_bind_group_layout,
+            &hdr_view,
+            &bloom_a_view,
+            "bloom_threshold_bg",
         );
         let bloom_blur_h_bind_group = build_bloom_bind_group(
-            &device, &bloom_bind_group_layout, &bloom_a_view, &bloom_b_view, "bloom_blur_h_bg",
+            &device,
+            &bloom_bind_group_layout,
+            &bloom_a_view,
+            &bloom_b_view,
+            "bloom_blur_h_bg",
         );
         let bloom_blur_v_bind_group = build_bloom_bind_group(
-            &device, &bloom_bind_group_layout, &bloom_b_view, &bloom_a_view, "bloom_blur_v_bg",
+            &device,
+            &bloom_bind_group_layout,
+            &bloom_b_view,
+            &bloom_a_view,
+            "bloom_blur_v_bg",
         );
         let planar_mask_bind_group = build_bloom_bind_group(
-            &device, &bloom_bind_group_layout, &hdr_view, &planar_mask_view, "planar_mask_bg",
+            &device,
+            &bloom_bind_group_layout,
+            &hdr_view,
+            &planar_mask_view,
+            "planar_mask_bg",
         );
 
         // ── pipeline layouts ──
@@ -865,10 +1157,11 @@ impl GpuRenderer {
             push_constant_ranges: &[],
         });
 
-        let empty_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("empty"),
-            entries: &[],
-        });
+        let empty_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("empty"),
+                entries: &[],
+            });
         let empty_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
             label: Some("empty_bg"),
             layout: &empty_bind_group_layout,
@@ -876,18 +1169,32 @@ impl GpuRenderer {
         });
         let post_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("post_layout"),
-            bind_group_layouts: &[&frame_bind_group_layout, &empty_bind_group_layout, &post_bind_group_layout],
+            bind_group_layouts: &[
+                &frame_bind_group_layout,
+                &empty_bind_group_layout,
+                &post_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
         let bloom_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("bloom_layout"),
-            bind_group_layouts: &[&empty_bind_group_layout, &empty_bind_group_layout, &empty_bind_group_layout, &bloom_bind_group_layout],
+            bind_group_layouts: &[
+                &empty_bind_group_layout,
+                &empty_bind_group_layout,
+                &empty_bind_group_layout,
+                &bloom_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
         let planar_mask_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("planar_mask_layout"),
-            bind_group_layouts: &[&frame_bind_group_layout, &hole_bind_group_layout, &empty_bind_group_layout, &bloom_bind_group_layout],
+            bind_group_layouts: &[
+                &frame_bind_group_layout,
+                &hole_bind_group_layout,
+                &empty_bind_group_layout,
+                &bloom_bind_group_layout,
+            ],
             push_constant_ranges: &[],
         });
 
@@ -897,29 +1204,73 @@ impl GpuRenderer {
         let depth_fmt = wgpu::TextureFormat::Depth32Float;
 
         let table_pipeline = build_render_pipeline(
-            &device, "table_pipeline", &frame_hole_layout, &shader,
-            "table_vertex", "table_fragment",
-            &[], hdr_format, Some(depth_fmt), true, None,
+            &device,
+            "table_pipeline",
+            &frame_hole_layout,
+            &shader,
+            "table_vertex",
+            "table_fragment",
+            &[],
+            hdr_format,
+            Some(depth_fmt),
+            true,
+            None,
+        );
+
+        let board_pipeline = build_render_pipeline(
+            &device,
+            "board_pipeline",
+            &frame_hole_layout,
+            &shader,
+            "board_vertex",
+            "board_fragment",
+            &[board_vertex_layout()],
+            hdr_format,
+            Some(depth_fmt),
+            true,
+            Some(wgpu::Face::Back),
         );
 
         let hole_pipeline = build_render_pipeline(
-            &device, "hole_pipeline", &frame_hole_layout, &shader,
-            "hole_vertex", "hole_fragment",
-            &[hole_vertex_layout()], hdr_format, Some(depth_fmt), true,
+            &device,
+            "hole_pipeline",
+            &frame_hole_layout,
+            &shader,
+            "hole_vertex",
+            "hole_fragment",
+            &[hole_vertex_layout()],
+            hdr_format,
+            Some(depth_fmt),
+            true,
             Some(wgpu::Face::Back),
         );
 
         let rope_pipeline = build_render_pipeline(
-            &device, "rope_pipeline", &frame_hole_layout, &shader,
-            "rope_vertex", "rope_fragment",
-            &[rope_vertex_layout()], hdr_format, Some(depth_fmt), true,
+            &device,
+            "rope_pipeline",
+            &frame_hole_layout,
+            &shader,
+            "rope_vertex",
+            "rope_fragment",
+            &[rope_vertex_layout()],
+            hdr_format,
+            Some(depth_fmt),
+            true,
             None,
         );
 
         let post_pipeline = build_render_pipeline(
-            &device, "post_pipeline", &post_layout, &shader,
-            "fullscreen_vertex", "post_fragment",
-            &[], surface_format, None, false, None,
+            &device,
+            "post_pipeline",
+            &post_layout,
+            &shader,
+            "fullscreen_vertex",
+            "post_fragment",
+            &[],
+            surface_format,
+            None,
+            false,
+            None,
         );
 
         let shadow_only_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -928,33 +1279,67 @@ impl GpuRenderer {
             push_constant_ranges: &[],
         });
 
-        let shadow_hole_pl_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            label: Some("shadow_hole_pl_layout"),
-            bind_group_layouts: &[&shadow_bind_group_layout, &hole_bind_group_layout],
-            push_constant_ranges: &[],
-        });
+        let shadow_hole_pl_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                label: Some("shadow_hole_pl_layout"),
+                bind_group_layouts: &[&shadow_bind_group_layout, &hole_bind_group_layout],
+                push_constant_ranges: &[],
+            });
 
         let shadow_rope_pipeline = build_shadow_pipeline(
-            &device, "shadow_rope", &shadow_only_layout, &shader,
-            "rope_shadow_vertex", &[rope_vertex_layout()],
+            &device,
+            "shadow_rope",
+            &shadow_only_layout,
+            &shader,
+            "rope_shadow_vertex",
+            &[rope_vertex_layout()],
+        );
+
+        let shadow_board_pipeline = build_shadow_pipeline(
+            &device,
+            "shadow_board",
+            &shadow_only_layout,
+            &shader,
+            "board_shadow_vertex",
+            &[board_vertex_layout()],
         );
 
         let shadow_hole_pipeline = build_shadow_pipeline(
-            &device, "shadow_hole", &shadow_hole_pl_layout, &shader,
-            "hole_shadow_vertex", &[hole_vertex_layout()],
+            &device,
+            "shadow_hole",
+            &shadow_hole_pl_layout,
+            &shader,
+            "hole_shadow_vertex",
+            &[hole_vertex_layout()],
         );
 
         let bloom_threshold_pipeline = build_compute_pipeline(
-            &device, "bloom_threshold", &bloom_layout, &shader, "bloom_threshold",
+            &device,
+            "bloom_threshold",
+            &bloom_layout,
+            &shader,
+            "bloom_threshold",
         );
         let bloom_blur_h_pipeline = build_compute_pipeline(
-            &device, "bloom_blur_h", &bloom_layout, &shader, "bloom_blur_h",
+            &device,
+            "bloom_blur_h",
+            &bloom_layout,
+            &shader,
+            "bloom_blur_h",
         );
         let bloom_blur_v_pipeline = build_compute_pipeline(
-            &device, "bloom_blur_v", &bloom_layout, &shader, "bloom_blur_v",
+            &device,
+            "bloom_blur_v",
+            &bloom_layout,
+            &shader,
+            "bloom_blur_v",
         );
         let planar_mask_pipeline = build_compute_pipeline(
-            &device, "planar_mask", &planar_mask_layout, &shader, "planar_shadow_mask_cs",
+            &device,
+            "planar_mask",
+            &planar_mask_layout,
+            &shader,
+            "planar_shadow_mask_cs",
         );
 
         Self {
@@ -964,9 +1349,11 @@ impl GpuRenderer {
             surface_config,
 
             table_pipeline,
+            board_pipeline,
             hole_pipeline,
             rope_pipeline,
             post_pipeline,
+            shadow_board_pipeline,
             shadow_rope_pipeline,
             shadow_hole_pipeline,
             planar_mask_pipeline,
@@ -991,6 +1378,8 @@ impl GpuRenderer {
             hole_instance_buffer: None,
             hole_vertex_buffer: None,
             hole_index_buffer: None,
+            board_vertex_buffer: None,
+            board_index_buffer: None,
             rope_vertex_buffer: None,
             rope_index_buffer: None,
             rope_vertex_capacity: 0,
@@ -1017,8 +1406,17 @@ impl GpuRenderer {
             noise_sampler,
             empty_bind_group,
 
+            wood_baked_texture,
+            wood_baked_view,
+            wood_baked_storage_view,
+            bake_wood_pipeline,
+            bake_wood_bind_group_layout,
+            bake_wood_bind_group,
+            needs_wood_bake: true,
+
             hole_index_count: 0,
             hole_instance_count: 0,
+            board_index_count: 0,
             rope_index_count: 0,
 
             hole_mask_view,
@@ -1029,6 +1427,11 @@ impl GpuRenderer {
             render_scale,
             rope_material: RopeMaterialSettings::default(),
             lighting: LightingSettings::default(),
+            visual: VisualSettings::default(),
+            table: TableSettings::default(),
+            cartoon: CartoonSettings::default(),
+            cap: CapSettings::default(),
+            worm: WormSettings::default(),
             width,
             height,
 
@@ -1040,6 +1443,7 @@ impl GpuRenderer {
             gpu_timings: GpuTimings::default(),
             timestamp_pending: false,
             frame_index: 0,
+            surface_error_streak: 0,
             draw_flags: DrawFlags::default(),
         }
     }
@@ -1072,9 +1476,15 @@ impl GpuRenderer {
         (self.width, self.height)
     }
 
-    pub fn device(&self) -> &wgpu::Device { &self.device }
-    pub fn queue(&self) -> &wgpu::Queue { &self.queue }
-    pub fn surface_format(&self) -> wgpu::TextureFormat { self.surface_config.format }
+    pub fn device(&self) -> &wgpu::Device {
+        &self.device
+    }
+    pub fn queue(&self) -> &wgpu::Queue {
+        &self.queue
+    }
+    pub fn surface_format(&self) -> wgpu::TextureFormat {
+        self.surface_config.format
+    }
 
     pub fn resize(&mut self, width: u32, height: u32) {
         if width == 0 || height == 0 {
@@ -1116,8 +1526,12 @@ impl GpuRenderer {
         self.bloom_b_view = bb_view;
         self.planar_mask_w = (rw / 4).clamp(128, 1024);
         self.planar_mask_h = (rh / 4).clamp(128, 1024);
-        let (pm_tex, pm_view) =
-            create_planar_mask_texture(&self.device, self.planar_mask_w, self.planar_mask_h, "planar_mask");
+        let (pm_tex, pm_view) = create_planar_mask_texture(
+            &self.device,
+            self.planar_mask_w,
+            self.planar_mask_h,
+            "planar_mask",
+        );
         self.planar_mask_texture = pm_tex;
         self.planar_mask_view = pm_view;
 
@@ -1135,6 +1549,7 @@ impl GpuRenderer {
             &self.planar_mask_view,
             &self.noise_view,
             &self.noise_sampler,
+            &self.wood_baked_view,
         );
 
         self.post_bind_group = build_post_bind_group(
@@ -1147,16 +1562,25 @@ impl GpuRenderer {
         );
 
         self.bloom_threshold_bind_group = build_bloom_bind_group(
-            &self.device, &self.bloom_bind_group_layout,
-            &self.hdr_view, &self.bloom_a_view, "bloom_threshold_bg",
+            &self.device,
+            &self.bloom_bind_group_layout,
+            &self.hdr_view,
+            &self.bloom_a_view,
+            "bloom_threshold_bg",
         );
         self.bloom_blur_h_bind_group = build_bloom_bind_group(
-            &self.device, &self.bloom_bind_group_layout,
-            &self.bloom_a_view, &self.bloom_b_view, "bloom_blur_h_bg",
+            &self.device,
+            &self.bloom_bind_group_layout,
+            &self.bloom_a_view,
+            &self.bloom_b_view,
+            "bloom_blur_h_bg",
         );
         self.bloom_blur_v_bind_group = build_bloom_bind_group(
-            &self.device, &self.bloom_bind_group_layout,
-            &self.bloom_b_view, &self.bloom_a_view, "bloom_blur_v_bg",
+            &self.device,
+            &self.bloom_bind_group_layout,
+            &self.bloom_b_view,
+            &self.bloom_a_view,
+            "bloom_blur_v_bg",
         );
         self.planar_mask_bind_group = build_bloom_bind_group(
             &self.device,
@@ -1169,15 +1593,31 @@ impl GpuRenderer {
 
     // ─────────────────────────── data uploads ───────────────────────────
 
-    pub fn update_hole_instances(&mut self, positions: &[glam::Vec2], radius: f32) {
-        self.update_hole_instances_with_shape(positions, radius, false);
+    pub fn update_hole_instances(
+        &mut self,
+        positions: &[glam::Vec2],
+        elevations: &[f32],
+        radius: f32,
+    ) {
+        self.update_hole_instances_with_shape(positions, elevations, radius, false);
     }
 
-    pub fn update_hole_instances_square(&mut self, positions: &[glam::Vec2], radius: f32) {
-        self.update_hole_instances_with_shape(positions, radius, true);
+    pub fn update_hole_instances_square(
+        &mut self,
+        positions: &[glam::Vec2],
+        elevations: &[f32],
+        radius: f32,
+    ) {
+        self.update_hole_instances_with_shape(positions, elevations, radius, true);
     }
 
-    fn update_hole_instances_with_shape(&mut self, positions: &[glam::Vec2], radius: f32, square: bool) {
+    fn update_hole_instances_with_shape(
+        &mut self,
+        positions: &[glam::Vec2],
+        elevations: &[f32],
+        radius: f32,
+        square: bool,
+    ) {
         let mesh = if square {
             hole_mesh::build_square(0.76, 1.0, 1.25, 4)
         } else {
@@ -1194,31 +1634,38 @@ impl GpuRenderer {
             .collect();
         let gpu_indices: Vec<u32> = mesh.indices.iter().map(|&i| i as u32).collect();
 
-        self.hole_vertex_buffer = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hole_verts"),
-            contents: bytemuck::cast_slice(&gpu_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        }));
-        self.hole_index_buffer = Some(self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hole_indices"),
-            contents: bytemuck::cast_slice(&gpu_indices),
-            usage: wgpu::BufferUsages::INDEX,
-        }));
+        self.hole_vertex_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("hole_verts"),
+                contents: bytemuck::cast_slice(&gpu_verts),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.hole_index_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("hole_indices"),
+                contents: bytemuck::cast_slice(&gpu_indices),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        ));
         self.hole_index_count = gpu_indices.len() as u32;
 
         let instances: Vec<HoleInstance> = positions
             .iter()
-            .map(|p| HoleInstance {
-                position_radius: [p.x, p.y, 0.0, radius],
+            .enumerate()
+            .map(|(i, p)| HoleInstance {
+                position_radius: [p.x, p.y, elevations.get(i).copied().unwrap_or(0.0), radius],
             })
             .collect();
         self.hole_instance_count = instances.len() as u32;
 
-        let instance_buf = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("hole_instances"),
-            contents: bytemuck::cast_slice(&instances),
-            usage: wgpu::BufferUsages::STORAGE,
-        });
+        let instance_buf = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("hole_instances"),
+                contents: bytemuck::cast_slice(&instances),
+                usage: wgpu::BufferUsages::STORAGE,
+            });
 
         if square {
             self.bake_hole_mask_square(positions, radius);
@@ -1256,7 +1703,9 @@ impl GpuRenderer {
     }
 
     fn bake_hole_mask_impl(&mut self, positions: &[glam::Vec2], radius: f32, square: bool) {
-        if positions.is_empty() { return; }
+        if positions.is_empty() {
+            return;
+        }
         let inner_r = radius * 0.76;
         let margin = radius * 2.0;
 
@@ -1296,7 +1745,9 @@ impl GpuRenderer {
                     } else {
                         (dx * dx + dy * dy).sqrt() - inner_r
                     };
-                    if dist < min_dist { min_dist = dist; }
+                    if dist < min_dist {
+                        min_dist = dist;
+                    }
                 }
                 let norm = ((min_dist / sdf_range) * 0.5 + 0.5).clamp(0.0, 1.0);
                 pixels[(y * tw + x) as usize] = (norm * 255.0) as u8;
@@ -1315,28 +1766,147 @@ impl GpuRenderer {
 
         let tex = self.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("hole_mask"),
-            size: wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
-            mip_level_count: 1, sample_count: 1,
+            size: wgpu::Extent3d {
+                width: tw,
+                height: th,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::R8Unorm,
             usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
             view_formats: &[],
         });
         self.queue.write_texture(
-            wgpu::TexelCopyTextureInfo { texture: &tex, mip_level: 0, origin: wgpu::Origin3d::ZERO, aspect: wgpu::TextureAspect::All },
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
             &aligned_pixels,
-            wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(aligned_bpr), rows_per_image: None },
-            wgpu::Extent3d { width: tw, height: th, depth_or_array_layers: 1 },
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(aligned_bpr),
+                rows_per_image: None,
+            },
+            wgpu::Extent3d {
+                width: tw,
+                height: th,
+                depth_or_array_layers: 1,
+            },
         );
         self.hole_mask_view = tex.create_view(&wgpu::TextureViewDescriptor::default());
         self.hole_mask_bounds = [min_x, min_y, max_x, max_y];
     }
 
+    pub fn update_board_mesh(&mut self, boards: &[(glam::Vec2, glam::Vec2, f32)]) {
+        if boards.is_empty() {
+            self.board_vertex_buffer = None;
+            self.board_index_buffer = None;
+            self.board_index_count = 0;
+            return;
+        }
+
+        let mut vertices: Vec<BoardVertex> = Vec::with_capacity(boards.len() * 20);
+        let mut indices: Vec<u32> = Vec::with_capacity(boards.len() * 30);
+
+        for &(center, size, elevation) in boards {
+            let hw = size.x * 0.5;
+            let hh = size.y * 0.5;
+            let cx = center.x;
+            let cy = center.y;
+            let base = vertices.len() as u32;
+            vertices.push(BoardVertex {
+                position: [cx - hw, cy - hh, elevation],
+                normal: [0.0, 0.0, 1.0],
+                world_xy: [cx - hw, cy - hh],
+            });
+            vertices.push(BoardVertex {
+                position: [cx + hw, cy - hh, elevation],
+                normal: [0.0, 0.0, 1.0],
+                world_xy: [cx + hw, cy - hh],
+            });
+            vertices.push(BoardVertex {
+                position: [cx + hw, cy + hh, elevation],
+                normal: [0.0, 0.0, 1.0],
+                world_xy: [cx + hw, cy + hh],
+            });
+            vertices.push(BoardVertex {
+                position: [cx - hw, cy + hh, elevation],
+                normal: [0.0, 0.0, 1.0],
+                world_xy: [cx - hw, cy + hh],
+            });
+            indices.extend_from_slice(&[base, base + 1, base + 2, base, base + 2, base + 3]);
+
+            let sides = [
+                ((cx - hw, cy - hh), (cx + hw, cy - hh), [0.0, -1.0, 0.0]),
+                ((cx + hw, cy - hh), (cx + hw, cy + hh), [1.0, 0.0, 0.0]),
+                ((cx + hw, cy + hh), (cx - hw, cy + hh), [0.0, 1.0, 0.0]),
+                ((cx - hw, cy + hh), (cx - hw, cy - hh), [-1.0, 0.0, 0.0]),
+            ];
+            for side in sides {
+                let sb = vertices.len() as u32;
+                let ((p0x, p0y), (p1x, p1y), [nx, ny, nz]) = side;
+                vertices.push(BoardVertex {
+                    position: [p0x, p0y, elevation],
+                    normal: [nx, ny, nz],
+                    world_xy: [p0x, p0y],
+                });
+                vertices.push(BoardVertex {
+                    position: [p1x, p1y, elevation],
+                    normal: [nx, ny, nz],
+                    world_xy: [p1x, p1y],
+                });
+                vertices.push(BoardVertex {
+                    position: [p1x, p1y, 0.0],
+                    normal: [nx, ny, nz],
+                    world_xy: [p1x, p1y],
+                });
+                vertices.push(BoardVertex {
+                    position: [p0x, p0y, 0.0],
+                    normal: [nx, ny, nz],
+                    world_xy: [p0x, p0y],
+                });
+                indices.extend_from_slice(&[sb, sb + 2, sb + 1, sb, sb + 3, sb + 2]);
+            }
+        }
+
+        self.board_vertex_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("board_verts"),
+                contents: bytemuck::cast_slice(&vertices),
+                usage: wgpu::BufferUsages::VERTEX,
+            },
+        ));
+        self.board_index_buffer = Some(self.device.create_buffer_init(
+            &wgpu::util::BufferInitDescriptor {
+                label: Some("board_indices"),
+                contents: bytemuck::cast_slice(&indices),
+                usage: wgpu::BufferUsages::INDEX,
+            },
+        ));
+        self.board_index_count = indices.len() as u32;
+    }
+
     pub fn update_shadow_segments(&mut self, segments: &[ShadowSegment]) {
-        let count = ShadowSegmentCount { count: segments.len() as u32, _pad: [0; 3] };
+        let count = ShadowSegmentCount {
+            count: segments.len() as u32,
+            _pad: [0; 3],
+        };
         let count_bytes = bytemuck::bytes_of(&count);
         let seg_bytes: &[u8] = if segments.is_empty() {
-            bytemuck::bytes_of(&ShadowSegment { ax: 0.0, ay: 0.0, az: 0.0, radius: 0.0, bx: 0.0, by: 0.0, bz: 0.0, rope_id: 0.0 })
+            bytemuck::bytes_of(&ShadowSegment {
+                ax: 0.0,
+                ay: 0.0,
+                az: 0.0,
+                radius: 0.0,
+                bx: 0.0,
+                by: 0.0,
+                bz: 0.0,
+                rope_id: 0.0,
+            })
         } else {
             bytemuck::cast_slice(segments)
         };
@@ -1345,31 +1915,34 @@ impl GpuRenderer {
         data.extend_from_slice(count_bytes);
         data.extend_from_slice(seg_bytes);
 
-        self.shadow_segment_buffer = self.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("shadow_segments"),
-            contents: &data,
-            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
-        });
+        self.shadow_segment_buffer =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: Some("shadow_segments"),
+                    contents: &data,
+                    usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+                });
 
         if let Some(inst_buf) = &self.hole_instance_buffer {
-            self.hole_bind_group = Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-                label: Some("hole_bind_group"),
-                layout: &self.hole_bind_group_layout,
-                entries: &[
-                    wgpu::BindGroupEntry {
-                        binding: 0,
-                        resource: inst_buf.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: self.shadow_segment_buffer.as_entire_binding(),
-                    },
-                    wgpu::BindGroupEntry {
-                        binding: 2,
-                        resource: wgpu::BindingResource::TextureView(&self.hole_mask_view),
-                    },
-                ],
-            }));
+            self.hole_bind_group =
+                Some(self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("hole_bind_group"),
+                    layout: &self.hole_bind_group_layout,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: inst_buf.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: self.shadow_segment_buffer.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::TextureView(&self.hole_mask_view),
+                        },
+                    ],
+                }));
         }
     }
 
@@ -1416,7 +1989,15 @@ impl GpuRenderer {
 
     // ─────────────────────────── render ───────────────────────────
 
-    pub fn begin_frame(&mut self, time: f32, drag_active: bool, victory_time: f32, level_seed: f32, render_mode: u32, cel_mode: bool) -> Option<FrameInFlight> {
+    pub fn begin_frame(
+        &mut self,
+        time: f32,
+        drag_active: bool,
+        victory_time: f32,
+        level_seed: f32,
+        render_mode: u32,
+        cel_mode: bool,
+    ) -> Option<FrameInFlight> {
         self.ensure_timestamp_resources();
         self.poll_timestamp_readback();
 
@@ -1436,28 +2017,96 @@ impl GpuRenderer {
             self.draw_flags.table_shadow_mode,
             &self.rope_material,
             &self.lighting,
+            &self.visual,
+            &self.table,
+            &self.cartoon,
+            &self.worm,
         );
-        self.queue.write_buffer(&self.frame_uniforms_buffer, 0, bytemuck::bytes_of(&uniforms));
+        self.queue.write_buffer(
+            &self.frame_uniforms_buffer,
+            0,
+            bytemuck::bytes_of(&uniforms),
+        );
+
+        if self.needs_wood_bake {
+            self.needs_wood_bake = false;
+            self.encode_bake_wood_pass();
+        }
 
         let output = match self.surface.get_current_texture() {
-            Ok(t) => t,
+            Ok(t) => {
+                if self.surface_error_streak > 0 {
+                    log::warn!(
+                        "surface recovered after {} dropped frame(s); size={}x{} scale={:.2}",
+                        self.surface_error_streak,
+                        self.width,
+                        self.height,
+                        self.render_scale
+                    );
+                    self.surface_error_streak = 0;
+                }
+                t
+            }
             Err(wgpu::SurfaceError::Lost) => {
+                self.surface_error_streak += 1;
+                if self.surface_error_streak <= 5 || self.surface_error_streak % 60 == 0 {
+                    log::warn!(
+                        "surface error Lost; streak={} size={}x{} scale={:.2} render_mode={} victory_time={:.3}",
+                        self.surface_error_streak,
+                        self.width,
+                        self.height,
+                        self.render_scale,
+                        render_mode,
+                        victory_time
+                    );
+                }
                 self.resize(self.width, self.height);
                 return None;
             }
-            Err(wgpu::SurfaceError::OutOfMemory) => return None,
-            Err(_) => return None,
+            Err(wgpu::SurfaceError::OutOfMemory) => {
+                self.surface_error_streak += 1;
+                log::error!(
+                    "surface error OutOfMemory; streak={} size={}x{} scale={:.2} render_mode={} victory_time={:.3}",
+                    self.surface_error_streak,
+                    self.width,
+                    self.height,
+                    self.render_scale,
+                    render_mode,
+                    victory_time
+                );
+                return None;
+            }
+            Err(err) => {
+                self.surface_error_streak += 1;
+                if self.surface_error_streak <= 5 || self.surface_error_streak % 60 == 0 {
+                    log::warn!(
+                        "surface error {:?}; streak={} size={}x{} scale={:.2} render_mode={} victory_time={:.3}",
+                        err,
+                        self.surface_error_streak,
+                        self.width,
+                        self.height,
+                        self.render_scale,
+                        render_mode,
+                        victory_time
+                    );
+                }
+                return None;
+            }
         };
-        let screen_view = output.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let screen_view = output
+            .texture
+            .create_view(&wgpu::TextureViewDescriptor::default());
 
-        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
-            label: Some("frame_encoder"),
-        });
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("frame_encoder"),
+            });
 
         let sd = render_mode == 0;
-        let do_shadow_pass = !cel_mode && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
-        let do_planar_mask_pass = !cel_mode
-            && self.draw_flags.table_shadow_mode == 1;
+        let do_shadow_pass =
+            !cel_mode && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
+        let do_planar_mask_pass = !cel_mode && self.draw_flags.table_shadow_mode == 1;
         if do_shadow_pass {
             self.encode_shadow_pass(&mut encoder);
         }
@@ -1484,7 +2133,11 @@ impl GpuRenderer {
             }
         }
 
-        Some(FrameInFlight { encoder, screen_view, output })
+        Some(FrameInFlight {
+            encoder,
+            screen_view,
+            output,
+        })
     }
 
     fn poll_timestamp_readback(&mut self) {
@@ -1515,7 +2168,11 @@ impl GpuRenderer {
                 let to_ms = |begin: u32, end: u32| -> f32 {
                     let b = timestamps.get(begin as usize).copied().unwrap_or(0);
                     let e = timestamps.get(end as usize).copied().unwrap_or(0);
-                    if e > b { ((e - b) as f64 * ns_per_tick / 1_000_000.0) as f32 } else { 0.0 }
+                    if e > b {
+                        ((e - b) as f64 * ns_per_tick / 1_000_000.0) as f32
+                    } else {
+                        0.0
+                    }
                 };
                 self.gpu_timings.shadow_ms = to_ms(TS_SHADOW_BEGIN, TS_SHADOW_END);
                 self.gpu_timings.hdr_ms = to_ms(TS_HDR_BEGIN, TS_HDR_END);
@@ -1523,7 +2180,9 @@ impl GpuRenderer {
                 let bloom_h = to_ms(TS_BLOOM_H_BEGIN, TS_BLOOM_H_END);
                 let bloom_v = to_ms(TS_BLOOM_V_BEGIN, TS_BLOOM_V_END);
                 self.gpu_timings.bloom_ms = bloom_th + bloom_h + bloom_v;
-                self.gpu_timings.total_ms = self.gpu_timings.shadow_ms + self.gpu_timings.hdr_ms + self.gpu_timings.bloom_ms;
+                self.gpu_timings.total_ms = self.gpu_timings.shadow_ms
+                    + self.gpu_timings.hdr_ms
+                    + self.gpu_timings.bloom_ms;
                 drop(data);
             }
             readback.unmap();
@@ -1536,20 +2195,46 @@ impl GpuRenderer {
         frame.output.present();
     }
 
+    // ─────────────────────────── bake wood ───────────────────────────
+
+    fn encode_bake_wood_pass(&self) {
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
+            label: Some("bake_wood_encoder"),
+        });
+        {
+            let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
+                label: Some("bake_wood_pass"),
+                timestamp_writes: None,
+            });
+            pass.set_pipeline(&self.bake_wood_pipeline);
+            pass.set_bind_group(0, &self.bake_wood_bind_group, &[]);
+            let size = self.wood_baked_texture.size();
+            let wg = 8u32;
+            pass.dispatch_workgroups((size.width + wg - 1) / wg, (size.height + wg - 1) / wg, 1);
+        }
+        self.queue.submit(std::iter::once(encoder.finish()));
+    }
+
     // ─────────────────────────── shadow pass ───────────────────────────
 
     fn encode_shadow_pass(&self, encoder: &mut wgpu::CommandEncoder) {
-        let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::RenderPassTimestampWrites {
-            query_set: qs,
-            beginning_of_pass_write_index: Some(TS_SHADOW_BEGIN),
-            end_of_pass_write_index: Some(TS_SHADOW_END),
-        });
+        let ts = self
+            .timestamp_query_set
+            .as_ref()
+            .map(|qs| wgpu::RenderPassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(TS_SHADOW_BEGIN),
+                end_of_pass_write_index: Some(TS_SHADOW_END),
+            });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("shadow_pass"),
             color_attachments: &[],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.shadow_depth_view,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
                 stencil_ops: None,
             }),
             timestamp_writes: ts,
@@ -1558,14 +2243,11 @@ impl GpuRenderer {
 
         pass.set_bind_group(0, &self.shadow_bind_group, &[]);
 
-        if let (Some(vb), Some(ib)) = (&self.rope_vertex_buffer, &self.rope_index_buffer) {
-            pass.set_pipeline(&self.shadow_rope_pipeline);
-            pass.set_vertex_buffer(0, vb.slice(..));
-            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
-            pass.draw_indexed(0..self.rope_index_count, 0, 0..1);
-        }
-
-        if let (Some(vb), Some(ib), Some(bg)) = (&self.hole_vertex_buffer, &self.hole_index_buffer, &self.hole_bind_group) {
+        if let (Some(vb), Some(ib), Some(bg)) = (
+            &self.hole_vertex_buffer,
+            &self.hole_index_buffer,
+            &self.hole_bind_group,
+        ) {
             pass.set_pipeline(&self.shadow_hole_pipeline);
             pass.set_bind_group(1, bg, &[]);
             pass.set_vertex_buffer(0, vb.slice(..));
@@ -1573,29 +2255,53 @@ impl GpuRenderer {
             pass.draw_indexed(0..self.hole_index_count, 0, 0..self.hole_instance_count);
         }
 
+        if let (Some(vb), Some(ib)) = (&self.board_vertex_buffer, &self.board_index_buffer) {
+            pass.set_pipeline(&self.shadow_board_pipeline);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.board_index_count, 0, 0..1);
+        }
+
+        if let (Some(vb), Some(ib)) = (&self.rope_vertex_buffer, &self.rope_index_buffer) {
+            pass.set_pipeline(&self.shadow_rope_pipeline);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.rope_index_count, 0, 0..1);
+        }
     }
 
     // ─────────────────────────── HDR pass ───────────────────────────
 
     fn encode_hdr_pass(&self, encoder: &mut wgpu::CommandEncoder) {
-        let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::RenderPassTimestampWrites {
-            query_set: qs,
-            beginning_of_pass_write_index: Some(TS_HDR_BEGIN),
-            end_of_pass_write_index: Some(TS_HDR_END),
-        });
+        let ts = self
+            .timestamp_query_set
+            .as_ref()
+            .map(|qs| wgpu::RenderPassTimestampWrites {
+                query_set: qs,
+                beginning_of_pass_write_index: Some(TS_HDR_BEGIN),
+                end_of_pass_write_index: Some(TS_HDR_END),
+            });
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("hdr_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                 view: &self.hdr_view,
                 resolve_target: None,
                 ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(wgpu::Color { r: 0.0, g: 0.0, b: 0.0, a: 1.0 }),
+                    load: wgpu::LoadOp::Clear(wgpu::Color {
+                        r: 0.0,
+                        g: 0.0,
+                        b: 0.0,
+                        a: 1.0,
+                    }),
                     store: wgpu::StoreOp::Store,
                 },
             })],
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: &self.depth_view,
-                depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.0), store: wgpu::StoreOp::Store }),
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(1.0),
+                    store: wgpu::StoreOp::Store,
+                }),
                 stencil_ops: None,
             }),
             timestamp_writes: ts,
@@ -1612,8 +2318,24 @@ impl GpuRenderer {
             pass.draw(0..6, 0..1);
         }
 
+        if let (Some(vb), Some(ib), Some(bg)) = (
+            &self.board_vertex_buffer,
+            &self.board_index_buffer,
+            &self.hole_bind_group,
+        ) {
+            pass.set_pipeline(&self.board_pipeline);
+            pass.set_bind_group(1, bg, &[]);
+            pass.set_vertex_buffer(0, vb.slice(..));
+            pass.set_index_buffer(ib.slice(..), wgpu::IndexFormat::Uint32);
+            pass.draw_indexed(0..self.board_index_count, 0, 0..1);
+        }
+
         if !self.draw_flags.skip_holes {
-            if let (Some(vb), Some(ib), Some(bg)) = (&self.hole_vertex_buffer, &self.hole_index_buffer, &self.hole_bind_group) {
+            if let (Some(vb), Some(ib), Some(bg)) = (
+                &self.hole_vertex_buffer,
+                &self.hole_index_buffer,
+                &self.hole_bind_group,
+            ) {
                 pass.set_pipeline(&self.hole_pipeline);
                 pass.set_bind_group(1, bg, &[]);
                 pass.set_vertex_buffer(0, vb.slice(..));
@@ -1652,6 +2374,7 @@ impl GpuRenderer {
             &self.hole_mask_view,
             &self.noise_view,
             &self.noise_sampler,
+            &self.wood_baked_view,
         );
         let wg_x = (self.planar_mask_w + 7) / 8;
         let wg_y = (self.planar_mask_h + 7) / 8;
@@ -1674,11 +2397,14 @@ impl GpuRenderer {
         let wg_y = (bh + 7) / 8;
 
         {
-            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
-                query_set: qs,
-                beginning_of_pass_write_index: Some(TS_BLOOM_TH_BEGIN),
-                end_of_pass_write_index: Some(TS_BLOOM_TH_END),
-            });
+            let ts = self
+                .timestamp_query_set
+                .as_ref()
+                .map(|qs| wgpu::ComputePassTimestampWrites {
+                    query_set: qs,
+                    beginning_of_pass_write_index: Some(TS_BLOOM_TH_BEGIN),
+                    end_of_pass_write_index: Some(TS_BLOOM_TH_END),
+                });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_threshold"),
                 timestamp_writes: ts,
@@ -1692,11 +2418,14 @@ impl GpuRenderer {
         }
 
         {
-            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
-                query_set: qs,
-                beginning_of_pass_write_index: Some(TS_BLOOM_H_BEGIN),
-                end_of_pass_write_index: Some(TS_BLOOM_H_END),
-            });
+            let ts = self
+                .timestamp_query_set
+                .as_ref()
+                .map(|qs| wgpu::ComputePassTimestampWrites {
+                    query_set: qs,
+                    beginning_of_pass_write_index: Some(TS_BLOOM_H_BEGIN),
+                    end_of_pass_write_index: Some(TS_BLOOM_H_END),
+                });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_blur_h"),
                 timestamp_writes: ts,
@@ -1710,11 +2439,14 @@ impl GpuRenderer {
         }
 
         {
-            let ts = self.timestamp_query_set.as_ref().map(|qs| wgpu::ComputePassTimestampWrites {
-                query_set: qs,
-                beginning_of_pass_write_index: Some(TS_BLOOM_V_BEGIN),
-                end_of_pass_write_index: Some(TS_BLOOM_V_END),
-            });
+            let ts = self
+                .timestamp_query_set
+                .as_ref()
+                .map(|qs| wgpu::ComputePassTimestampWrites {
+                    query_set: qs,
+                    beginning_of_pass_write_index: Some(TS_BLOOM_V_BEGIN),
+                    end_of_pass_write_index: Some(TS_BLOOM_V_END),
+                });
             let mut pass = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
                 label: Some("bloom_blur_v"),
                 timestamp_writes: ts,
@@ -1730,7 +2462,11 @@ impl GpuRenderer {
 
     // ─────────────────────────── composite pass ───────────────────────────
 
-    fn encode_composite_pass(&self, encoder: &mut wgpu::CommandEncoder, screen_view: &wgpu::TextureView) {
+    fn encode_composite_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        screen_view: &wgpu::TextureView,
+    ) {
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some("composite_pass"),
             color_attachments: &[Some(wgpu::RenderPassColorAttachment {

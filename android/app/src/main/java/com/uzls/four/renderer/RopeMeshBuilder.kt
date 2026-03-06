@@ -428,6 +428,87 @@ object RopeMeshBuilder {
         return RopeMesh(vertices, vi, indices, ii)
     }
 
+    fun buildSwivel(
+        cx: Float, cy: Float, cz: Float,
+        tanX: Float, tanY: Float, tanZ: Float,
+        holeRadius: Float, bandHalf: Float,
+        d1x: Float, d1y: Float, d1z: Float,
+        d2x: Float, d2y: Float, d2z: Float,
+        colorR: Float, colorG: Float, colorB: Float,
+        segments: Int = 16
+    ): RopeMesh {
+        val params = floatArrayOf(0f, 0f, 0f, 0f)
+        val uv0 = 0.5f; val uv1 = 0.5f
+
+        val tLen = vec3Length(tanX, tanY, tanZ)
+        val tX = if (tLen > 1e-9f) tanX / tLen else tanX
+        val tY = if (tLen > 1e-9f) tanY / tLen else tanY
+        val tZ = if (tLen > 1e-9f) tanZ / tLen else tanZ
+
+        val baseR = holeRadius * 1.1f
+        val baseDepth = holeRadius * 0.2f
+        val baseColR = 0.45f; val baseColG = 0.45f; val baseColB = 0.48f
+
+        val seg = max(8, segments)
+
+        val fcX = cx + tX * baseDepth * 0.5f
+        val fcY = cy + tY * baseDepth * 0.5f
+        val fcZ = cz + tZ * baseDepth * 0.5f
+        val bcX = cx - tX * baseDepth * 0.5f
+        val bcY = cy - tY * baseDepth * 0.5f
+        val bcZ = cz - tZ * baseDepth * 0.5f
+
+        val vertCap = seg * 7
+        val idxCap = seg * 9
+        val vertices = FloatArray(vertCap * 15)
+        var vi = 0
+        val indices = IntArray(idxCap)
+        var ii = 0
+
+        fun putVert(px: Float, py: Float, pz: Float, nx: Float, ny: Float, nz: Float, cr: Float, cg: Float, cb: Float) {
+            val vo = vi * 15
+            vertices[vo] = px; vertices[vo+1] = py; vertices[vo+2] = pz
+            vertices[vo+3] = nx; vertices[vo+4] = ny; vertices[vo+5] = nz
+            vertices[vo+6] = cr; vertices[vo+7] = cg; vertices[vo+8] = cb
+            vertices[vo+9] = uv0; vertices[vo+10] = uv1
+            vertices[vo+11] = params[0]; vertices[vo+12] = params[1]
+            vertices[vo+13] = params[2]; vertices[vo+14] = params[3]
+            vi++
+        }
+
+        for (s in 0 until seg) {
+            val a0 = s.toFloat() / seg * PI.toFloat() * 2f
+            val a1 = (s + 1).toFloat() / seg * PI.toFloat() * 2f
+            val p0dX = d1x * cos(a0) + d2x * sin(a0)
+            val p0dY = d1y * cos(a0) + d2y * sin(a0)
+            val p0dZ = d1z * cos(a0) + d2z * sin(a0)
+            val p1dX = d1x * cos(a1) + d2x * sin(a1)
+            val p1dY = d1y * cos(a1) + d2y * sin(a1)
+            val p1dZ = d1z * cos(a1) + d2z * sin(a1)
+
+            val pf0X = fcX + p0dX * baseR; val pf0Y = fcY + p0dY * baseR; val pf0Z = fcZ + p0dZ * baseR
+            val pf1X = fcX + p1dX * baseR; val pf1Y = fcY + p1dY * baseR; val pf1Z = fcZ + p1dZ * baseR
+            val pb0X = bcX + p0dX * baseR; val pb0Y = bcY + p0dY * baseR; val pb0Z = bcZ + p0dZ * baseR
+
+            val base = vi
+            putVert(pf0X, pf0Y, pf0Z, p0dX, p0dY, p0dZ, baseColR, baseColG, baseColB)
+            putVert(pb0X, pb0Y, pb0Z, p0dX, p0dY, p0dZ, baseColR, baseColG, baseColB)
+            putVert(pf1X, pf1Y, pf1Z, p1dX, p1dY, p1dZ, baseColR, baseColG, baseColB)
+            val pb1X = bcX + p1dX * baseR; val pb1Y = bcY + p1dY * baseR; val pb1Z = bcZ + p1dZ * baseR
+            putVert(pb1X, pb1Y, pb1Z, p1dX, p1dY, p1dZ, baseColR, baseColG, baseColB)
+            indices[ii++] = base; indices[ii++] = base+1; indices[ii++] = base+2
+            indices[ii++] = base+2; indices[ii++] = base+1; indices[ii++] = base+3
+
+            val capBase = vi
+            putVert(fcX, fcY, fcZ, tX, tY, tZ, baseColR, baseColG, baseColB)
+            putVert(pf0X, pf0Y, pf0Z, tX, tY, tZ, baseColR, baseColG, baseColB)
+            putVert(pf1X, pf1Y, pf1Z, tX, tY, tZ, baseColR, baseColG, baseColB)
+            indices[ii++] = capBase; indices[ii++] = capBase+1; indices[ii++] = capBase+2
+        }
+
+        return RopeMesh(vertices, vi, indices, ii)
+    }
+
     private fun segmentIndex(pointIndex: Int, segmentStarts: IntArray): Int {
         var seg = 0
         for (i in segmentStarts.indices) {

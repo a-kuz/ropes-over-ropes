@@ -29,6 +29,7 @@ layout(std140) uniform FrameBlock {
     vec4 uWormParams2;
     vec4 uWormParams3;
     vec4 uWormParams4;
+    vec4 uRopeMatParams4;
 };
 
 const int MAX_HOLES = 64;
@@ -302,11 +303,11 @@ vec3 gsWood3D(vec3 p) {
     float w = length(U);
     w += gsFbm1(w * 0.5);
     w *= log(max(0.001, w * 0.2)) * 0.1;
-    w += gsFbm2(U * 0.05 + p.y * 0.5 + 500.0);
+    w += gsFbm2(U * 0.05 + vec2(p.y * 0.5 + 500.0));
     float ringFloor = floor(w); float ringFrac = fract(w);
     float rings = ringFrac * smoothstep(0.0, 1.0, 1.0 - ringFrac) * 2.7;
-    float grain = 0.5 * (1.0 + gsGnoise2(U * 8.0 + 100.0 + p.y * 5.0)) * 0.5 +
-                  gsGnoise2((ringFrac + ringFloor + 100.0 + gsFbm2(U + 200.0) * 0.06) * 20.0) * 0.5;
+    float grain = 0.5 * (1.0 + gsGnoise2(U * 8.0 + vec2(100.0 + p.y * 5.0))) * 0.5 +
+                  gsGnoise2(vec2((ringFrac + ringFloor + 100.0 + gsFbm2(U + vec2(200.0)) * 0.06) * 20.0)) * 0.5;
     float combined = mix(rings, grain, 0.5);
     return clamp((combined * 1.5 + 0.3) * vec3(0.7, 0.4, 0.2), 0.0, 1.0);
 }

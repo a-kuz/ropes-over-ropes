@@ -5,17 +5,22 @@ extension VerletSimulator {
     func beginDrag(bandIndex: Int, endIndex: Int, worldPosition: SIMD2<Float>) {
         guard bands.indices.contains(bandIndex) else { return }
         wakeUp()
+        let lowerAnimationKey = LowerAnimationKey(bandIndex: bandIndex, endIndex: endIndex)
         let originalHole: Int
         if endIndex == 0 {
-            originalHole = bands[bandIndex].pinStart ?? 0
+            originalHole = bands[bandIndex].pinStart
+                ?? lowerAnimations[lowerAnimationKey]?.targetHole
+                ?? 0
             bands[bandIndex].pinStart = nil
         } else {
-            originalHole = bands[bandIndex].pinEnd ?? 0
+            originalHole = bands[bandIndex].pinEnd
+                ?? lowerAnimations[lowerAnimationKey]?.targetHole
+                ?? 0
             bands[bandIndex].pinEnd = nil
         }
         dragInfo = DragInfo(bandIndex: bandIndex, endIndex: endIndex, originalHoleIndex: originalHole)
 
-        lowerAnimation = nil
+        lowerAnimations.removeValue(forKey: lowerAnimationKey)
 
         let elev = holeSurfaceZ(originalHole)
         let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
@@ -45,7 +50,8 @@ extension VerletSimulator {
         let dist = simd_length(currentPos - aboveHole)
         let returnDuration = min(max(dist * 0.9, 0.25), 0.8)
 
-        lowerAnimation = LowerAnimation(
+        let lowerAnimationKey = LowerAnimationKey(bandIndex: drag.bandIndex, endIndex: drag.endIndex)
+        lowerAnimations[lowerAnimationKey] = LowerAnimation(
             bandIndex: drag.bandIndex,
             endIndex: drag.endIndex,
             targetHole: targetHoleIndex,

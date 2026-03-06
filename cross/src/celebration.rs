@@ -1,5 +1,5 @@
-use glam::{Vec2, Vec3};
 use crate::renderer::camera::Camera;
+use glam::{Vec2, Vec3};
 
 pub struct CelebrationBand {
     pub positions: Vec<Vec3>,
@@ -133,7 +133,12 @@ pub fn update_celebration(bands: &mut [CelebrationBand], victory_time: f32) {
     }
 }
 
-pub fn animate_victory_camera(camera: &mut Camera, snap: &CameraSnapshot, victory_time: f32, dt: f32) {
+pub fn animate_victory_camera(
+    camera: &mut Camera,
+    snap: &CameraSnapshot,
+    victory_time: f32,
+    dt: f32,
+) {
     let blend_t = (victory_time / 1.0).min(1.0);
     let blend_s = blend_t * blend_t * (3.0 - 2.0 * blend_t);
     camera.perspective_blend = blend_s;

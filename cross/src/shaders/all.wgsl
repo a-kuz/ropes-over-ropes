@@ -11,10 +11,22 @@ struct FrameUniforms {
     shadowInvSize_unused: vec4<f32>,
     timeDrag: vec4<f32>,
     holeMaskBounds: vec4<f32>,
+    woodBoundsMin: vec4<f32>,
+    woodBoundsMax: vec4<f32>,
+    holeTint: vec4<f32>,
+    visualParams: vec4<f32>,
+    lightingParams: vec4<f32>,
+    tableParams: vec4<f32>,
+    tableParams2: vec4<f32>,
     ropeMatParams: vec4<f32>,
     ropeMatParams2: vec4<f32>,
     ropeMatParams3: vec4<f32>,
-    lightingParams: vec4<f32>,
+    cartoonParams: vec4<f32>,
+    wormParams1: vec4<f32>,
+    wormParams2: vec4<f32>,
+    wormParams3: vec4<f32>,
+    wormParams4: vec4<f32>,
+    ropeMatParams4: vec4<f32>,
 };
 
 struct HoleInstance {
@@ -45,6 +57,8 @@ struct ShadowSegmentArray {
 @group(0) @binding(4) var planar_shadow_mask: texture_2d<f32>;
 @group(0) @binding(5) var noise_tex: texture_2d<f32>;
 @group(0) @binding(6) var noise_sampler: sampler;
+@group(0) @binding(7) var wood_baked_tex: texture_2d<f32>;
+@group(0) @binding(8) var wood_bake_dst: texture_storage_2d<rgba8unorm, write>;
 
 @group(1) @binding(0) var<storage, read> hole_instances: HoleInstanceArray;
 @group(1) @binding(1) var<storage, read> shadow_segments: ShadowSegmentArray;
@@ -102,7 +116,491 @@ fn hash21(p: vec2<f32>) -> f32 {
     return fract(n * 43758.5453123);
 }
 
-// (wood texture removed — will be baked to texture on CPU)
+// ── Wood texture (procedural) ──
+
+fn wc_noise3d(p: vec3<f32>) -> f32 {
+    let s = vec3<f32>(7.0, 157.0, 113.0);
+    let ip = floor(p);
+    var fp = fract(p);
+    fp = fp * fp * (3.0 - 2.0 * fp);
+    let d = dot(ip, s);
+    let h0 = vec4<f32>(0.0, s.y, s.z, s.y + s.z) + vec4<f32>(d);
+    let h1 = mix(fract(sin(h0) * 43758.545), fract(sin(h0 + vec4<f32>(s.x)) * 43758.545), fp.x);
+    let h2 = mix(vec2<f32>(h1.x, h1.z), vec2<f32>(h1.y, h1.w), fp.y);
+    return mix(h2.x, h2.y, fp.z);
+}
+
+fn wc_fbm3d(p_in: vec3<f32>, octaves: i32, roughness_in: f32) -> f32 {
+    var p = p_in;
+    var sum = 0.0;
+    var amp = 1.0;
+    var tot = 0.0;
+    let roughness = clamp(roughness_in, 0.0, 1.0);
+    for (var i = 0; i < 16; i++) {
+        if (i >= octaves) { break; }
+        sum += amp * wc_noise3d(p);
+        tot += amp;
+        amp *= roughness;
+        p *= 2.0;
+    }
+    return sum / tot;
+}
+
+fn wc_randomPos3(seed: f32) -> vec3<f32> {
+    let s = vec4<f32>(seed, 0.0, 1.0, 2.0);
+    return vec3<f32>(hash21(s.xy), hash21(s.xz), hash21(s.xw)) * 100.0 + vec3<f32>(100.0);
+}
+
+fn wc_fbmDistorted(p_in: vec3<f32>) -> f32 {
+    let d = vec3<f32>(
+        wc_noise3d(p_in + wc_randomPos3(0.0)),
+        wc_noise3d(p_in + wc_randomPos3(1.0)),
+        wc_noise3d(p_in + wc_randomPos3(2.0))
+    );
+    let p = p_in + (d * 2.0 - vec3<f32>(1.0)) * 1.12;
+    return wc_fbm3d(p, 8, 0.5);
+}
+
+fn wc_musgraveFbm(p_in: vec3<f32>, octaves: f32, dimension: f32, lacunarity: f32) -> f32 {
+    var p = p_in;
+    var sum = 0.0;
+    var amp = 1.0;
+    let m = pow(lacunarity, -dimension);
+    for (var i = 0; i < 16; i++) {
+        if (f32(i) >= octaves) { break; }
+        let n = wc_noise3d(p) * 2.0 - 1.0;
+        sum += n * amp;
+        amp *= m;
+        p *= lacunarity;
+    }
+    return sum;
+}
+
+fn wc_waveFbmX(p: vec3<f32>) -> vec3<f32> {
+    let n = p.x * 20.0 + 0.4 * wc_fbm3d(p * 3.0, 3, 3.0);
+    return vec3<f32>(sin(n) * 0.5 + 0.5, p.y, p.z);
+}
+
+fn wc_remap01(f: f32, in1: f32, in2: f32) -> f32 {
+    return clamp((f - in1) / (in2 - in1), 0.0, 1.0);
+}
+
+struct WoodPalette {
+    dark: vec3<f32>,
+    mid: vec3<f32>,
+    light: vec3<f32>,
+};
+
+fn wc_woodPalette(seed: f32) -> WoodPalette {
+    let hue = fract(seed * 0.618033988);
+    var pal: WoodPalette;
+    if (hue < 0.07) {
+        pal.dark  = vec3<f32>(0.04, 0.04, 0.05);
+        pal.mid   = vec3<f32>(0.12, 0.12, 0.13);
+        pal.light = vec3<f32>(0.24, 0.24, 0.26);
+    } else if (hue < 0.14) {
+        pal.dark  = vec3<f32>(0.08, 0.09, 0.10);
+        pal.mid   = vec3<f32>(0.20, 0.21, 0.23);
+        pal.light = vec3<f32>(0.36, 0.37, 0.40);
+    } else if (hue < 0.21) {
+        pal.dark  = vec3<f32>(0.10, 0.09, 0.08);
+        pal.mid   = vec3<f32>(0.24, 0.22, 0.20);
+        pal.light = vec3<f32>(0.42, 0.38, 0.35);
+    } else if (hue < 0.28) {
+        pal.dark  = vec3<f32>(0.06, 0.07, 0.09);
+        pal.mid   = vec3<f32>(0.15, 0.16, 0.20);
+        pal.light = vec3<f32>(0.28, 0.30, 0.35);
+    } else if (hue < 0.35) {
+        pal.dark  = vec3<f32>(0.08, 0.07, 0.06);
+        pal.mid   = vec3<f32>(0.20, 0.17, 0.14);
+        pal.light = vec3<f32>(0.36, 0.30, 0.26);
+    } else if (hue < 0.42) {
+        pal.dark  = vec3<f32>(0.06, 0.04, 0.03);
+        pal.mid   = vec3<f32>(0.18, 0.12, 0.08);
+        pal.light = vec3<f32>(0.32, 0.22, 0.16);
+    } else if (hue < 0.49) {
+        pal.dark  = vec3<f32>(0.03, 0.03, 0.03);
+        pal.mid   = vec3<f32>(0.10, 0.09, 0.08);
+        pal.light = vec3<f32>(0.20, 0.18, 0.16);
+    } else if (hue < 0.56) {
+        pal.dark  = vec3<f32>(0.14, 0.10, 0.06);
+        pal.mid   = vec3<f32>(0.30, 0.22, 0.14);
+        pal.light = vec3<f32>(0.50, 0.38, 0.26);
+    } else if (hue < 0.63) {
+        pal.dark  = vec3<f32>(0.18, 0.17, 0.16);
+        pal.mid   = vec3<f32>(0.34, 0.32, 0.30);
+        pal.light = vec3<f32>(0.52, 0.50, 0.47);
+    } else if (hue < 0.70) {
+        pal.dark  = vec3<f32>(0.06, 0.08, 0.10);
+        pal.mid   = vec3<f32>(0.16, 0.19, 0.24);
+        pal.light = vec3<f32>(0.30, 0.34, 0.40);
+    } else if (hue < 0.77) {
+        pal.dark  = vec3<f32>(0.18, 0.08, 0.06);
+        pal.mid   = vec3<f32>(0.34, 0.18, 0.12);
+        pal.light = vec3<f32>(0.52, 0.30, 0.22);
+    } else if (hue < 0.84) {
+        pal.dark  = vec3<f32>(0.14, 0.14, 0.12);
+        pal.mid   = vec3<f32>(0.30, 0.28, 0.26);
+        pal.light = vec3<f32>(0.48, 0.46, 0.42);
+    } else if (hue < 0.92) {
+        pal.dark  = vec3<f32>(0.05, 0.05, 0.06);
+        pal.mid   = vec3<f32>(0.14, 0.14, 0.16);
+        pal.light = vec3<f32>(0.26, 0.26, 0.30);
+    } else {
+        pal.dark  = vec3<f32>(0.12, 0.10, 0.09);
+        pal.mid   = vec3<f32>(0.26, 0.22, 0.20);
+        pal.light = vec3<f32>(0.44, 0.38, 0.34);
+    }
+    return pal;
+}
+
+fn woodSolidTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
+    let seedAngle = seed * 2.399;
+    let sa = sin(seedAngle);
+    let ca = cos(seedAngle);
+    let rotated = vec2<f32>(worldXY.x * ca - worldXY.y * sa,
+                            worldXY.x * sa + worldXY.y * ca);
+    let offset = vec2<f32>(hash21(vec2<f32>(seed, seed * 7.13)) * 40.0 - 20.0,
+                           hash21(vec2<f32>(seed * 3.71, seed)) * 40.0 - 20.0);
+    var p = vec3<f32>((rotated + offset) * 1.1, floor(fract(seed * 0.37) * 8.0));
+    let scaleVar = mix(0.8, 1.2, hash21(vec2<f32>(seed * 1.23, 0.0)));
+    p = vec3<f32>(p.xy * scaleVar, p.z);
+
+    var n1 = wc_fbmDistorted(p * vec3<f32>(7.8, 1.17, 1.17));
+    n1 = mix(n1, 1.0, 0.2);
+    let n2_a = wc_musgraveFbm(vec3<f32>(n1 * 4.6), 8.0, 0.0, 2.5);
+    var n2 = mix(n2_a, n1, 0.85);
+    let dirt = 1.0 - wc_musgraveFbm(wc_waveFbmX(p * vec3<f32>(0.01, 0.15, 0.15)), 15.0, 0.26, 2.4) * 0.4;
+    let grain = 1.0 - smoothstep(0.2, 1.0, wc_musgraveFbm(p * vec3<f32>(500.0, 6.0, 1.0), 2.0, 2.0, 2.5)) * 0.2;
+    n2 *= dirt * grain;
+
+    let pal = wc_woodPalette(seed);
+    let col = mix(mix(pal.dark, pal.mid, wc_remap01(n2, 0.19, 0.56)), pal.light, wc_remap01(n2, 0.56, 1.0));
+    return clamp(pow(col, vec3<f32>(0.88)), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn plankWoodTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
+    let seedAngle = seed * 1.73;
+    let sa = sin(seedAngle);
+    let ca = cos(seedAngle);
+    let rotated = vec2<f32>(worldXY.x * ca - worldXY.y * sa,
+                            worldXY.x * sa + worldXY.y * ca);
+    let globalOffset = vec2<f32>(hash21(vec2<f32>(seed, seed * 5.17)) * 30.0 - 15.0,
+                                 hash21(vec2<f32>(seed * 2.91, seed)) * 30.0 - 15.0);
+    let wp = rotated + globalOffset;
+
+    let plankWidth = mix(0.28, 0.45, hash21(vec2<f32>(seed * 3.14, 7.0)));
+    let gapWidth = 0.006;
+
+    let plankY = wp.y / plankWidth;
+    let plankRow = floor(plankY);
+    let plankFrac = fract(plankY);
+
+    let rowOffset = hash21(vec2<f32>(plankRow, seed * 11.3)) * 2.0;
+    let plankLen = mix(0.8, 1.6, hash21(vec2<f32>(plankRow, seed * 4.7)));
+    let plankX = (wp.x + rowOffset) / plankLen;
+    let plankCol = floor(plankX);
+    let plankFracX = fract(plankX);
+
+    let gapY = smoothstep(0.0, gapWidth / plankWidth, plankFrac) *
+               smoothstep(0.0, gapWidth / plankWidth, 1.0 - plankFrac);
+    let gapX = smoothstep(0.0, gapWidth / plankLen, plankFracX) *
+               smoothstep(0.0, gapWidth / plankLen, 1.0 - plankFracX);
+    let gapMask = gapX * gapY;
+
+    let plankId = hash21(vec2<f32>(plankRow * 17.3 + plankCol * 7.1, seed));
+    let plankSeed = seed + plankId * 100.0;
+
+    let bendK = (hash21(vec2<f32>(plankSeed, 3.3)) - 0.5) * 0.08;
+    let localX = plankFracX * plankLen;
+    let localY = plankFrac * plankWidth;
+    let bentY = localY + sin(localX * 3.14159 / plankLen) * bendK;
+
+    let p = vec3<f32>(localX * 0.016, bentY * 0.016, plankId * 7.0);
+
+    var n1 = wc_fbmDistorted(p * vec3<f32>(1.0, 0.15, 0.15) * 8.0);
+    n1 = mix(n1, 1.0, 0.2);
+    let n2 = wc_musgraveFbm(vec3<f32>(n1 * 4.6), 8.0, 0.0, 2.5);
+    var n3 = mix(n2, n1, 0.85);
+    let q = wc_waveFbmX(p * vec3<f32>(0.01, 0.15, 0.15));
+    let dirt = 1.0 - wc_musgraveFbm(q, 15.0, 0.26, 2.4) * 0.4;
+    let grain = 1.0 - smoothstep(0.2, 1.0, wc_musgraveFbm(p * vec3<f32>(500.0, 6.0, 1.0), 2.0, 2.0, 2.5)) * 0.2;
+    n3 *= dirt * grain;
+
+    let pal = wc_woodPalette(plankSeed);
+    let plankBrightness = mix(0.85, 1.15, hash21(vec2<f32>(plankSeed * 1.7, 2.0)));
+    var col = mix(mix(pal.dark, pal.mid, wc_remap01(n3, 0.185, 0.565)), pal.light, wc_remap01(n3, 0.565, 1.0));
+    col *= plankBrightness;
+
+    let edgeDarken = smoothstep(0.0, 0.04, plankFrac) * smoothstep(0.0, 0.04, 1.0 - plankFrac) *
+                     smoothstep(0.0, 0.03, plankFracX) * smoothstep(0.0, 0.03, 1.0 - plankFracX);
+    col *= mix(0.7, 1.0, edgeDarken);
+
+    let gapColor = pal.dark * 0.15;
+    col = mix(gapColor, col, gapMask);
+
+    return clamp(pow(col, vec3<f32>(0.88)), vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn gradientTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
+    let seedAngle = seed * 1.618;
+    let sa = sin(seedAngle);
+    let ca = cos(seedAngle);
+    var rp = vec2<f32>(worldXY.x * ca - worldXY.y * sa,
+                       worldXY.x * sa + worldXY.y * ca);
+    let off = vec2<f32>(hash21(vec2<f32>(seed * 2.3, 1.0)) * 20.0 - 10.0,
+                        hash21(vec2<f32>(1.0, seed * 3.7)) * 20.0 - 10.0);
+    rp += off;
+
+    let gradType = fract(seed * 0.7236);
+
+    var c1: vec3<f32>; var c2: vec3<f32>; var c3: vec3<f32>;
+    let palIdx = fract(seed * 0.4618);
+    if (palIdx < 0.06) {
+        c1 = vec3<f32>(0.82, 0.82, 0.84); c2 = vec3<f32>(0.62, 0.63, 0.66); c3 = vec3<f32>(0.44, 0.45, 0.48);
+    } else if (palIdx < 0.12) {
+        c1 = vec3<f32>(0.90, 0.88, 0.85); c2 = vec3<f32>(0.70, 0.68, 0.64); c3 = vec3<f32>(0.50, 0.48, 0.44);
+    } else if (palIdx < 0.18) {
+        c1 = vec3<f32>(0.86, 0.86, 0.88); c2 = vec3<f32>(0.56, 0.57, 0.62); c3 = vec3<f32>(0.30, 0.32, 0.38);
+    } else if (palIdx < 0.24) {
+        c1 = vec3<f32>(0.78, 0.76, 0.72); c2 = vec3<f32>(0.52, 0.50, 0.46); c3 = vec3<f32>(0.30, 0.28, 0.26);
+    } else if (palIdx < 0.30) {
+        c1 = vec3<f32>(0.88, 0.86, 0.82); c2 = vec3<f32>(0.58, 0.54, 0.48); c3 = vec3<f32>(0.34, 0.30, 0.26);
+    } else if (palIdx < 0.36) {
+        c1 = vec3<f32>(0.06, 0.06, 0.08); c2 = vec3<f32>(0.18, 0.18, 0.22); c3 = vec3<f32>(0.34, 0.34, 0.40);
+    } else if (palIdx < 0.42) {
+        c1 = vec3<f32>(0.04, 0.05, 0.07); c2 = vec3<f32>(0.12, 0.14, 0.20); c3 = vec3<f32>(0.24, 0.28, 0.38);
+    } else if (palIdx < 0.48) {
+        c1 = vec3<f32>(0.08, 0.07, 0.06); c2 = vec3<f32>(0.22, 0.20, 0.18); c3 = vec3<f32>(0.40, 0.36, 0.32);
+    } else if (palIdx < 0.54) {
+        c1 = vec3<f32>(0.02, 0.04, 0.06); c2 = vec3<f32>(0.08, 0.16, 0.24); c3 = vec3<f32>(0.18, 0.30, 0.42);
+    } else if (palIdx < 0.60) {
+        c1 = vec3<f32>(0.84, 0.84, 0.82); c2 = vec3<f32>(0.48, 0.48, 0.46); c3 = vec3<f32>(0.20, 0.20, 0.20);
+    } else if (palIdx < 0.66) {
+        c1 = vec3<f32>(0.04, 0.06, 0.04); c2 = vec3<f32>(0.12, 0.20, 0.14); c3 = vec3<f32>(0.24, 0.38, 0.28);
+    } else if (palIdx < 0.72) {
+        c1 = vec3<f32>(0.05, 0.03, 0.06); c2 = vec3<f32>(0.16, 0.10, 0.22); c3 = vec3<f32>(0.30, 0.20, 0.40);
+    } else if (palIdx < 0.78) {
+        c1 = vec3<f32>(0.92, 0.90, 0.86); c2 = vec3<f32>(0.74, 0.72, 0.68); c3 = vec3<f32>(0.56, 0.54, 0.50);
+    } else if (palIdx < 0.84) {
+        c1 = vec3<f32>(0.10, 0.10, 0.12); c2 = vec3<f32>(0.26, 0.26, 0.30); c3 = vec3<f32>(0.46, 0.46, 0.52);
+    } else if (palIdx < 0.92) {
+        c1 = vec3<f32>(0.80, 0.82, 0.86); c2 = vec3<f32>(0.54, 0.56, 0.62); c3 = vec3<f32>(0.32, 0.34, 0.40);
+    } else {
+        c1 = vec3<f32>(0.06, 0.05, 0.04); c2 = vec3<f32>(0.18, 0.16, 0.14); c3 = vec3<f32>(0.36, 0.32, 0.28);
+    }
+
+    var t: f32;
+    if (gradType < 0.25) {
+        let warp = wc_noise3d(vec3<f32>(rp * 0.4, seed)) * 0.15;
+        t = clamp(rp.y * 0.25 + 0.5 + warp, 0.0, 1.0);
+    } else if (gradType < 0.45) {
+        let dist = length(rp) * 0.6;
+        let warp = wc_noise3d(vec3<f32>(rp * 1.5, seed)) * 0.2;
+        t = clamp((dist + warp) * 0.4, 0.0, 1.0);
+    } else if (gradType < 0.60) {
+        let diag = (rp.x + rp.y) * 0.3;
+        let warp = wc_noise3d(vec3<f32>(rp * 0.6, seed)) * 0.2;
+        t = clamp(diag + warp + 0.5, 0.0, 1.0);
+    } else if (gradType < 0.75) {
+        let angle = atan2(rp.y, rp.x) / 6.28318 + 0.5;
+        let warp = wc_noise3d(vec3<f32>(rp * 2.0, seed * 1.3)) * 0.08;
+        t = fract(angle + warp);
+    } else if (gradType < 0.88) {
+        let wave = sin(rp.x * 2.0 + wc_noise3d(vec3<f32>(rp * 0.8, seed)) * 1.5) * 0.5 + 0.5;
+        let wave2 = sin(rp.y * 1.8 + wc_noise3d(vec3<f32>(rp * 0.6, seed + 5.0)) * 1.2) * 0.5 + 0.5;
+        t = clamp(wave * 0.55 + wave2 * 0.45, 0.0, 1.0);
+    } else {
+        let n = wc_fbm3d(vec3<f32>(rp * 0.4, seed * 0.7), 5, 0.5);
+        t = clamp(n * 0.8 + 0.3, 0.0, 1.0);
+    }
+
+    var col: vec3<f32>;
+    if (t < 0.5) {
+        col = mix(c1, c2, t * 2.0);
+    } else {
+        col = mix(c2, c3, (t - 0.5) * 2.0);
+    }
+    let micro = wc_noise3d(vec3<f32>(rp * 8.0, seed * 2.0)) * 0.03 - 0.015;
+    col += vec3<f32>(micro);
+    return clamp(col, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn noiseGenWood(p: vec3<f32>) -> f32 {
+    var w0 = 0.0;
+    var w1 = 0.0;
+    w0 += sin(dot(p, vec3<f32>(-1.316, 0.918, 1.398))) * 0.0783275458;
+    w1 += sin(dot(p, vec3<f32>(0.295, -0.176, 2.167))) * 0.0739931495;
+    w0 += sin(dot(p, vec3<f32>(-0.926, 1.445, 1.429))) * 0.0716716966;
+    w1 += sin(dot(p, vec3<f32>(-1.878, -0.174, 1.258))) * 0.0697839187;
+    w0 += sin(dot(p, vec3<f32>(-1.995, 0.661, -0.908))) * 0.0685409863;
+    w1 += sin(dot(p, vec3<f32>(-1.770, 1.350, -0.905))) * 0.0630152419;
+    w0 += sin(dot(p, vec3<f32>(2.116, -0.021, 1.161))) * 0.0625361712;
+    w1 += sin(dot(p, vec3<f32>(0.405, -1.712, -1.855))) * 0.0567751048;
+    w0 += sin(dot(p, vec3<f32>(1.346, 0.945, 1.999))) * 0.0556465603;
+    w1 += sin(dot(p, vec3<f32>(-0.397, -0.573, 2.495))) * 0.0555747667;
+    w0 += sin(dot(p, vec3<f32>(0.103, -2.457, -1.144))) * 0.0516322279;
+    w1 += sin(dot(p, vec3<f32>(-0.483, -1.323, 2.330))) * 0.0513093320;
+    w0 += sin(dot(p, vec3<f32>(-1.715, -1.810, -1.164))) * 0.0504567036;
+    w1 += sin(dot(p, vec3<f32>(2.529, 0.479, 1.011))) * 0.0500811899;
+    w0 += sin(dot(p, vec3<f32>(-1.643, -1.814, -1.437))) * 0.0480875812;
+    w1 += sin(dot(p, vec3<f32>(1.495, -1.905, -1.648))) * 0.0458268348;
+    w0 += sin(dot(p, vec3<f32>(-1.874, 1.559, 1.762))) * 0.0440084357;
+    w1 += sin(dot(p, vec3<f32>(1.068, -2.090, 2.081))) * 0.0413624154;
+    w0 += sin(dot(p, vec3<f32>(-0.647, -2.197, -2.237))) * 0.0401592830;
+    w1 += sin(dot(p, vec3<f32>(-2.146, -2.171, -1.135))) * 0.0391682940;
+    w0 += sin(dot(p, vec3<f32>(2.538, -1.854, -1.604))) * 0.0349588163;
+    w1 += sin(dot(p, vec3<f32>(1.687, 2.191, -2.270))) * 0.0342888847;
+    w0 += sin(dot(p, vec3<f32>(0.205, 2.617, -2.481))) * 0.0338465332;
+    w1 += sin(dot(p, vec3<f32>(3.297, -0.440, -2.317))) * 0.0289423448;
+    w0 += sin(dot(p, vec3<f32>(1.068, -1.944, 3.432))) * 0.0286404261;
+    w1 += sin(dot(p, vec3<f32>(-3.681, 1.068, 1.789))) * 0.0273625684;
+    w0 += sin(dot(p, vec3<f32>(3.116, 2.631, -1.658))) * 0.0259772492;
+    w1 += sin(dot(p, vec3<f32>(-1.992, -2.902, -2.954))) * 0.0245830241;
+    w0 += sin(dot(p, vec3<f32>(-2.409, -2.374, 3.116))) * 0.0245592756;
+    w1 += sin(dot(p, vec3<f32>(0.790, 1.768, 4.196))) * 0.0244078334;
+    w0 += sin(dot(p, vec3<f32>(-3.289, 1.007, 3.148))) * 0.0241328015;
+    w1 += sin(dot(p, vec3<f32>(3.421, -2.663, 3.262))) * 0.0199736126;
+    w0 += sin(dot(p, vec3<f32>(3.062, 2.621, 3.649))) * 0.0199230290;
+    w1 += sin(dot(p, vec3<f32>(4.422, -2.206, 2.621))) * 0.0192399437;
+    w0 += sin(dot(p, vec3<f32>(2.714, 3.022, 4.200))) * 0.0182510631;
+    w1 += sin(dot(p, vec3<f32>(-0.451, 4.143, -4.142))) * 0.0181293526;
+    w0 += sin(dot(p, vec3<f32>(-5.838, -0.360, -1.536))) * 0.0175114826;
+    w1 += sin(dot(p, vec3<f32>(-0.278, -4.565, 4.149))) * 0.0170799341;
+    w0 += sin(dot(p, vec3<f32>(-5.893, -0.163, -2.141))) * 0.0167655258;
+    w1 += sin(dot(p, vec3<f32>(4.855, -4.153, 0.606))) * 0.0163155335;
+    w0 += sin(dot(p, vec3<f32>(4.498, 0.987, -4.488))) * 0.0162770287;
+    w1 += sin(dot(p, vec3<f32>(-1.463, 5.321, -3.315))) * 0.0162569125;
+    w0 += sin(dot(p, vec3<f32>(-1.862, 4.386, 4.749))) * 0.0154338176;
+    w1 += sin(dot(p, vec3<f32>(0.563, 3.616, -5.751))) * 0.0151952226;
+    w0 += sin(dot(p, vec3<f32>(-0.126, 2.569, -6.349))) * 0.0151089405;
+    w1 += sin(dot(p, vec3<f32>(-5.094, 4.759, 0.186))) * 0.0147947096;
+    w0 += sin(dot(p, vec3<f32>(1.319, 5.713, 3.845))) * 0.0147035221;
+    w1 += sin(dot(p, vec3<f32>(7.141, -0.327, 1.420))) * 0.0140573910;
+    w0 += sin(dot(p, vec3<f32>(3.888, 6.543, 0.547))) * 0.0133309850;
+    w1 += sin(dot(p, vec3<f32>(-1.898, -3.563, -6.483))) * 0.0133171360;
+    w0 += sin(dot(p, vec3<f32>(1.719, 7.769, 0.340))) * 0.0126913718;
+    w1 += sin(dot(p, vec3<f32>(-2.210, -7.836, 0.102))) * 0.0123746071;
+    w0 += sin(dot(p, vec3<f32>(6.248, -5.451, 1.866))) * 0.0117861898;
+    w1 += sin(dot(p, vec3<f32>(1.627, -7.066, -4.732))) * 0.0115417453;
+    w0 += sin(dot(p, vec3<f32>(4.099, -7.704, 1.474))) * 0.0112591564;
+    w1 += sin(dot(p, vec3<f32>(7.357, 3.788, 3.204))) * 0.0112252325;
+    w0 += sin(dot(p, vec3<f32>(-2.797, 6.208, 6.253))) * 0.0107206906;
+    w1 += sin(dot(p, vec3<f32>(6.130, -5.335, -4.650))) * 0.0105693992;
+    w0 += sin(dot(p, vec3<f32>(5.276, -5.576, -5.438))) * 0.0105139072;
+    w1 += sin(dot(p, vec3<f32>(9.148, 2.530, -0.383))) * 0.0103996383;
+    w0 += sin(dot(p, vec3<f32>(3.894, 2.559, 8.357))) * 0.0103161113;
+    w1 += sin(dot(p, vec3<f32>(-6.604, 8.024, -0.289))) * 0.0094066875;
+    w0 += sin(dot(p, vec3<f32>(-5.925, 6.505, -6.403))) * 0.0089444733;
+    w1 += sin(dot(p, vec3<f32>(9.085, 10.331, -0.451))) * 0.0069245599;
+    w0 += sin(dot(p, vec3<f32>(-8.228, 6.323, -9.900))) * 0.0066251015;
+    w1 += sin(dot(p, vec3<f32>(10.029, -3.802, 12.151))) * 0.0058122824;
+    w0 += sin(dot(p, vec3<f32>(-10.151, -6.513, -11.063))) * 0.0057522358;
+    w1 += sin(dot(p, vec3<f32>(-1.773, -16.284, 2.828))) * 0.0056578101;
+    w0 += sin(dot(p, vec3<f32>(11.081, 8.687, -9.852))) * 0.0054614334;
+    w1 += sin(dot(p, vec3<f32>(-3.941, -4.386, 16.191))) * 0.0054454253;
+    w0 += sin(dot(p, vec3<f32>(-6.742, 2.133, -17.268))) * 0.0050050132;
+    w1 += sin(dot(p, vec3<f32>(-10.743, 5.698, 14.975))) * 0.0048323955;
+    w0 += sin(dot(p, vec3<f32>(-9.603, 12.472, 14.542))) * 0.0043264378;
+    w1 += sin(dot(p, vec3<f32>(13.515, 14.345, 8.481))) * 0.0043208884;
+    w0 += sin(dot(p, vec3<f32>(-10.330, 16.209, -9.742))) * 0.0043013736;
+    w1 += sin(dot(p, vec3<f32>(-8.580, -6.628, 19.191))) * 0.0042005922;
+    w0 += sin(dot(p, vec3<f32>(-17.154, 10.620, 11.828))) * 0.0039482427;
+    w1 += sin(dot(p, vec3<f32>(16.330, 14.123, -10.420))) * 0.0038474789;
+    w0 += sin(dot(p, vec3<f32>(-21.275, 10.768, -3.252))) * 0.0038320501;
+    w1 += sin(dot(p, vec3<f32>(1.744, 7.922, 23.152))) * 0.0037560829;
+    w0 += sin(dot(p, vec3<f32>(-3.895, 21.321, 12.006))) * 0.0037173885;
+    w1 += sin(dot(p, vec3<f32>(-22.705, 2.543, 10.695))) * 0.0036484394;
+    w0 += sin(dot(p, vec3<f32>(-13.053, -16.634, -13.993))) * 0.0036291121;
+    w1 += sin(dot(p, vec3<f32>(22.697, -11.230, 1.417))) * 0.0036280459;
+    w0 += sin(dot(p, vec3<f32>(20.646, 14.602, 3.400))) * 0.0036055008;
+    w1 += sin(dot(p, vec3<f32>(5.824, -8.717, -23.680))) * 0.0035501527;
+    w0 += sin(dot(p, vec3<f32>(6.691, 15.499, 20.079))) * 0.0035029508;
+    w1 += sin(dot(p, vec3<f32>(9.926, -22.778, 9.144))) * 0.0034694278;
+    w0 += sin(dot(p, vec3<f32>(-9.552, -27.491, 2.197))) * 0.0031359281;
+    w1 += sin(dot(p, vec3<f32>(21.071, -17.991, -11.566))) * 0.0030453280;
+    w0 += sin(dot(p, vec3<f32>(9.780, 1.783, 28.536))) * 0.0030251754;
+    w1 += sin(dot(p, vec3<f32>(8.738, -18.373, 22.725))) * 0.0029960272;
+    w0 += sin(dot(p, vec3<f32>(14.105, 25.703, -8.834))) * 0.0029840058;
+    w1 += sin(dot(p, vec3<f32>(-24.926, -17.766, -4.740))) * 0.0029487709;
+    w0 += sin(dot(p, vec3<f32>(1.060, -1.570, 32.535))) * 0.0027980099;
+    w1 += sin(dot(p, vec3<f32>(-24.532, -19.629, -16.759))) * 0.0025538949;
+    w0 += sin(dot(p, vec3<f32>(28.772, -21.183, -9.935))) * 0.0024494819;
+    w1 += sin(dot(p, vec3<f32>(-28.413, 22.959, 8.338))) * 0.0024236674;
+    w0 += sin(dot(p, vec3<f32>(-27.664, 22.197, 13.301))) * 0.0023965996;
+    w1 += sin(dot(p, vec3<f32>(-27.421, 20.643, 18.713))) * 0.0023203498;
+    w0 += sin(dot(p, vec3<f32>(18.961, -7.189, 35.907))) * 0.0021967023;
+    w1 += sin(dot(p, vec3<f32>(-23.949, 4.885, 33.762))) * 0.0021727461;
+    w0 += sin(dot(p, vec3<f32>(35.305, 8.594, 20.564))) * 0.0021689816;
+    w1 += sin(dot(p, vec3<f32>(30.364, -11.608, -27.199))) * 0.0021357139;
+    w0 += sin(dot(p, vec3<f32>(34.268, 26.742, 0.958))) * 0.0020807976;
+    w1 += sin(dot(p, vec3<f32>(-26.376, -17.313, -32.023))) * 0.0020108850;
+    w0 += sin(dot(p, vec3<f32>(31.860, -32.181, -2.834))) * 0.0019919601;
+    w1 += sin(dot(p, vec3<f32>(25.590, 32.340, 21.381))) * 0.0019446179;
+    w0 += sin(dot(p, vec3<f32>(-17.771, -23.941, 37.324))) * 0.0018898258;
+    w1 += sin(dot(p, vec3<f32>(-38.699, 19.953, -22.675))) * 0.0018379538;
+    w0 += sin(dot(p, vec3<f32>(-46.284, 11.672, -15.411))) * 0.0017980056;
+    w1 += sin(dot(p, vec3<f32>(-32.023, -43.976, -7.378))) * 0.0016399251;
+    w0 += sin(dot(p, vec3<f32>(-42.390, -21.165, -31.889))) * 0.0015752176;
+    w1 += sin(dot(p, vec3<f32>(-18.949, -40.461, 39.107))) * 0.0015141244;
+    w0 += sin(dot(p, vec3<f32>(-21.507, -5.939, -58.531))) * 0.0014339601;
+    w1 += sin(dot(p, vec3<f32>(-51.745, -43.821, 9.651))) * 0.0013096306;
+    w0 += sin(dot(p, vec3<f32>(39.239, 25.971, -52.615))) * 0.0012701774;
+    w1 += sin(dot(p, vec3<f32>(-49.669, -35.051, -36.306))) * 0.0012661695;
+    w0 += sin(dot(p, vec3<f32>(-49.996, 35.309, 38.460))) * 0.0012398870;
+    w1 += sin(dot(p, vec3<f32>(27.000, -65.904, -36.267))) * 0.0011199347;
+    w0 += sin(dot(p, vec3<f32>(-52.523, -26.557, 57.693))) * 0.0010856391;
+    w1 += sin(dot(p, vec3<f32>(-42.670, 0.269, -71.125))) * 0.0010786551;
+    w0 += sin(dot(p, vec3<f32>(-9.377, 64.575, -68.151))) * 0.0009468199;
+    w1 += sin(dot(p, vec3<f32>(14.571, -29.160, 106.329))) * 0.0008019719;
+    w0 += sin(dot(p, vec3<f32>(-21.549, 103.887, 36.882))) * 0.0007939609;
+    w1 += sin(dot(p, vec3<f32>(-42.781, 110.966, -9.070))) * 0.0007473261;
+    w0 += sin(dot(p, vec3<f32>(-112.686, 18.296, -37.920))) * 0.0007409259;
+    w1 += sin(dot(p, vec3<f32>(71.493, 33.838, -96.931))) * 0.0007121903;
+    return w0 + w1;
+}
+
+fn reprampWood(x: f32) -> f32 {
+    return pow(sin(x) * 0.5 + 0.5, 8.0) + cos(x) * 0.7 + 0.7;
+}
+
+fn otavioWoodTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
+    let seedAngle = seed * 2.718;
+    let sa = sin(seedAngle);
+    let ca = cos(seedAngle);
+    let rotated = vec2<f32>(worldXY.x * ca - worldXY.y * sa,
+                            worldXY.x * sa + worldXY.y * ca);
+    let offset = vec2<f32>(hash21(vec2<f32>(seed, seed * 5.37)) * 40.0 - 20.0,
+                           hash21(vec2<f32>(seed * 2.83, seed)) * 40.0 - 20.0);
+    var pos = vec3<f32>((rotated + offset) * 1.1, floor(fract(seed * 0.41) * 8.0));
+    let scaleVar = mix(0.8, 1.2, hash21(vec2<f32>(seed * 1.47, 0.0)));
+    pos = vec3<f32>(pos.xy * scaleVar, pos.z);
+
+    let n_a = noiseGenWood(pos * vec3<f32>(8.0, 1.5, 8.0));
+    let n_b = noiseGenWood(-pos * vec3<f32>(8.0, 1.5, 8.0) + vec3<f32>(4.5678));
+    let rings = reprampWood(length(pos.xz + vec2<f32>(n_a, n_b) * 0.05) * 64.0) / 1.8
+              - noiseGenWood(pos) * 0.75;
+
+    let pal = wc_woodPalette(seed);
+    var texColor = mix(pal.dark * 0.95, pal.light * 0.4, clamp(rings, 0.0, 1.0)) * 1.5;
+    texColor = max(vec3<f32>(0.0), texColor);
+    let rough = noiseGenWood(pos * 64.0 * vec3<f32>(1.0, 0.2, 1.0)) * 0.1 + 0.9;
+    texColor *= rough;
+    return clamp(texColor, vec3<f32>(0.0), vec3<f32>(1.0));
+}
+
+fn woodTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
+    let style = fract(seed * 0.3819);
+    if (style < 0.20) {
+        return woodSolidTexture(worldXY, seed);
+    } else if (style < 0.40) {
+        return plankWoodTexture(worldXY, seed);
+    } else if (style < 0.60) {
+        return gradientTexture(worldXY, seed);
+    } else {
+        return otavioWoodTexture(worldXY, seed);
+    }
+}
 
 // ── Cel shading ──
 
@@ -124,10 +622,36 @@ fn celHoleShading(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>) -> vec3<f32>
     return baseColor * lit;
 }
 
+fn toonStep(nl: f32, levels: i32) -> f32 {
+    if (levels <= 1) {
+        return 1.0;
+    }
+    let n = f32(levels - 1);
+    return floor(nl * n + 0.5) / n;
+}
+
+fn celStep(ndl: f32, levels: i32, shadowBright: f32) -> f32 {
+    if (levels <= 1) {
+        return select(shadowBright, 1.0, ndl > 0.0);
+    }
+    let n = f32(levels);
+    let bucket = clamp(floor(ndl * n), 0.0, n - 1.0);
+    let t = bucket / (n - 1.0);
+    return mix(shadowBright, 1.0, t);
+}
+
+fn celRopeShading(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>, levels: i32, cp: vec4<f32>) -> vec3<f32> {
+    let shadowBright = cp.x;
+    let wrap = cp.y;
+    let ndl = dot(n, l);
+    let lit = celStep(clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0), levels, shadowBright);
+    return baseColor * lit;
+}
+
 // ── Rubber PBR (ported from Metal) ──
 
 fn rubberPBR(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>,
-             roughness: f32, taut: f32, vCoord: f32,
+             roughness: f32, taut: f32, vCoord: f32, cartoonMode: f32, cartoonLevels: i32,
              matP: vec4<f32>, matP2: vec4<f32>, stretchGloss: f32, stretchSpec: f32) -> vec3<f32> {
     let matteAmount = matP.x;
     let glossAmount = matP.y;
@@ -152,12 +676,15 @@ fn rubberPBR(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>,
 
     let wrapDiff = clamp((nl + diffuseWrap) / (1.0 + diffuseWrap), 0.0, 1.0);
 
-    let sssNL = clamp(dot(-n, l), 0.0, 1.0);
-    let sssWrap = clamp((sssNL + 0.3) / 1.3, 0.0, 1.0);
-    let sssContrib = sssWrap * subsurface * 0.3;
+    let sssBackNL = clamp(dot(-n, l), 0.0, 1.0);
+    let sssBackWrap = clamp((sssBackNL + 0.5) / 1.5, 0.0, 1.0);
+    let sssForwardWrap = clamp((-nl + 0.8) / 1.8, 0.0, 1.0);
+    let sssViewEdge = pow(1.0 - nv, 2.0);
+    let sssContrib = (sssBackWrap * 0.5 + sssForwardWrap * 0.35 + sssViewEdge * 0.15) * subsurface;
+    let sssTint = albedo * vec3<f32>(1.25, 0.85, 0.7);
 
     let ambientBase = mix(0.20, 0.45, matteAmount);
-    var diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff + sssContrib);
+    var diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff) + sssTint * sssContrib;
 
     var rough = mix(0.18, 0.92, matteAmount) + roughness * 0.1;
     let taut2 = taut * taut;
@@ -185,6 +712,92 @@ fn rubberPBR(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>,
     diff += albedo * rim;
 
     return diff + specColor;
+}
+
+fn wormShading(
+    baseColor: vec3<f32>,
+    n: vec3<f32>,
+    l: vec3<f32>,
+    v: vec3<f32>,
+    worldPos: vec3<f32>,
+    uv: vec2<f32>,
+    time: f32,
+) -> vec3<f32> {
+    let u = uv.x;
+    let vCoord = uv.y;
+
+    let grooveDepth = frame.wormParams1.x;
+    let bellyBright = frame.wormParams1.y;
+    let backDark = frame.wormParams1.z;
+    let skinNoiseAmt = frame.wormParams1.w;
+    let sssStr = frame.wormParams2.x;
+    let rough = frame.wormParams2.y;
+    let specStr = frame.wormParams2.z;
+    let rimStr = frame.wormParams2.w;
+    let eyeSize = frame.wormParams3.x;
+    let pulseSpeed = frame.wormParams3.y;
+    let pulseAmp = frame.wormParams3.z;
+    let segFreq = frame.wormParams3.w;
+
+    let segPhase = u * segFreq * 3.14159265 * 2.0;
+    let segGroove = smoothstep(0.85, 1.0, abs(sin(segPhase)));
+    let grooveDarken = 1.0 - segGroove * grooveDepth;
+
+    let bodyGrad = sin(u * 3.14159265);
+    let bellyColor = baseColor * vec3<f32>(bellyBright, bellyBright * 0.957, bellyBright * 0.87);
+    let backColor = baseColor * vec3<f32>(backDark, backDark * 1.07, backDark);
+    let bellySide = smoothstep(0.3, 0.7, vCoord);
+    var skinColor = mix(bellyColor, backColor, vec3<f32>(bellySide));
+
+    let skinNoise = hash21(worldPos.xy * 80.0 + vec2<f32>(u * 5.0)) * skinNoiseAmt - skinNoiseAmt * 0.5;
+    skinColor += vec3<f32>(skinNoise);
+    skinColor *= grooveDarken;
+
+    let ndl = clamp(dot(n, l), 0.0, 1.0);
+    let wrap = 0.45;
+    let wrapDiff = clamp((ndl + wrap) / (1.0 + wrap), 0.0, 1.0);
+
+    let sssNL = clamp(dot(-n, l), 0.0, 1.0);
+    let sss = sssNL * sssStr * bodyGrad;
+    let sssColor = baseColor * vec3<f32>(1.3, 0.5, 0.3);
+
+    let diff = skinColor * (0.25 + 0.75 * wrapDiff) + sssColor * sss;
+
+    let nv = clamp(dot(n, v), 0.0, 1.0);
+    let h = normalize(l + v);
+    let nh = clamp(dot(n, h), 0.0, 1.0);
+
+    let alpha = rough * rough;
+    let alpha2 = alpha * alpha;
+    let denom = nh * nh * (alpha2 - 1.0) + 1.0;
+    let D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+    let k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    let G1l = ndl / (ndl * (1.0 - k) + k + 1e-4);
+    let G1v = nv / (nv * (1.0 - k) + k + 1e-4);
+    let G = G1l * G1v;
+    let F0 = 0.06;
+    let F = F0 + (1.0 - F0) * pow(1.0 - clamp(dot(v, h), 0.0, 1.0), 5.0);
+    let spec = D * G * F / max(4.0 * ndl * nv, 0.001);
+    let specColor = vec3<f32>(0.95, 0.97, 1.0) * spec * specStr;
+
+    let fresnel = pow(1.0 - nv, 3.5);
+    let rim = vec3<f32>(rimStr, rimStr * 1.5, rimStr * 1.25) * fresnel;
+
+    let headDist = min(u, 1.0 - u);
+    let eyeZone = smoothstep(0.06, 0.02, headDist);
+    let eyeAngle = vCoord * 3.14159265 * 2.0;
+    let eyeLeft = smoothstep(eyeSize, eyeSize * 0.33, abs(eyeAngle - 1.2));
+    let eyeRight = smoothstep(eyeSize, eyeSize * 0.33, abs(eyeAngle - 5.08));
+    let eyeDot = (eyeLeft + eyeRight) * eyeZone;
+    let eyeColor = vec3<f32>(0.02, 0.02, 0.02);
+
+    var c = diff + specColor + rim;
+    c = mix(c, eyeColor, vec3<f32>(eyeDot * 0.9));
+
+    let pulse = sin(time * pulseSpeed + u * 8.0) * pulseAmp + 1.0;
+    c *= pulse;
+
+    return c;
 }
 
 // ── SDF Shadow ──
@@ -248,48 +861,51 @@ fn sdfShadow(worldPos: vec3<f32>, skipRopeId: f32) -> f32 {
 }
 
 fn shadowVisibility(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
-    return sdfShadow(worldPos, -1.0);
+    return shadowMapPCF(worldPos, worldN);
 }
 
-fn shadowMapPCF(worldPos: vec3<f32>) -> f32 {
+fn shadowMapPCF(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
+    if (frame.lightingParams.w < 0.5) { return 1.0; }
+
     let lp4 = frame.lightViewProj * vec4<f32>(worldPos, 1.0);
     let ndc3 = lp4.xyz / lp4.w;
     let suv2 = vec2<f32>(ndc3.x * 0.5 + 0.5, 1.0 - (ndc3.y * 0.5 + 0.5));
-    let outOfBounds = suv2.x < 0.0 || suv2.x > 1.0 || suv2.y < 0.0 || suv2.y > 1.0;
-    let smBias = frame.orthoHalfSize_shadowBias.z;
+    if (suv2.x < 0.0 || suv2.x > 1.0 || suv2.y < 0.0 || suv2.y > 1.0) { return 1.0; }
+
+    let biasBase = frame.orthoHalfSize_shadowBias.z;
+    let ndlBias = clamp(dot(normalize(worldN), normalize(frame.lightDir_intensity.xyz)), 0.0, 1.0);
+    let smBias = biasBase + (1.0 - ndlBias) * biasBase * 2.2;
     let refD = ndc3.z - smBias;
     let smInv = frame.shadowInvSize_unused.x;
     let shadowType = frame.orthoHalfSize_shadowBias.w;
 
-    var smVis = 0.0;
-    let a = hash21(worldPos.xy * 1.731) * 6.2831853;
-    let ca = cos(a);
-    let sa = sin(a);
-
     if (shadowType < 0.5) {
-        smVis = textureSampleCompare(shadow_map, shadow_sampler, suv2, refD);
-        return select(smVis, 1.0, outOfBounds);
+        return textureSampleCompare(shadow_map, shadow_sampler, suv2, refD);
     }
 
     if (shadowType < 1.5) {
+        var smVis = 0.0;
         let radius = smInv * 4.0;
-        for (var i = 0u; i < 24u; i = i + 1u) {
+        for (var i = 0u; i < 32u; i = i + 1u) {
             let p = POISSON_DISK[i];
-            let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
-            smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * radius, refD);
+            smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + p * radius, refD);
         }
-        let shadow = smVis / 24.0;
-        return select(smoothstep(0.0, 1.0, shadow), 1.0, outOfBounds);
+        return smoothstep(0.0, 1.0, smVis / 32.0);
     }
 
-    let searchRadius = smInv * 6.0;
+    // PCSS
+    let lightSize = max(0.001, frame.lightingParams.z);
+    let nearPlane = 0.01;
+    var blockerSearchRadius = lightSize * (refD - nearPlane) / refD;
+    blockerSearchRadius *= 0.65;
+    blockerSearchRadius = clamp(blockerSearchRadius, smInv * 1.5, smInv * 10.0);
+
     let smDims = textureDimensions(shadow_map);
     var blockerSum = 0.0;
     var blockerCount = 0.0;
-    for (var i = 0u; i < 16u; i = i + 1u) {
+    for (var i = 0u; i < 24u; i = i + 1u) {
         let p = POISSON_DISK[i];
-        let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
-        let sampleUV = clamp(suv2 + rot * searchRadius, vec2<f32>(0.0), vec2<f32>(1.0));
+        let sampleUV = clamp(suv2 + p * blockerSearchRadius, vec2<f32>(0.0), vec2<f32>(1.0));
         let tc = vec2<i32>(i32(sampleUV.x * f32(smDims.x)), i32(sampleUV.y * f32(smDims.y)));
         let sampleDepth = textureLoad(shadow_map, tc, 0);
         let isBlocker = select(0.0, 1.0, sampleDepth < refD);
@@ -297,20 +913,21 @@ fn shadowMapPCF(worldPos: vec3<f32>) -> f32 {
         blockerCount += isBlocker;
     }
 
-    var filterRadius = smInv * 4.0;
-    if (blockerCount >= 1.0) {
-        let avgBlocker = blockerSum / blockerCount;
-        let penumbra = (refD - avgBlocker) / max(avgBlocker, 0.001);
-        filterRadius = clamp(penumbra * smInv * 80.0, smInv * 3.0, smInv * 20.0);
-    }
+    if (blockerCount < 1.0) { return 1.0; }
 
+    let avgBlocker = blockerSum / blockerCount;
+    var penumbraRadius = lightSize * (refD - avgBlocker) / avgBlocker;
+    penumbraRadius = max(0.0001, penumbraRadius);
+    var filterRadius = penumbraRadius * 1.4;
+    filterRadius = clamp(filterRadius, smInv * 3.0, smInv * 20.0);
+
+    var smVis = 0.0;
     for (var i = 0u; i < 32u; i = i + 1u) {
         let p = POISSON_DISK[i];
-        let rot = vec2<f32>(p.x * ca - p.y * sa, p.x * sa + p.y * ca);
-        smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + rot * filterRadius, refD);
+        smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + p * filterRadius, refD);
     }
     let shadow = smoothstep(0.0, 1.0, smVis / 32.0);
-    return select(pow(shadow, 1.2), 1.0, outOfBounds);
+    return pow(shadow, 1.2);
 }
 
 fn planarCapsuleShadowAt(worldXY: vec2<f32>) -> f32 {
@@ -376,6 +993,14 @@ struct RopeVSOut {
 
 struct ShadowVSOut {
     @builtin(position) position: vec4<f32>,
+};
+
+struct BoardVSOut {
+    @builtin(position) position: vec4<f32>,
+    @location(0) worldPos: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) worldXY: vec2<f32>,
+    @location(3) elevation: f32,
 };
 
 // ── Fullscreen vertex ──
@@ -458,53 +1083,23 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
     let worldN = vec3<f32>(0.0, 0.0, 1.0);
 
     let levelSeed = frame.timeDrag.z;
-    let renderMode = u32(frame.shadowInvSize_unused.w);
-
-    let matSeed = hash21(vec2<f32>(levelSeed * 1.37, 0.0));
-    var holeLum: f32;
-    if (matSeed < 0.2) {
-        holeLum = 0.92;
-    } else if (matSeed < 0.4) {
-        holeLum = 0.58;
-    } else if (matSeed < 0.6) {
-        holeLum = 0.36;
-    } else if (matSeed < 0.8) {
-        holeLum = 0.78;
-    } else {
-        holeLum = 0.58;
-    }
-
+    let tableStyle = u32(frame.tableParams.x + 0.5);
+    let tableColor1 = frame.tableParams.yzw;
+    let tableColor2 = frame.tableParams2.xyz;
     var baseColor: vec3<f32>;
-    if (renderMode == 0u) {
-        let grayVal = mix(0.35, 0.55, hash21(vec2<f32>(levelSeed * 4.13, 2.0)));
-        baseColor = vec3<f32>(grayVal, grayVal, grayVal);
+    if (tableStyle == 1u) {
+        let t = clamp(worldXY.y * 0.35 + 0.5, 0.0, 1.0);
+        baseColor = mix(tableColor1, tableColor2, vec3<f32>(t));
+    } else if (tableStyle == 2u) {
+        baseColor = tableColor1;
     } else {
-        let bgSeed = hash21(vec2<f32>(levelSeed * 2.71, 5.0));
-        var tableMode: u32;
-        if (holeLum > 0.65) {
-            if (bgSeed < 0.6) { tableMode = 2u; } else { tableMode = 3u; }
-        } else {
-            if (bgSeed < 0.5) { tableMode = 1u; } else if (bgSeed < 0.8) { tableMode = 0u; } else { tableMode = 3u; }
-        }
-
-        if (tableMode == 1u) {
-            baseColor = vec3<f32>(0.95, 0.95, 0.95);
-        } else if (tableMode == 2u) {
-            baseColor = vec3<f32>(0.08, 0.08, 0.08);
-        } else if (tableMode == 3u) {
-            let grayVal = mix(0.35, 0.55, hash21(vec2<f32>(levelSeed * 4.13, 2.0)));
-            baseColor = vec3<f32>(grayVal, grayVal, grayVal);
-        } else {
-            let wSeed = hash21(vec2<f32>(levelSeed * 1.23, 0.0));
-            let warmth = hash21(vec2<f32>(levelSeed * 3.71, 1.0));
-            let base_lum = mix(0.28, 0.48, wSeed);
-            baseColor = vec3<f32>(base_lum * mix(1.0, 1.12, warmth),
-                                  base_lum * mix(0.92, 1.0, warmth),
-                                  base_lum * mix(0.82, 0.92, warmth));
-        }
+        let wood_world_min = frame.woodBoundsMin.xy;
+        let wood_world_max = frame.woodBoundsMax.xy;
+        let wood_uv = (worldXY - wood_world_min) / (wood_world_max - wood_world_min);
+        baseColor = textureSample(wood_baked_tex, noise_sampler, wood_uv).rgb;
     }
 
-    let celMode = frame.shadowInvSize_unused.z > 0.5;
+    let celMode = frame.visualParams.z > 0.5;
 
     let l = normalize(frame.lightDir_intensity.xyz);
     let v = normalize(frame.cameraPos.xyz - worldPos);
@@ -540,7 +1135,7 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
         let tsMode = frame.ambientColor.x;
         var shadow = 1.0;
         if (tsMode < 0.5) {
-            shadow = shadowMapPCF(worldPos);
+            shadow = shadowMapPCF(worldPos, worldN);
         } else if (tsMode < 1.5) {
             shadow = planarMaskShadow(worldXY);
         }
@@ -561,6 +1156,72 @@ fn table_fragment(in: TableVSOut) -> TableFSOut {
     return out;
 }
 
+// ── Board vertex/fragment ──
+
+@vertex
+fn board_vertex(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) worldXY: vec2<f32>,
+) -> BoardVSOut {
+    var out: BoardVSOut;
+    out.worldPos = position;
+    out.position = frame.viewProj * vec4<f32>(position, 1.0);
+    out.normal = normal;
+    out.worldXY = worldXY;
+    out.elevation = position.z;
+    return out;
+}
+
+@fragment
+fn board_fragment(in: BoardVSOut) -> @location(0) vec4<f32> {
+    let n = normalize(in.normal);
+    let l = normalize(frame.lightDir_intensity.xyz);
+    let v = normalize(frame.cameraPos.xyz - in.worldPos);
+    let h = normalize(l + v);
+
+    let style = u32(frame.tableParams.x + 0.5);
+    let color1 = frame.tableParams.yzw;
+    let color2 = frame.tableParams2.xyz;
+    let wood_scale = max(frame.woodBoundsMin.w, 0.001);
+    let wood_brightness = frame.woodBoundsMin.z;
+
+    var baseColor: vec3<f32>;
+    if (style == 1u) {
+        let t = clamp(in.worldXY.y * 0.35 + 0.5, 0.0, 1.0);
+        baseColor = mix(color1, color2, vec3<f32>(t));
+    } else if (style == 2u) {
+        baseColor = color1;
+    } else {
+        let uv = in.worldXY * wood_scale * 0.18;
+        let ring = sin(uv.x * 8.0 + textureSample(noise_tex, noise_sampler, uv * 0.4 + vec2<f32>(0.17, 0.31)).r * 3.0);
+        let grain = textureSample(noise_tex, noise_sampler, uv * vec2<f32>(0.15, 0.7) + vec2<f32>(0.43, 0.19)).r;
+        let t = clamp(0.5 + ring * 0.35 + (grain - 0.5) * 0.25, 0.0, 1.0);
+        baseColor = mix(color1, color2, vec3<f32>(t)) * wood_brightness;
+    }
+
+    let nl = clamp(dot(n, l), 0.0, 1.0);
+    let ambient = frame.lightingParams.x;
+    let shadowDark = frame.lightingParams.y;
+    let shadowEnabled = frame.lightingParams.w > 0.5;
+    var shadow = 1.0;
+    if (shadowEnabled) {
+        shadow = shadowMapPCF(in.worldPos, n);
+        shadow = pow(shadow, 2.2);
+    }
+
+    var lit = baseColor * (ambient + nl * frame.lightDir_intensity.w * mix(shadowDark, 1.0, shadow));
+    let spec = pow(clamp(dot(n, h), 0.0, 1.0), 60.0) * 0.2 * shadow;
+    lit += vec3<f32>(spec);
+
+    if (n.z < 0.5) {
+        let edgeDarken = 0.65 + 0.35 * clamp(in.worldPos.z / max(in.elevation, 0.01), 0.0, 1.0);
+        lit *= edgeDarken;
+    }
+
+    return vec4<f32>(lit, 1.0);
+}
+
 // ── Hole vertex ──
 
 @vertex
@@ -573,7 +1234,7 @@ fn hole_vertex(
     let inst = hole_instances.data[iid];
     let radius = inst.position_radius.w;
     let lp = position * radius;
-    let wp = vec3<f32>(inst.position_radius.x + lp.x, inst.position_radius.y + lp.y, lp.z);
+    let wp = vec3<f32>(inst.position_radius.x + lp.x, inst.position_radius.y + lp.y, inst.position_radius.z + lp.z);
 
     let hlIdx = frame.ambientColor.w;
     let isHighlight = select(0.0, 1.0, hlIdx >= 0.0 && abs(f32(iid) - hlIdx) < 0.5);
@@ -637,7 +1298,7 @@ fn hole_fragment(in: HoleVSOut) -> @location(0) vec4<f32> {
     topCol *= perHoleMul;
     wallCol *= perHoleMul;
 
-    let celMode = frame.shadowInvSize_unused.z > 0.5;
+    let celMode = frame.visualParams.z > 0.5;
     let col = mix(wallCol, topCol, vec3<f32>(smoothstep(0.15, 0.65, n.z)));
 
     var lit: vec3<f32>;
@@ -660,8 +1321,7 @@ fn hole_fragment(in: HoleVSOut) -> @location(0) vec4<f32> {
         lit += vec3<f32>(0.08, 0.15, 0.22);
     }
 
-    let renderMode = u32(frame.shadowInvSize_unused.w);
-    if (!celMode && renderMode > 0u) {
+    if (!celMode && frame.lightingParams.w > 0.5) {
         let shadow = shadowVisibility(in.worldPos, n);
         lit *= mix(0.25, 1.0, shadow);
     }
@@ -705,7 +1365,7 @@ fn rope_vertex(
 fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     if (in.worldPos.z < -0.01) { discard; }
 
-    let celMode = frame.shadowInvSize_unused.z > 0.5;
+    let celMode = frame.visualParams.z > 0.5;
 
     let l = normalize(frame.lightDir_intensity.xyz);
     let lightI = frame.lightDir_intensity.w;
@@ -713,8 +1373,8 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     var n = normalize(in.normal);
     let taut = clamp(in.params.x, 0.0, 1.0);
     let pinch = clamp(in.params.y, 0.0, 1.0);
-    let repel = clamp(in.params.z / 1000.0, 0.0, 1.0);
-    let fadeOut = clamp(in.params.w, 0.0, 1.0);
+    let repel = clamp(in.params.z, 0.0, 1.0);
+    let isWorm = in.params.w;
 
     let microBump = frame.ropeMatParams2.z;
     let contactAOStr = frame.ropeMatParams2.w;
@@ -744,9 +1404,6 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     base *= 1.0 + microAO;
     base = mix(base, base * 1.3, vec3<f32>(pinch * 0.15));
 
-    let glowT = smoothstep(0.0, 0.6, fadeOut);
-    base = mix(base, vec3<f32>(1.0, 1.0, 0.95), vec3<f32>(glowT * 0.7));
-
     let roughNoise = textureSample(noise_tex, noise_sampler, baseUV * 1.7 + 0.37).r;
     let rough = roughNoise + pinch * 0.06 + repel * 0.04;
 
@@ -755,10 +1412,15 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
     let contactAO = 1.0 - clamp(repelAO + pinchAO, 0.0, 1.0);
 
     var c: vec3<f32>;
-    if (celMode) {
-        c = celShading(base, n, l, v);
+    if (isWorm > 0.5) {
+        c = wormShading(base, n, l, v, in.worldPos, in.uv, frame.timeDrag.x);
+        let ambient = frame.lightingParams.x + 0.03;
+        let shadow = shadowMapPCF(in.worldPos, n);
+        c *= mix(ambient, 1.0, pow(shadow, 2.0));
+    } else if (celMode) {
+        c = celRopeShading(base, n, l, v, i32(frame.visualParams.w), frame.cartoonParams);
     } else {
-        c = rubberPBR(base, n, l, v, rough, taut, in.uv.y,
+        c = rubberPBR(base, n, l, v, rough, taut, in.uv.y, frame.visualParams.z, i32(frame.visualParams.w),
                       frame.ropeMatParams, frame.ropeMatParams2,
                       frame.ropeMatParams3.z, frame.ropeMatParams3.w) * lightI;
         c *= contactAO;
@@ -766,14 +1428,11 @@ fn rope_fragment(in: RopeVSOut) -> @location(0) vec4<f32> {
         let liftGlow = clamp(in.worldPos.z / 0.35, 0.0, 1.0);
         c += vec3<f32>(0.03, 0.04, 0.06) * liftGlow * liftGlowStr;
 
-        var shadow = shadowMapPCF(in.worldPos);
+        var shadow = shadowMapPCF(in.worldPos, n);
         shadow = pow(shadow, 2.0);
         let ambient = frame.lightingParams.x + 0.04 * taut;
         c *= mix(ambient, 1.0, shadow);
     }
-
-    c += c * glowT * 2.5;
-    c = mix(c, vec3<f32>(1.2, 1.15, 1.0), vec3<f32>(glowT * glowT * 0.5));
 
     return vec4<f32>(c, 1.0);
 }
@@ -803,6 +1462,17 @@ fn rope_shadow_vertex(
     return o;
 }
 
+@vertex
+fn board_shadow_vertex(
+    @location(0) position: vec3<f32>,
+    @location(1) normal: vec3<f32>,
+    @location(2) worldXY: vec2<f32>,
+) -> ShadowVSOut {
+    var o: ShadowVSOut;
+    o.position = frame.lightViewProj * vec4<f32>(position, 1.0);
+    return o;
+}
+
 // ── Hole shadow vertex ──
 
 @vertex
@@ -815,7 +1485,7 @@ fn hole_shadow_vertex(
     let inst = hole_instances.data[iid];
     let radius = inst.position_radius.w;
     let lp = position * radius;
-    let wp = vec3<f32>(inst.position_radius.x + lp.x, inst.position_radius.y + lp.y, lp.z);
+    let wp = vec3<f32>(inst.position_radius.x + lp.x, inst.position_radius.y + lp.y, inst.position_radius.z + lp.z);
     var o: ShadowVSOut;
     o.position = frame.lightViewProj * vec4<f32>(wp, 1.0);
     return o;
@@ -899,7 +1569,8 @@ fn loadDepth(coord: vec2<i32>, dims: vec2<u32>) -> f32 {
 fn edgeDetect(uv: vec2<f32>) -> f32 {
     let dims = textureDimensions(depth_texture);
     let px = vec2<i32>(i32(uv.x * f32(dims.x)), i32(uv.y * f32(dims.y)));
-    let s = 3i;
+    let spread = i32(round(mix(1.0, 3.0, frame.cartoonParams.z)));
+    let s = max(spread, 1);
 
     let d00 = loadDepth(px + vec2<i32>(-s, -s), dims);
     let d10 = loadDepth(px + vec2<i32>( 0, -s), dims);
@@ -920,34 +1591,20 @@ fn edgeDetect(uv: vec2<f32>) -> f32 {
 @fragment
 fn post_fragment(in: FullscreenVSOut) -> @location(0) vec4<f32> {
     let uv = in.uv;
-    let celMode = frame.shadowInvSize_unused.z > 0.5;
+    let cartoonMode = frame.visualParams.z > 0.5;
 
     let c = textureSample(hdr_texture, linear_sampler, uv).xyz;
     let b = textureSample(bloom_texture, linear_sampler, uv).xyz;
-    var combined: vec3<f32>;
-    var exposure: f32;
-    if (celMode) {
-        combined = c;
-        exposure = 0.75;
-    } else {
-        combined = c + b * 0.18;
-        exposure = max(frame.lightingParams.w, 0.5);
-    }
+    let combined = c + b * frame.visualParams.y;
+    let exposure = max(frame.visualParams.x, 0.001);
     var mapped = vec3<f32>(1.0) - exp(-combined * exposure);
     mapped = pow(clamp(mapped, vec3<f32>(0.0), vec3<f32>(1.0)), vec3<f32>(1.0 / 2.2));
 
-    if (celMode) {
+    if (cartoonMode) {
         let edge = edgeDetect(uv);
-        mapped = mix(mapped, mapped * 0.12, edge);
-    }
-
-    let victoryTime = frame.timeDrag.y;
-    let time = frame.timeDrag.x;
-    if (victoryTime > 0.0) {
-        let dims = textureDimensions(hdr_texture);
-        let aspect = f32(dims.x) / f32(max(dims.y, 1u));
-        let fw = fireworks(uv, time, victoryTime, aspect);
-        mapped += fw;
+        let darken = 1.0 - frame.cartoonParams.w;
+        mapped = floor(mapped * 32.0 + 0.5) / 32.0;
+        mapped = mix(mapped, mapped * darken, edge);
     }
 
     return vec4<f32>(mapped, 1.0);
@@ -1031,4 +1688,19 @@ fn bloom_blur_v(@builtin(global_invocation_id) gid: vec3<u32>) {
     acc += textureLoad(bloom_src, clamp(p + vec2<i32>(0, 4), vec2<i32>(0), maxP), 0) * w4;
     acc += textureLoad(bloom_src, clamp(p - vec2<i32>(0, 4), vec2<i32>(0), maxP), 0) * w4;
     textureStore(bloom_dst, vec2<i32>(i32(gid.x), i32(gid.y)), acc);
+}
+
+// ── Bake wood texture ──
+
+@compute @workgroup_size(8, 8)
+fn bake_wood_kernel(@builtin(global_invocation_id) gid: vec3<u32>) {
+    let dims = textureDimensions(wood_bake_dst);
+    if (gid.x >= dims.x || gid.y >= dims.y) { return; }
+    let uv = (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(dims);
+    let world_min = frame.woodBoundsMin.xy;
+    let world_max = frame.woodBoundsMax.xy;
+    let worldXY = mix(world_min, world_max, uv);
+    let seed = frame.timeDrag.z;
+    let col = clamp(woodTexture(worldXY, seed), vec3<f32>(0.0), vec3<f32>(1.0));
+    textureStore(wood_bake_dst, vec2<i32>(gid.xy), vec4<f32>(col, 1.0));
 }

@@ -22,6 +22,7 @@ class VerletSimulator(
 ) {
     companion object {
         private const val TAG = "VerletSim"
+        private const val ENABLE_AGENT_DEBUG_LOGS = false
 
         fun computeFrames(
             positions: FloatArray,
@@ -182,10 +183,48 @@ class VerletSimulator(
     var stretchThinning: Float = 0.5f
     var squareCrossSection: Boolean = false
 
-    private val dt: Float = 1.0f / 120.0f
+    // Sticky (adhesion) parameters
+    var stickyEnabled: Boolean = false
+    var stickyStrength: Float = 0.5f
+    var stickyRadius: Float = 1.5f
+    var stickyDamping: Float = 0.9f
+    var stickyBreakThreshold: Float = 0.8f
+
+    private val stickyBonds = ArrayList<StickyBond>(256)
+    private val stickyBondKeys = HashSet<Long>(256)
+    private var stickyFormCounter = 0
+    private val stickyFormInterval = 10
+
+    var physicsRate: Float = 120f
+        set(value) { field = value.coerceIn(30f, 240f); dt = 1.0f / field }
+    private var dt: Float = 1.0f / 120.0f
+    var maxSubstepsPerFrame: Int = 4
     private var accumulator: Float = 0f
     private var resampleCounter: Int = 0
     private val resampleInterval: Int = 30
+    private var debugStepCounter: Int = 0
+    private var debugCollisionHits: Int = 0
+    private var debugDragCollisionHits: Int = 0
+    private var debugMaxOverlap: Float = 0f
+    private var debugLastPairCount: Int = 0
+    private var debugMaxParticleDisplacement: Float = 0f
+    private var debugClampedParticles: Int = 0
+    private var debugDroppedSubsteps: Int = 0
+    private var perfIntegrateNs: Long = 0L
+    private var perfBroadphaseNs: Long = 0L
+    private var perfConstraintNs: Long = 0L
+    private var perfPostSolveNs: Long = 0L
+    private var perfFrictionStickyNs: Long = 0L
+    private var perfStepSamples: Int = 0
+
+    private fun debugLog(runId: String, hypothesisId: String, location: String, message: String, data: String) {
+        if (!ENABLE_AGENT_DEBUG_LOGS) return
+        val ts = System.currentTimeMillis()
+        Log.i(
+            TAG,
+            "[AGENTDBG] {\"sessionId\":\"d31f9b\",\"runId\":\"$runId\",\"hypothesisId\":\"$hypothesisId\",\"location\":\"$location\",\"message\":\"$message\",\"data\":$data,\"timestamp\":$ts}"
+        )
+    }
 
     var dragTargetPosX: Float = 0f
     var dragTargetPosY: Float = 0f
@@ -222,7 +261,9 @@ class VerletSimulator(
     var frictionSampleCount: Int = 0
 
     // Lower animation
-    var lowerAnimation: LowerAnimation? = null
+    var lowerAnimations: MutableMap<LowerAnimationKey, LowerAnimation> = mutableMapOf()
+    val hasLowerAnimations: Boolean
+        get() = lowerAnimations.isNotEmpty()
 
     // Cached material frames per band
     var cachedFrames: Array<Array<MaterialFrame>> = emptyArray()
@@ -255,6 +296,18 @@ class VerletSimulator(
     fun holeSurfaceZ(holeIndex: Int): Float {
         if (holeIndex < 0 || holeIndex >= holeCount) return 0f
         return holeElevations[holeIndex]
+    }
+
+    fun isInsideAnyHole(x: Float, y: Float): Boolean {
+        val r2 = holeRadius * holeRadius
+        for (h in 0 until holeCount) {
+            val hx = holePositions[h * 2]
+            val hy = holePositions[h * 2 + 1]
+            val dx = x - hx
+            val dy = y - hy
+            if (dx * dx + dy * dy < r2) return true
+        }
+        return false
     }
 
     fun boardSurfaceZ(x: Float, y: Float): Float {
@@ -343,7 +396,7 @@ class VerletSimulator(
     fun update(deltaTime: Float) {
         val clampedDt = min(deltaTime, 1.0f / 15.0f)
 
-        if (dragInfo != null || lowerAnimation != null) {
+        if (dragInfo != null || hasLowerAnimations) {
             idleTimer = 0f
             isSleeping = false
         } else {
@@ -379,9 +432,13 @@ class VerletSimulator(
         advanceSuckAnimations(clampedDt)
 
         accumulator += clampedDt
-        val stepsNeeded = (accumulator / dt).toInt()
-        accumulator -= stepsNeeded.toFloat() * dt
-        val n = max(stepsNeeded, 0)
+        val stepsAvailable = (accumulator / dt).toInt().coerceAtLeast(0)
+        val n = min(stepsAvailable, maxSubstepsPerFrame)
+        accumulator -= n.toFloat() * dt
+        if (stepsAvailable > maxSubstepsPerFrame) {
+            debugDroppedSubsteps += (stepsAvailable - maxSubstepsPerFrame)
+            accumulator = min(accumulator, dt * maxSubstepsPerFrame.toFloat())
+        }
         if (n <= 0) return
 
         // Smooth tension transition
@@ -404,6 +461,34 @@ class VerletSimulator(
             val activeBandCount = bands.count { it.active }
             val firstPCount = bands.firstOrNull()?.particleCount ?: 0
             Log.i(TAG, "[FRAME] dt=${"%.4f".format(deltaTime)} substeps=$n fixedDt=${"%.5f".format(dt)} drag=${dragInfo != null} particles=$firstPCount bands=$activeBandCount constIter=$constraintIterations")
+            if (ENABLE_AGENT_DEBUG_LOGS && perfStepSamples > 0) {
+                val sampleCount = perfStepSamples.toDouble()
+                debugLog(
+                    runId = "baseline",
+                    hypothesisId = "H_phase_split",
+                    location = "VerletSimulator.kt:update",
+                    message = "phase_profile_ms",
+                    data = "{\"samples\":$perfStepSamples,\"integrateMs\":${"%.4f".format(perfIntegrateNs / sampleCount / 1_000_000.0)},\"broadphaseMs\":${"%.4f".format(perfBroadphaseNs / sampleCount / 1_000_000.0)},\"constraintMs\":${"%.4f".format(perfConstraintNs / sampleCount / 1_000_000.0)},\"postSolveMs\":${"%.4f".format(perfPostSolveNs / sampleCount / 1_000_000.0)},\"frictionStickyMs\":${"%.4f".format(perfFrictionStickyNs / sampleCount / 1_000_000.0)},\"effectiveIters\":$constraintIterations,\"dragActive\":${dragInfo != null}}"
+                )
+                perfIntegrateNs = 0L
+                perfBroadphaseNs = 0L
+                perfConstraintNs = 0L
+                perfPostSolveNs = 0L
+                perfFrictionStickyNs = 0L
+                perfStepSamples = 0
+            }
+            if (ENABLE_AGENT_DEBUG_LOGS && debugDroppedSubsteps > 0) {
+                debugLog(
+                    runId = "post-fix",
+                    hypothesisId = "H_substep_budget",
+                    location = "VerletSimulator.kt:update",
+                    message = "substep_backlog_dropped",
+                    data = "{\"droppedSubsteps\":$debugDroppedSubsteps,\"maxSubstepsPerFrame\":$maxSubstepsPerFrame,\"accumulator\":$accumulator,\"dragActive\":${dragInfo != null}}"
+                )
+            }
+            if (debugDroppedSubsteps > 0) {
+                debugDroppedSubsteps = 0
+            }
         }
 
         val drag = dragInfo
@@ -458,64 +543,81 @@ class VerletSimulator(
             band.suckConsumed += pullSpeed * clampedDt
 
             val fromEnd = band.suckFromEnd
-            val headIdx = if (fromEnd == 1) 0 else n - 1
-            val step = if (fromEnd == 1) 1 else -1
-
-            val headOff = headIdx * 3
-            val suckZ = holeBelowZ - band.suckConsumed
-            band.positions[headOff] = holeBelowX
-            band.positions[headOff + 1] = holeBelowY
-            band.positions[headOff + 2] = suckZ
-            band.previousPositions[headOff] = holeBelowX
-            band.previousPositions[headOff + 1] = holeBelowY
-            band.previousPositions[headOff + 2] = suckZ
-
-            val segLen = band.segmentLength
+            val suckSegs = band.suckSegLengths
+            val origPositions = band.suckOrigPositions
             val R = band.radius
-            val holeR2 = holeRadius * holeRadius
-            var allBelow = true
 
-            var prevIdx = headIdx
-            var j = headIdx + step
-            while (j in 0 until n) {
-                val po = j * 3
-                val prO = prevIdx * 3
-                val prevX = band.positions[prO]; val prevY = band.positions[prO + 1]; val prevZ = band.positions[prO + 2]
-                val currX = band.positions[po]; val currY = band.positions[po + 1]; val currZ = band.positions[po + 2]
-                val diffX = currX - prevX; val diffY = currY - prevY; val diffZ = currZ - prevZ
-                val d = sqrt(diffX * diffX + diffY * diffY + diffZ * diffZ)
-                if (d > segLen && d > 1e-6f) {
-                    val inv = segLen / d
-                    band.positions[po] = prevX + diffX * inv
-                    band.positions[po + 1] = prevY + diffY * inv
-                    band.positions[po + 2] = prevZ + diffZ * inv
+            val arcLen = FloatArray(n)
+            if (fromEnd == 1) {
+                for (k in 1 until n) {
+                    val segL = if (k - 1 < suckSegs.size) suckSegs[k - 1] else band.segmentLength
+                    arcLen[k] = arcLen[k - 1] + segL
+                }
+            } else {
+                for (k in n - 2 downTo 0) {
+                    val segL = if (k < suckSegs.size) suckSegs[k] else band.segmentLength
+                    arcLen[k] = arcLen[k + 1] + segL
+                }
+            }
+
+            val totalArc = if (fromEnd == 1) arcLen[n - 1] else arcLen[0]
+            val consumed = band.suckConsumed
+
+            for (k in 0 until n) {
+                val shifted = arcLen[k] - consumed
+                val po = k * 3
+
+                if (shifted <= 0f) {
+                    band.positions[po] = holeBelowX
+                    band.positions[po + 1] = holeBelowY
+                    band.positions[po + 2] = holeBelowZ + shifted
+                } else {
+                    if (fromEnd == 1) {
+                        var seg = 0
+                        var acc = 0f
+                        while (seg < n - 1) {
+                            val segL = if (seg < suckSegs.size) suckSegs[seg] else band.segmentLength
+                            if (acc + segL >= shifted) break
+                            acc += segL
+                            seg++
+                        }
+                        val segL = if (seg < suckSegs.size) suckSegs[seg] else band.segmentLength
+                        val t = if (segL > 1e-9f) (shifted - acc) / segL else 0f
+                        val p0 = seg * 3
+                        val p1 = if (seg + 1 < n) (seg + 1) * 3 else p0
+                        band.positions[po] = origPositions[p0] + (origPositions[p1] - origPositions[p0]) * min(t, 1f)
+                        band.positions[po + 1] = origPositions[p0 + 1] + (origPositions[p1 + 1] - origPositions[p0 + 1]) * min(t, 1f)
+                        band.positions[po + 2] = origPositions[p0 + 2] + (origPositions[p1 + 2] - origPositions[p0 + 2]) * min(t, 1f)
+                    } else {
+                        var seg = n - 1
+                        var acc = 0f
+                        while (seg > 0) {
+                            val segL = if (seg - 1 < suckSegs.size) suckSegs[seg - 1] else band.segmentLength
+                            if (acc + segL >= shifted) break
+                            acc += segL
+                            seg--
+                        }
+                        val segL = if (seg - 1 >= 0 && seg - 1 < suckSegs.size) suckSegs[seg - 1] else band.segmentLength
+                        val t = if (segL > 1e-9f) (shifted - acc) / segL else 0f
+                        val p0 = seg * 3
+                        val p1 = if (seg - 1 >= 0) (seg - 1) * 3 else p0
+                        band.positions[po] = origPositions[p0] + (origPositions[p1] - origPositions[p0]) * min(t, 1f)
+                        band.positions[po + 1] = origPositions[p0 + 1] + (origPositions[p1 + 1] - origPositions[p0 + 1]) * min(t, 1f)
+                        band.positions[po + 2] = origPositions[p0 + 2] + (origPositions[p1 + 2] - origPositions[p0 + 2]) * min(t, 1f)
+                    }
+
+                    val surfZ = boardSurfaceZ(x = band.positions[po], y = band.positions[po + 1])
+                    if (band.positions[po + 2] >= surfZ && band.positions[po + 2] < surfZ + R) {
+                        band.positions[po + 2] = surfZ + R
+                    }
                 }
 
-                val px = band.positions[po]; val py = band.positions[po + 1]; val pz = band.positions[po + 2]
-                val dxH = px - holeX; val dyH = py - holeY
-                val xyDist2 = dxH * dxH + dyH * dyH
-
-                if (pz < holeElev && xyDist2 > holeR2) {
-                    val xyDist = sqrt(xyDist2)
-                    band.positions[po] = holeX + (dxH / xyDist) * holeRadius * 0.9f
-                    band.positions[po + 1] = holeY + (dyH / xyDist) * holeRadius * 0.9f
-                    band.positions[po + 2] = holeElev
-                }
-
-                val surfZ = boardSurfaceZ(x = band.positions[po], y = band.positions[po + 1])
-                if (band.positions[po + 2] >= surfZ && band.positions[po + 2] < surfZ + R) {
-                    band.positions[po + 2] = surfZ + R
-                }
-
-                if (band.positions[po + 2] >= surfZ) allBelow = false
                 band.previousPositions[po] = band.positions[po]
                 band.previousPositions[po + 1] = band.positions[po + 1]
                 band.previousPositions[po + 2] = band.positions[po + 2]
-                prevIdx = j
-                j += step
             }
 
-            if (allBelow) {
+            if (consumed >= totalArc) {
                 band.fadeOut = 1f
                 band.active = false
                 band.pinStart = -1
@@ -534,51 +636,60 @@ class VerletSimulator(
     }
 
     private fun updateLowerAnimation(deltaTime: Float) {
-        val anim = lowerAnimation ?: return
-        anim.timer += deltaTime
+        if (lowerAnimations.isEmpty()) return
 
-        val bi = anim.bandIndex
-        val band = bands[bi]
-        val idx = if (anim.endIndex == 0) 0 else (band.particleCount - 1) * 3
+        val keys = lowerAnimations.keys.toList()
+        for (key in keys) {
+            val anim = lowerAnimations[key] ?: continue
+            anim.timer += deltaTime
 
-        if (anim.hasReturnPos) {
-            val t = min(anim.timer / anim.returnDuration, 1.0f)
+            val bi = anim.bandIndex
+            val band = bands[bi]
+            val idx = if (anim.endIndex == 0) 0 else (band.particleCount - 1) * 3
+
+            if (anim.hasReturnPos) {
+                val t = min(anim.timer / anim.returnDuration, 1.0f)
+                val eased = 1.0f - (1.0f - t) * (1.0f - t)
+                val px = anim.startPosX + (anim.returnPosX - anim.startPosX) * eased
+                val py = anim.startPosY + (anim.returnPosY - anim.startPosY) * eased
+                val pz = anim.startPosZ + (anim.returnPosZ - anim.startPosZ) * eased
+                band.positions[idx] = px; band.positions[idx + 1] = py; band.positions[idx + 2] = pz
+                band.previousPositions[idx] = px; band.previousPositions[idx + 1] = py; band.previousPositions[idx + 2] = pz
+
+                if (t >= 1.0f) {
+                    anim.startPosX = anim.returnPosX
+                    anim.startPosY = anim.returnPosY
+                    anim.startPosZ = anim.returnPosZ
+                    anim.hasReturnPos = false
+                    anim.timer = 0f
+                }
+
+                lowerAnimations[key] = anim
+                continue
+            }
+
+            val holePos = holePosition3D(anim.targetHole)
+            val t = min(anim.timer / LowerAnimation.DURATION, 1.0f)
             val eased = 1.0f - (1.0f - t) * (1.0f - t)
-            val px = anim.startPosX + (anim.returnPosX - anim.startPosX) * eased
-            val py = anim.startPosY + (anim.returnPosY - anim.startPosY) * eased
-            val pz = anim.startPosZ + (anim.returnPosZ - anim.startPosZ) * eased
+            val px = anim.startPosX + (holePos[0] - anim.startPosX) * eased
+            val py = anim.startPosY + (holePos[1] - anim.startPosY) * eased
+            val pz = anim.startPosZ + (holePos[2] - anim.startPosZ) * eased
             band.positions[idx] = px; band.positions[idx + 1] = py; band.positions[idx + 2] = pz
             band.previousPositions[idx] = px; band.previousPositions[idx + 1] = py; band.previousPositions[idx + 2] = pz
 
             if (t >= 1.0f) {
-                anim.startPosX = anim.returnPosX
-                anim.startPosY = anim.returnPosY
-                anim.startPosZ = anim.returnPosZ
-                anim.hasReturnPos = false
-                anim.timer = 0f
+                if (anim.endIndex == 0) {
+                    band.pinStart = anim.targetHole
+                } else {
+                    band.pinEnd = anim.targetHole
+                }
+                band.positions[idx] = holePos[0]; band.positions[idx + 1] = holePos[1]; band.positions[idx + 2] = holePos[2]
+                band.previousPositions[idx] = holePos[0]; band.previousPositions[idx + 1] = holePos[1]; band.previousPositions[idx + 2] = holePos[2]
+                lowerAnimations.remove(key)
+                continue
             }
-            return
-        }
 
-        val holePos = holePosition3D(anim.targetHole)
-        val t = min(anim.timer / LowerAnimation.DURATION, 1.0f)
-        val eased = 1.0f - (1.0f - t) * (1.0f - t)
-        val px = anim.startPosX + (holePos[0] - anim.startPosX) * eased
-        val py = anim.startPosY + (holePos[1] - anim.startPosY) * eased
-        val pz = anim.startPosZ + (holePos[2] - anim.startPosZ) * eased
-        band.positions[idx] = px; band.positions[idx + 1] = py; band.positions[idx + 2] = pz
-        band.previousPositions[idx] = px; band.previousPositions[idx + 1] = py; band.previousPositions[idx + 2] = pz
-
-        if (t >= 1.0f) {
-            if (anim.endIndex == 0) {
-                band.pinStart = anim.targetHole
-            } else {
-                band.pinEnd = anim.targetHole
-            }
-            band.positions[idx] = holePos[0]; band.positions[idx + 1] = holePos[1]; band.positions[idx + 2] = holePos[2]
-            band.previousPositions[idx] = holePos[0]; band.previousPositions[idx + 1] = holePos[1]; band.previousPositions[idx + 2] = holePos[2]
-            lowerAnimation = null
-            return
+            lowerAnimations[key] = anim
         }
     }
 
@@ -597,7 +708,15 @@ class VerletSimulator(
     // =========================================================================
 
     private fun verletStep(collide: Boolean, stepDt: Float) {
+        val stepStartNs = if (ENABLE_AGENT_DEBUG_LOGS) System.nanoTime() else 0L
         val dt2 = stepDt * stepDt
+        debugStepCounter++
+        debugCollisionHits = 0
+        debugDragCollisionHits = 0
+        debugMaxOverlap = 0f
+        debugLastPairCount = 0
+        debugMaxParticleDisplacement = 0f
+        debugClampedParticles = 0
 
         // 1. Verlet position update + velocity limiting
         val gravZ = gravity * dt2
@@ -616,9 +735,11 @@ class VerletSimulator(
                 var vy = (py - oy) * damping
                 var vz = (pz - oz) * damping
                 val velLen = sqrt(vx * vx + vy * vy + vz * vz)
+                if (velLen > debugMaxParticleDisplacement) debugMaxParticleDisplacement = velLen
                 if (velLen > maxMove) {
                     val s = maxMove / velLen
                     vx *= s; vy *= s; vz *= s
+                    debugClampedParticles++
                 }
                 old[off] = px; old[off + 1] = py; old[off + 2] = pz
                 pos[off] = px + vx; pos[off + 1] = py + vy; pos[off + 2] = pz + vz + gravZ
@@ -639,6 +760,8 @@ class VerletSimulator(
             }
         }
 
+        val afterIntegrateNs = if (ENABLE_AGENT_DEBUG_LOGS) System.nanoTime() else 0L
+
         // 2. Build active bands list for collision
         val active: IntArray
         if (collide) {
@@ -657,11 +780,11 @@ class VerletSimulator(
             active = IntArray(0)
         }
 
-        // Scale iterations inversely with tension
-        val effectiveIters = max(constraintIterations, (constraintIterations.toFloat() / max(currentTension, 0.3f)).toInt())
+        val effectiveIters = constraintIterations
 
         // Build collision pair list (broadphase)
-        var collisionPairs: Array<CollisionPair> = if (collide) buildCollisionPairs(active) else emptyArray()
+        var collisionPairs: LongArray = if (collide) buildCollisionPairs(active) else LongArray(0)
+        debugLastPairCount = collisionPairs.size
 
         // Recompute material frames for rectangular bands
         recomputeFrames()
@@ -681,6 +804,8 @@ class VerletSimulator(
             }
         }
 
+        val afterBroadphaseNs = if (ENABLE_AGENT_DEBUG_LOGS) System.nanoTime() else 0L
+
         // Constraint + collision iterations
         for (iter in 0 until effectiveIters) {
             for (bi in bands.indices) {
@@ -696,10 +821,14 @@ class VerletSimulator(
             }
         }
 
+        val afterConstraintNs = if (ENABLE_AGENT_DEBUG_LOGS) System.nanoTime() else 0L
+
         // Post-solve: collision-only passes until converged
+        var postSolveHadCollision = false
         if (collide) {
             for (pass in 0 until 3) {
                 val hadCollision = resolveCollisionPairs(collisionPairs, injectVelocity = true)
+                if (hadCollision) postSolveHadCollision = true
                 for (biIdx in active.indices) {
                     val bi = active[biIdx]
                     val band = bands[bi]
@@ -746,6 +875,34 @@ class VerletSimulator(
             }
         }
 
+        if (ENABLE_AGENT_DEBUG_LOGS && debugStepCounter % 120 == 0) {
+            debugLog(
+                runId = "baseline",
+                hypothesisId = "H4",
+                location = "VerletSimulator.kt:verletStep",
+                message = "solver_profile",
+                data = "{\"activeBands\":${active.size},\"pairCount\":$debugLastPairCount,\"effectiveIters\":$effectiveIters,\"currentTension\":$currentTension,\"dragActive\":${dragInfo != null},\"postSolveHadCollision\":$postSolveHadCollision}"
+            )
+            debugLog(
+                runId = "baseline",
+                hypothesisId = "H2_H3",
+                location = "VerletSimulator.kt:verletStep",
+                message = "collision_resolution_profile",
+                data = "{\"collisionHits\":$debugCollisionHits,\"dragCollisionHits\":$debugDragCollisionHits,\"maxOverlap\":$debugMaxOverlap,\"maxParticleDisplacement\":$debugMaxParticleDisplacement,\"clampedParticles\":$debugClampedParticles}"
+            )
+            if (active.size >= 2 && debugLastPairCount == 0) {
+                debugLog(
+                    runId = "baseline",
+                    hypothesisId = "H1",
+                    location = "VerletSimulator.kt:verletStep",
+                    message = "broadphase_zero_pairs",
+                    data = "{\"activeBands\":${active.size},\"effectiveIters\":$effectiveIters,\"currentTension\":$currentTension,\"dragActive\":${dragInfo != null}}"
+                )
+            }
+        }
+
+        val afterPostSolveNs = if (ENABLE_AGENT_DEBUG_LOGS) System.nanoTime() else 0L
+
         // Board friction
         val boardMu = frictionCoefficient * 0.5f
         if (boardMu > 0f) {
@@ -772,6 +929,193 @@ class VerletSimulator(
                 }
             }
         }
+
+        // Sticky adhesion
+        if (stickyEnabled && collide && active.size >= 2) {
+            updateStickyBonds(active, stepDt)
+        }
+
+        if (ENABLE_AGENT_DEBUG_LOGS) {
+            val stepEndNs = System.nanoTime()
+            perfIntegrateNs += (afterIntegrateNs - stepStartNs)
+            perfBroadphaseNs += (afterBroadphaseNs - afterIntegrateNs)
+            perfConstraintNs += (afterConstraintNs - afterBroadphaseNs)
+            perfPostSolveNs += (afterPostSolveNs - afterConstraintNs)
+            perfFrictionStickyNs += (stepEndNs - afterPostSolveNs)
+            perfStepSamples++
+        }
+    }
+
+    // =========================================================================
+    // MARK: - Sticky adhesion
+    // =========================================================================
+
+    private fun updateStickyBonds(activeBands: IntArray, stepDt: Float) {
+        val strength = stickyStrength
+        val breakThresh = stickyBreakThreshold
+
+        stickyFormCounter++
+        val shouldForm = stickyFormCounter >= stickyFormInterval
+        if (shouldForm) {
+            stickyFormCounter = 0
+            formStickyBonds(activeBands)
+        }
+
+        resolveStickyBonds(stepDt, strength, breakThresh)
+    }
+
+    private fun formStickyBonds(activeBands: IntArray) {
+        val radiusMul = stickyRadius
+        val maxBonds = 128
+
+        for (ai in activeBands.indices) {
+            val bi = activeBands[ai]
+            val bandI = bands[bi]
+            if (!bandI.active || bandI.fadeOut != 0f) continue
+            val posI = bandI.positions
+            val nI = bandI.particleCount
+            val rI = bandI.radius
+
+            for (aj in ai + 1 until activeBands.size) {
+                if (stickyBonds.size >= maxBonds) return
+
+                val bj = activeBands[aj]
+                val bandJ = bands[bj]
+                if (!bandJ.active || bandJ.fadeOut != 0f) continue
+                val posJ = bandJ.positions
+                val nJ = bandJ.particleCount
+                val rJ = bandJ.radius
+
+                val captureR = (rI + rJ) * radiusMul
+                val captureR2 = captureR * captureR
+                val step = max(2, min(nI, nJ) / 6)
+
+                var pi = 1
+                while (pi < nI - 1) {
+                    val oI = pi * 3
+                    val pxI = posI[oI]; val pyI = posI[oI + 1]; val pzI = posI[oI + 2]
+
+                    var pj = 1
+                    while (pj < nJ - 1) {
+                        val oJ = pj * 3
+                        val dx = pxI - posJ[oJ]
+                        val dy = pyI - posJ[oJ + 1]
+                        val dz = pzI - posJ[oJ + 2]
+                        val d2 = dx * dx + dy * dy + dz * dz
+
+                        if (d2 < captureR2) {
+                            val key = stickyKey(bi, pi, bj, pj)
+                            if (key !in stickyBondKeys) {
+                                stickyBondKeys.add(key)
+                                stickyBonds.add(StickyBond(bi, pi, bj, pj, sqrt(d2)))
+                            }
+                        }
+                        pj += step
+                    }
+                    pi += step
+                }
+            }
+        }
+    }
+
+    private fun resolveStickyBonds(stepDt: Float, strength: Float, breakThresh: Float) {
+        val drag = dragInfo
+        var i = 0
+        while (i < stickyBonds.size) {
+            val bond = stickyBonds[i]
+            val bandA = bands.getOrNull(bond.bandA)
+            val bandB = bands.getOrNull(bond.bandB)
+
+            if (bandA == null || bandB == null || !bandA.active || !bandB.active ||
+                bandA.fadeOut != 0f || bandB.fadeOut != 0f
+            ) {
+                removeStickyBond(i)
+                continue
+            }
+
+            val oA = bond.particleA * 3
+            val oB = bond.particleB * 3
+            if (oA + 2 >= bandA.positions.size || oB + 2 >= bandB.positions.size) {
+                removeStickyBond(i)
+                continue
+            }
+
+            val posA = bandA.positions
+            val posB = bandB.positions
+            val dx = posA[oA] - posB[oB]
+            val dy = posA[oA + 1] - posB[oB + 1]
+            val dz = posA[oA + 2] - posB[oB + 2]
+            val dist2 = dx * dx + dy * dy + dz * dz
+
+            val maxDist = bond.restDistance + breakThresh * (bandA.radius + bandB.radius)
+            if (dist2 > maxDist * maxDist) {
+                bond.life -= stepDt * 8f
+                if (bond.life <= 0f) {
+                    removeStickyBond(i)
+                    continue
+                }
+            } else {
+                bond.life = min(1f, bond.life + stepDt * 4f)
+            }
+
+            val dist = sqrt(dist2)
+            if (dist > 1e-6f && dist > bond.restDistance) {
+                val correction = (dist - bond.restDistance) * strength * bond.life * 0.5f
+                val invDist = 1f / dist
+                val cx = dx * invDist * correction
+                val cy = dy * invDist * correction
+                val cz = dz * invDist * correction
+
+                val skipA = drag != null && drag.bandIndex == bond.bandA
+                val skipB = drag != null && drag.bandIndex == bond.bandB
+
+                if (!skipA) {
+                    posA[oA] -= cx; posA[oA + 1] -= cy; posA[oA + 2] -= cz
+                }
+                if (!skipB) {
+                    posB[oB] += cx; posB[oB + 1] += cy; posB[oB + 2] += cz
+                }
+
+                val damp = stickyDamping * bond.life
+                if (damp > 0f) {
+                    val prevA = bandA.previousPositions
+                    val prevB = bandB.previousPositions
+                    val relVx = (posA[oA] - prevA[oA]) - (posB[oB] - prevB[oB])
+                    val relVy = (posA[oA + 1] - prevA[oA + 1]) - (posB[oB + 1] - prevB[oB + 1])
+                    val relVz = (posA[oA + 2] - prevA[oA + 2]) - (posB[oB + 2] - prevB[oB + 2])
+                    val nX = dx * invDist; val nY = dy * invDist; val nZ = dz * invDist
+                    val dampF = (relVx * nX + relVy * nY + relVz * nZ) * damp * 0.5f
+                    if (!skipA) {
+                        prevA[oA] += nX * dampF; prevA[oA + 1] += nY * dampF; prevA[oA + 2] += nZ * dampF
+                    }
+                    if (!skipB) {
+                        prevB[oB] -= nX * dampF; prevB[oB + 1] -= nY * dampF; prevB[oB + 2] -= nZ * dampF
+                    }
+                }
+            }
+            i++
+        }
+    }
+
+    private fun removeStickyBond(index: Int) {
+        val bond = stickyBonds[index]
+        stickyBondKeys.remove(stickyKey(bond.bandA, bond.particleA, bond.bandB, bond.particleB))
+        val last = stickyBonds.size - 1
+        if (index < last) stickyBonds[index] = stickyBonds[last]
+        stickyBonds.removeAt(last)
+    }
+
+    private fun stickyKey(bandA: Int, partA: Int, bandB: Int, partB: Int): Long {
+        val a = min(bandA, bandB)
+        val b = max(bandA, bandB)
+        val pA = if (bandA <= bandB) partA else partB
+        val pB = if (bandA <= bandB) partB else partA
+        return (a.toLong() shl 48) or (pA.toLong() shl 32) or (b.toLong() shl 16) or pB.toLong()
+    }
+
+    fun clearStickyBonds() {
+        stickyBonds.clear()
+        stickyBondKeys.clear()
     }
 
     // =========================================================================
@@ -995,9 +1339,16 @@ class VerletSimulator(
     // MARK: - Collision
     // =========================================================================
 
-    fun buildCollisionPairs(activeBands: IntArray): Array<CollisionPair> {
-        if (activeBands.isEmpty()) return emptyArray()
-        val pairs = ArrayList<CollisionPair>(512)
+    private fun packCollisionPair(bandA: Int, segA: Int, bandB: Int, segB: Int): Long {
+        return ((bandA.toLong() and 0xFFFFL) shl 48) or
+                ((segA.toLong() and 0xFFFFL) shl 32) or
+                ((bandB.toLong() and 0xFFFFL) shl 16) or
+                (segB.toLong() and 0xFFFFL)
+    }
+
+    fun buildCollisionPairs(activeBands: IntArray): LongArray {
+        if (activeBands.isEmpty()) return LongArray(0)
+        val pairs = ArrayList<Long>(512)
 
         for (ai in activeBands.indices) {
             val bi = activeBands[ai]
@@ -1023,7 +1374,7 @@ class VerletSimulator(
                         val b0 = sj * 3; val b1 = (sj + 1) * 3
                         if (max(posI[b0], posI[b1]) < aMinX || min(posI[b0], posI[b1]) > aMaxX) continue
                         if (max(posI[b0 + 1], posI[b1 + 1]) < aMinY || min(posI[b0 + 1], posI[b1 + 1]) > aMaxY) continue
-                        pairs.add(CollisionPair(bi, si, bi, sj))
+                        pairs.add(packCollisionPair(bi, si, bi, sj))
                     }
                 }
             }
@@ -1047,19 +1398,23 @@ class VerletSimulator(
                         val b0 = sj * 3; val b1 = (sj + 1) * 3
                         if (max(posJ[b0], posJ[b1]) < aMinX || min(posJ[b0], posJ[b1]) > aMaxX) continue
                         if (max(posJ[b0 + 1], posJ[b1 + 1]) < aMinY || min(posJ[b0 + 1], posJ[b1 + 1]) > aMaxY) continue
-                        pairs.add(CollisionPair(bi, si, bj, sj))
+                        pairs.add(packCollisionPair(bi, si, bj, sj))
                     }
                 }
             }
         }
 
-        return pairs.toTypedArray()
+        return LongArray(pairs.size) { idx -> pairs[idx] }
     }
 
-    private fun resolveCollisionPairs(pairs: Array<CollisionPair>, injectVelocity: Boolean): Boolean {
+    private fun resolveCollisionPairs(pairs: LongArray, injectVelocity: Boolean): Boolean {
         var found = false
-        for (p in pairs) {
-            if (collideSegments(p.bandA, p.segA, p.bandB, p.segB, injectVelocity)) {
+        for (packed in pairs) {
+            val bandA = ((packed ushr 48) and 0xFFFFL).toInt()
+            val segA = ((packed ushr 32) and 0xFFFFL).toInt()
+            val bandB = ((packed ushr 16) and 0xFFFFL).toInt()
+            val segB = (packed and 0xFFFFL).toInt()
+            if (collideSegments(bandA, segA, bandB, segB, injectVelocity)) {
                 found = true
             }
         }
@@ -1167,6 +1522,11 @@ class VerletSimulator(
         if (dist >= minDist) return false
 
         val overlap = minDist - dist
+        debugCollisionHits++
+        if (dragInfo != null && (dragInfo!!.bandIndex == bi || dragInfo!!.bandIndex == bj)) {
+            debugDragCollisionHits++
+        }
+        if (overlap > debugMaxOverlap) debugMaxOverlap = overlap
         val corrX = normalX * (overlap * 0.35f)
         val corrY = normalY * (overlap * 0.35f)
         val corrZ = normalZ * (overlap * 0.35f)
@@ -1316,17 +1676,18 @@ class VerletSimulator(
         if (bandIndex < 0 || bandIndex >= bands.size) return
         wakeUp()
         val band = bands[bandIndex]
+        val lowerAnimationKey = LowerAnimationKey(bandIndex, endIndex)
         val originalHole: Int
         if (endIndex == 0) {
-            originalHole = band.pinStart
+            originalHole = if (band.pinStart >= 0) band.pinStart else lowerAnimations[lowerAnimationKey]?.targetHole ?: 0
             band.pinStart = -1
         } else {
-            originalHole = band.pinEnd
+            originalHole = if (band.pinEnd >= 0) band.pinEnd else lowerAnimations[lowerAnimationKey]?.targetHole ?: 0
             band.pinEnd = -1
         }
         dragInfo = DragInfo(bandIndex, endIndex, if (originalHole >= 0) originalHole else 0)
 
-        lowerAnimation = null
+        lowerAnimations.remove(lowerAnimationKey)
 
         val elev = holeSurfaceZ(if (originalHole >= 0) originalHole else 0)
         val idx = if (endIndex == 0) 0 else (band.particleCount - 1) * 3
@@ -1364,7 +1725,8 @@ class VerletSimulator(
         val dist = sqrt(dx * dx + dy * dy + dz * dz)
         val returnDuration = min(max(dist * 0.9f, 0.25f), 0.8f)
 
-        lowerAnimation = LowerAnimation(
+        val lowerAnimationKey = LowerAnimationKey(drag.bandIndex, drag.endIndex)
+        lowerAnimations[lowerAnimationKey] = LowerAnimation(
             bandIndex = drag.bandIndex,
             endIndex = drag.endIndex,
             targetHole = targetHoleIndex,
@@ -1390,12 +1752,21 @@ class VerletSimulator(
         return band.positions[idx + 2]
     }
 
+    fun currentHoleIndex(bandIndex: Int, endIndex: Int): Int {
+        if (bandIndex < 0 || bandIndex >= bands.size) return -1
+        val band = bands[bandIndex]
+        val pinnedHole = if (endIndex == 0) band.pinStart else band.pinEnd
+        if (pinnedHole >= 0) return pinnedHole
+        return lowerAnimations[LowerAnimationKey(bandIndex, endIndex)]?.targetHole ?: -1
+    }
+
     // =========================================================================
     // MARK: - Level initialization
     // =========================================================================
 
     fun initializeLevel(ropeConfigs: List<RopeConfig>, actions: List<LevelAction>) {
         bands.clear()
+        clearStickyBonds()
         currentTension = ropeTension
 
         for (config in ropeConfigs) {
@@ -1582,15 +1953,39 @@ class VerletSimulator(
 
     fun startFadeOut(bandIndex: Int) {
         val band = bands[bandIndex]
-        band.fadeOut = 0.001f
-        // Determine which hole to suck into (prefer pinned holes)
-        val hole = if (band.pinEnd >= 0) band.pinEnd
-                   else if (band.pinStart >= 0) band.pinStart
-                   else -1
-        band.suckHole = hole
-        band.suckFromEnd = if (band.pinEnd >= 0) 1 else 0
+        val suckTarget: Int
+        val suckFromEnd: Int
+        if (band.pinStart >= 0) {
+            suckTarget = band.pinStart
+            suckFromEnd = 1
+        } else if (band.pinEnd >= 0) {
+            suckTarget = band.pinEnd
+            suckFromEnd = 0
+        } else {
+            suckTarget = 0
+            suckFromEnd = 1
+        }
+        val tailHole = if (suckFromEnd == 1) band.pinEnd else band.pinStart
+
+        band.suckHole = suckTarget
+        band.suckTailHole = tailHole
+        band.suckFromEnd = suckFromEnd
         band.suckConsumed = 0f
-        // Mark holes as unoccupied
+        band.suckFrame = 0
+
+        val n = band.particleCount
+        val segs = FloatArray(maxOf(0, n - 1))
+        for (k in 0 until n - 1) {
+            val o0 = k * 3; val o1 = (k + 1) * 3
+            val dx = band.positions[o1] - band.positions[o0]
+            val dy = band.positions[o1 + 1] - band.positions[o0 + 1]
+            val dz = band.positions[o1 + 2] - band.positions[o0 + 2]
+            segs[k] = sqrt(dx * dx + dy * dy + dz * dz)
+        }
+        band.suckSegLengths = segs
+        band.suckOrigPositions = band.positions.copyOf()
+
+        band.fadeOut = 0.001f
         band.pinStart = -1
         band.pinEnd = -1
     }
@@ -1610,8 +2005,11 @@ class VerletSimulator(
                     active = b.active,
                     fadeOut = b.fadeOut,
                     suckHole = b.suckHole,
+                    suckTailHole = b.suckTailHole,
                     suckFromEnd = b.suckFromEnd,
-                    suckConsumed = b.suckConsumed
+                    suckConsumed = b.suckConsumed,
+                    suckSegLengths = b.suckSegLengths.copyOf(),
+                    suckOrigPositions = b.suckOrigPositions.copyOf()
                 )
             }
         )
@@ -1632,13 +2030,16 @@ class VerletSimulator(
             b.active = s.active
             b.fadeOut = s.fadeOut
             b.suckHole = s.suckHole
+            b.suckTailHole = s.suckTailHole
             b.suckFromEnd = s.suckFromEnd
             b.suckConsumed = s.suckConsumed
+            b.suckSegLengths = s.suckSegLengths.copyOf()
+            b.suckOrigPositions = s.suckOrigPositions.copyOf()
         }
         dragInfo = null
         hasDragStartPos = false
         hasDragTargetPos = false
-        lowerAnimation = null
+        lowerAnimations.clear()
         currentTension = ropeTension
         wakeUp()
     }

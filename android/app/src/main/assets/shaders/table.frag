@@ -28,6 +28,7 @@ layout(std140) uniform FrameBlock {
     vec4 uWormParams2;
     vec4 uWormParams3;
     vec4 uWormParams4;
+    vec4 uRopeMatParams4;
 };
 
 // Hole instances passed as a texture or SSBO. For GLES 3.0 we use a UBO or texture.
@@ -684,10 +685,8 @@ void main() {
 
     float squareHoles = uTableParams2.w;
     for (int i = 0; i < uHoleCount; i++) {
-        float holeElev = uHoles[i].z;
-        if (holeElev > 0.01) continue;
         vec2 holeCenter = uHoles[i].xy;
-        float holeR = uHoles[i].w * 0.76;
+        float holeR = uHoles[i].w;
         vec2 d = abs(worldXY - holeCenter);
         float dist = squareHoles > 0.5 ? max(d.x, d.y) : length(worldXY - holeCenter);
         if (dist < holeR) {
@@ -699,20 +698,21 @@ void main() {
     vec3 worldN = vec3(0.0, 0.0, 1.0);
 
     float tableStyle = uTableParams.x;
+    float woodBrightness = uWoodBoundsMin.z;
+    float woodPatternScale = uWoodBoundsMin.w;
+    if (woodBrightness <= 0.0) woodBrightness = 1.0;
+    if (woodPatternScale <= 0.0) woodPatternScale = 1.0;
     vec3 baseColor;
     if (tableStyle < 0.5) {
-        // Try baked wood texture first; if uWoodTex is valid and has real size, use it.
-        // On Android we check via a uniform flag or just always sample.
         float levelSeed = uTimeDrag.z;
-        // uWoodBoundsMax.w > 0.5 means a baked wood texture is available
-        // (Metal checks woodTex.get_width() > 1; on Android we use .w as a flag)
         if (uWoodBoundsMax.w > 0.5) {
             vec2 woodUV = (worldXY - uWoodBoundsMin.xy) / (uWoodBoundsMax.xy - uWoodBoundsMin.xy);
             baseColor = texture(uWoodTex, woodUV).rgb;
         } else {
-            baseColor = woodTexture(uv, worldXY, levelSeed);
+            vec2 scaledXY = worldXY * woodPatternScale;
+            baseColor = woodTexture(uv, scaledXY, levelSeed);
         }
-        baseColor = clamp(baseColor, 0.0, 1.0);
+        baseColor = clamp(baseColor * woodBrightness, 0.0, 1.0);
     } else if (tableStyle < 1.5) {
         vec3 c1 = uTableParams.yzw;
         vec3 c2 = uTableParams2.xyz;

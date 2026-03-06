@@ -81,10 +81,7 @@ class Camera {
         orthoHalfHeight = max(halfHFromHeight, halfHFromWidth) * 1.2f + elevationPadding
 
         rotationAngle = 0f
-
-        if (maxElevation > 0.01f && tiltAngle < 0.15f) {
-            tiltAngle = 0.25f
-        }
+        tiltAngle = 0f
     }
 
     fun screenToWorld(

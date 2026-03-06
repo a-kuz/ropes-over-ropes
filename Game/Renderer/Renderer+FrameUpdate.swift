@@ -4,7 +4,7 @@ extension Renderer {
     func updateFrameSimulation(deltaTime: Float) {
         simulator?.update(deltaTime: deltaTime)
 
-        let isDragging = dragState != nil || simulator?.lowerAnimation != nil
+        let isDragging = dragState != nil || simulator?.dragInfo != nil || simulator?.hasLowerAnimations == true
         if isDragging, let friction = simulator?.consumeAndResetFriction() {
             frictionSound.update(intensity: friction.intensity, speed: friction.speed)
         } else {
@@ -19,7 +19,7 @@ extension Renderer {
             loadLevel(levelId: nextId)
         }
         if flowStep.shouldRunSettleCheck {
-            if simulator?.lowerAnimation != nil {
+            if dragState != nil || simulator?.dragInfo != nil || simulator?.hasLowerAnimations == true {
                 levelFlow.scheduleSettleCheck()
             } else {
                 PhysicsProfiler.shared.measure(.winCheck) { removeUntangledRopes() }

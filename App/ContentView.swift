@@ -8,13 +8,17 @@ struct ContentView: View {
     @State private var levelInput = ""
     @State private var dumpMessage: String?
     @State private var settingsCopied = false
+    @State private var settingsImported: Bool? = nil
     @State private var shareURL: URL?
+    @State private var usernameInput = ""
+    @State private var loginAsInput = ""
 
     var body: some View {
         ZStack {
             GameView(controller: gameController)
                 .ignoresSafeArea()
 
+            if !gameController.showLevelComplete {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
                     Button(action: {
@@ -28,6 +32,17 @@ struct ContentView: View {
                             .clipShape(Circle())
                     }
                     .padding(.leading, 16)
+
+                    Button(action: {
+                        gameController.resetCamera()
+                    }) {
+                        Image(systemName: "scope")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
 
                     Button(action: {
                         if gameController.currentLevel > 1 {
@@ -119,6 +134,18 @@ struct ContentView: View {
                                     .background(Color.white.opacity(0.12))
                                     .clipShape(Circle())
                             }
+                            Button(action: {
+                                let ok = gameController.importSettingsFromClipboard()
+                                settingsImported = ok
+                                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { settingsImported = nil }
+                            }) {
+                                Image(systemName: "clipboard.fill")
+                                    .font(.system(size: 13, weight: .bold))
+                                    .foregroundColor(settingsImported == true ? .green : settingsImported == false ? .red : .white.opacity(0.8))
+                                    .frame(width: 30, height: 30)
+                                    .background(Color.white.opacity(0.12))
+                                    .clipShape(Circle())
+                            }
                             Button(action: { gameController.resetToDefaults() }) {
                                 Image(systemName: "arrow.uturn.backward")
                                     .font(.system(size: 13, weight: .bold))
@@ -147,6 +174,9 @@ struct ContentView: View {
                                 TabButton(title: "Cap", index: 8, selected: $selectedTab)
                                 TabButton(title: "Worm", index: 9, selected: $selectedTab)
                             }
+                            HStack(spacing: 0) {
+                                TabButton(title: "Player", index: 10, selected: $selectedTab)
+                            }
                         }
                         .padding(.horizontal, 10)
                         .padding(.bottom, 6)
@@ -164,6 +194,7 @@ struct ContentView: View {
                             case 7: matteTab
                             case 8: capTab
                             case 9: wormTab
+                            case 10: playerTab
                             default: ropeTab
                             }
                         }
@@ -184,8 +215,7 @@ struct ContentView: View {
 
             VStack {
                 Spacer()
-                HStack {
-                    Spacer()
+                HStack(alignment: .bottom) {
                     Button(action: {
                         gameController.undo()
                     }) {
@@ -200,8 +230,16 @@ struct ContentView: View {
                     #if os(macOS)
                     .keyboardShortcut("z", modifiers: .command)
                     #endif
-                    .padding(.trailing, 20)
+                    .padding(.leading, 20)
                     .padding(.bottom, 40)
+
+                    Spacer()
+
+                    Text("\(gameController.moveCount)")
+                        .font(.system(size: 15, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.35))
+                        .padding(.trailing, 20)
+                        .padding(.bottom, 48)
                 }
             }
 
@@ -217,13 +255,18 @@ struct ContentView: View {
                 }
                 .ignoresSafeArea()
             }
+            } // end if !showLevelComplete
 
             if gameController.showLevelComplete {
                 Color.black.opacity(0.4)
                     .ignoresSafeArea()
                     .transition(.opacity)
 
-                VictoryOverlay(level: gameController.currentLevel) {
+                VictoryOverlay(
+                    level: gameController.currentLevel,
+                    starCount: gameController.starCount,
+                    percentile: gameController.percentile
+                ) {
                     let next = gameController.currentLevel + 1
                     gameController.showLevelComplete = false
                     gameController.loadLevel(next)
@@ -376,6 +419,13 @@ struct ContentView: View {
                 ParamRow(label: "Light Z", value: $gameController.lightDirZ, range: -1...1, format: "%.2f", defaultValue: 0.67)
                 ParamRow(label: "Ambient", value: $gameController.ambient, range: 0...0.6, format: "%.2f", defaultValue: 0.08)
                 ParamRow(label: "Shadow Bias", value: $gameController.shadowBias, range: 0.0001...0.005, format: "%.4f", defaultValue: 0.0012)
+                Picker("Shadow Dbg", selection: $gameController.shadowDebugMode) {
+                    Text("Off").tag(0)
+                    Text("Shadow").tag(1)
+                    Text("StoredZ").tag(2)
+                    Text("FragZ").tag(3)
+                    Text("Diff").tag(4)
+                }.pickerStyle(.menu).font(.caption2)
                 ParamRow(label: "Shadow Dark", value: $gameController.shadowDarkness, range: 0...0.5, format: "%.2f", defaultValue: 0.12)
                 ParamRow(label: "Light Size", value: $gameController.lightSize, range: 0.002...0.08, format: "%.3f", defaultValue: 0.012)
             }
@@ -433,6 +483,9 @@ struct ContentView: View {
                 ParamRow(label: "Lift Glow", value: $gameController.ropeLiftGlow, range: 0...1, format: "%.2f", defaultValue: 0.25)
                 ParamRow(label: "Str Gloss", value: $gameController.ropeStretchGloss, range: 0...1, format: "%.2f", defaultValue: 0.7)
                 ParamRow(label: "Str Spec", value: $gameController.ropeStretchSpec, range: 0...2, format: "%.2f", defaultValue: 1.0)
+                ParamRow(label: "Reflection", value: $gameController.ropeEnvReflect, range: 0...3, format: "%.2f", defaultValue: 0.15)
+                ParamRow(label: "Refl Spread", value: $gameController.ropeEnvSpread, range: 0.01...0.5, format: "%.3f", defaultValue: 0.15)
+                Toggle("Env Debug", isOn: $gameController.ropeEnvDebug).font(.caption2)
             }
         }
         .frame(maxHeight: 260)
@@ -483,6 +536,63 @@ struct ContentView: View {
             }
         }
         .frame(maxHeight: 280)
+    }
+
+    private var playerTab: some View {
+        VStack(spacing: 8) {
+            HStack(spacing: 6) {
+                Text("Name")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(width: 50, alignment: .leading)
+                TextField("username", text: $usernameInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(maxWidth: .infinity)
+                    .onAppear { usernameInput = gameController.leaderboardUsername }
+                Button("Save") {
+                    let name = usernameInput.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    gameController.updateLeaderboardUsername(name)
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.2))
+                .cornerRadius(6)
+            }
+
+            HStack(spacing: 6) {
+                Text("Login")
+                    .font(.system(size: 12))
+                    .foregroundColor(.white.opacity(0.8))
+                    .frame(width: 50, alignment: .leading)
+                TextField("play as...", text: $loginAsInput)
+                    .textFieldStyle(.roundedBorder)
+                    .font(.system(size: 13, design: .monospaced))
+                    .frame(maxWidth: .infinity)
+                Button("Go") {
+                    let name = loginAsInput.trimmingCharacters(in: .whitespaces)
+                    guard !name.isEmpty else { return }
+                    gameController.loginAsPlayer(name)
+                    usernameInput = name
+                    loginAsInput = ""
+                }
+                .font(.system(size: 12, weight: .semibold))
+                .foregroundColor(.white)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 5)
+                .background(Color.white.opacity(0.2))
+                .cornerRadius(6)
+            }
+
+            if !gameController.leaderboardUsername.isEmpty {
+                Text("Playing as: \(gameController.leaderboardUsername)")
+                    .font(.system(size: 12, design: .rounded))
+                    .foregroundColor(.white.opacity(0.5))
+            }
+        }
     }
 }
 
@@ -650,6 +760,8 @@ private struct ConfettiPiece: Identifiable {
 
 private struct VictoryOverlay: View {
     let level: Int
+    var starCount: Int = 3
+    var percentile: Int? = nil
     let onNext: () -> Void
 
     @State private var titleScale: CGFloat = 0.3
@@ -702,7 +814,7 @@ private struct VictoryOverlay: View {
             }
             .allowsHitTesting(false)
 
-            VStack(spacing: 24) {
+            VStack(spacing: 20) {
                 Text("Level \(level)")
                     .font(.system(size: 42, weight: .heavy, design: .rounded))
                     .foregroundColor(.white)
@@ -715,6 +827,24 @@ private struct VictoryOverlay: View {
                     .foregroundColor(.white.opacity(0.8))
                     .scaleEffect(titleScale)
                     .opacity(titleOpacity)
+
+                HStack(spacing: 12) {
+                    ForEach(0..<3, id: \.self) { i in
+                        Image(systemName: i < starCount ? "star.fill" : "star")
+                            .font(.system(size: 40, weight: .bold))
+                            .foregroundColor(i < starCount ? Color(red: 1, green: 0.85, blue: 0.2) : .white.opacity(0.2))
+                    }
+                }
+                .scaleEffect(titleScale)
+                .opacity(titleOpacity)
+
+                if let pct = percentile, pct >= 50 {
+                    Text("Better than \(pct)% of players")
+                        .font(.system(size: 15, weight: .medium, design: .rounded))
+                        .foregroundColor(.white.opacity(0.7))
+                        .scaleEffect(titleScale)
+                        .opacity(titleOpacity)
+                }
 
                 Button(action: onNext) {
                     HStack(spacing: 10) {

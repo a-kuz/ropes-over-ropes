@@ -29,8 +29,11 @@ extension VerletSimulator {
                 active: b.active,
                 fadeOut: b.fadeOut,
                 suckHole: b.suckHole,
+                suckTailHole: b.suckTailHole,
                 suckFromEnd: b.suckFromEnd,
-                suckConsumed: b.suckConsumed
+                suckConsumed: b.suckConsumed,
+                suckSegLengths: b.suckSegLengths,
+                suckOrigPositions: b.suckOrigPositions
             )
         })
     }
@@ -48,13 +51,16 @@ extension VerletSimulator {
             bands[i].active = s.active
             bands[i].fadeOut = s.fadeOut
             bands[i].suckHole = s.suckHole
+            bands[i].suckTailHole = s.suckTailHole
             bands[i].suckFromEnd = s.suckFromEnd
             bands[i].suckConsumed = s.suckConsumed
+            bands[i].suckSegLengths = s.suckSegLengths
+            bands[i].suckOrigPositions = s.suckOrigPositions
         }
         dragInfo = nil
         dragStartPos = nil
         dragTargetPos = nil
-        lowerAnimation = nil
+        lowerAnimations.removeAll()
         currentTension = ropeTension
         wakeUp()
     }

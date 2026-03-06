@@ -114,3 +114,7 @@ cross/target
 cross/node_modules
 cross/profile_*
 cross/shader*
+backend/.wrangler
+backend/node_modules
+android/.kotlin/errors/errors-1772664117575.log
+android/app/release-upload-key.jks

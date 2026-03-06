@@ -12,18 +12,20 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.rotate
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import kotlin.math.sin
 import kotlin.random.Random
 
 @Composable
-fun VictoryOverlay(level: Int, onNextLevel: () -> Unit) {
+fun VictoryOverlay(level: Int, stars: Int, percentile: Int, onNextLevel: () -> Unit) {
     var visible by remember { mutableStateOf(false) }
     LaunchedEffect(Unit) { visible = true }
 
@@ -35,6 +37,14 @@ fun VictoryOverlay(level: Int, onNextLevel: () -> Unit) {
         targetValue = if (visible) 1f else 0f,
         animationSpec = tween(300)
     )
+    val buttonAlpha by animateFloatAsState(
+        targetValue = if (visible) 1f else 0f,
+        animationSpec = tween(450, delayMillis = 200)
+    )
+    val buttonOffsetY by animateFloatAsState(
+        targetValue = if (visible) 0f else 30f,
+        animationSpec = tween(450, delayMillis = 200, easing = EaseOut)
+    )
 
     Box(
         modifier = Modifier
@@ -42,8 +52,7 @@ fun VictoryOverlay(level: Int, onNextLevel: () -> Unit) {
             .background(Color.Black.copy(alpha = 0.4f * alpha)),
         contentAlignment = Alignment.Center
     ) {
-        // Confetti
-        ConfettiAnimation()
+        ConfettiBurst()
 
         Column(
             horizontalAlignment = Alignment.CenterHorizontally,
@@ -66,23 +75,46 @@ fun VictoryOverlay(level: Int, onNextLevel: () -> Unit) {
                 fontSize = 24.sp,
                 fontWeight = FontWeight.Medium
             )
-            Spacer(modifier = Modifier.height(32.dp))
+            Spacer(modifier = Modifier.height(20.dp))
 
-            // Next level button
+            Text(
+                text = buildString {
+                    repeat(stars) { append("\u2605") }
+                    repeat(3 - stars) { append("\u2606") }
+                },
+                color = Color(0xFFFFD700),
+                fontSize = 40.sp
+            )
+            Spacer(modifier = Modifier.height(12.dp))
+
+            if (percentile >= 50) {
+                Text(
+                    text = "Better than $percentile% of players",
+                    color = Color.White.copy(alpha = 0.7f),
+                    fontSize = 15.sp,
+                    fontWeight = FontWeight.Medium
+                )
+                Spacer(modifier = Modifier.height(12.dp))
+            }
+
             Box(
                 modifier = Modifier
-                    .clip(RoundedCornerShape(16.dp))
+                    .graphicsLayer {
+                        this.alpha = buttonAlpha
+                        translationY = buttonOffsetY
+                    }
+                    .clip(RoundedCornerShape(24.dp))
                     .background(
                         Brush.horizontalGradient(
-                            listOf(Color(0xFF4A6CF7), Color(0xFF9B5DE5))
+                            listOf(Color(0xFF5A99FF), Color(0xFF8059F2))
                         )
                     )
                     .clickable { onNextLevel() }
-                    .padding(horizontal = 32.dp, vertical = 14.dp),
+                    .padding(horizontal = 36.dp, vertical = 14.dp),
                 contentAlignment = Alignment.Center
             ) {
                 Text(
-                    text = "Level ${level + 1}",
+                    text = "Level ${level + 1}  \u2192",
                     color = Color.White,
                     fontSize = 18.sp,
                     fontWeight = FontWeight.SemiBold
@@ -92,53 +124,81 @@ fun VictoryOverlay(level: Int, onNextLevel: () -> Unit) {
     }
 }
 
+private class ConfettoPiece(
+    val x: Float,
+    val color: Color,
+    val width: Float,
+    val height: Float,
+    val initialRotation: Float,
+    val drift: Float,
+    val delay: Int,
+    val duration: Int
+)
+
 @Composable
-private fun ConfettiAnimation() {
-    val confettiColors = remember {
-        listOf(
-            Color(0xFFFF6B6B), Color(0xFF4ECDC4), Color(0xFFFFE66D),
-            Color(0xFF95E1D3), Color(0xFFF38181), Color(0xFF6C5CE7),
-            Color(0xFF00B894), Color(0xFFE17055), Color(0xFF0984E3)
+private fun ConfettiBurst() {
+    val pieces = remember {
+        val colors = listOf(
+            Color(0xFFFF4444), Color(0xFFFF9500), Color(0xFFFFCC00),
+            Color(0xFF34C759), Color(0xFF007AFF), Color(0xFFAF52DE),
+            Color(0xFFFF2D55), Color(0xFFFF6699), Color(0xFF5AC8FA),
+            Color(0xFFFFD426)
         )
-    }
-
-    data class Confetto(
-        val x: Float, var y: Float,
-        val color: Color, val size: Float,
-        val speedX: Float, val speedY: Float,
-        val rotation: Float
-    )
-
-    val confetti = remember {
-        List(40) {
-            Confetto(
-                x = Random.nextFloat(),
-                y = -Random.nextFloat() * 0.5f,
-                color = confettiColors.random(),
-                size = Random.nextFloat() * 8f + 4f,
-                speedX = (Random.nextFloat() - 0.5f) * 0.003f,
-                speedY = Random.nextFloat() * 0.005f + 0.003f,
-                rotation = Random.nextFloat() * 360f
+        List(40) { i ->
+            val sz = Random.nextFloat() * 6f + 4f
+            ConfettoPiece(
+                x = Random.nextFloat() * 0.9f + 0.05f,
+                color = colors[i % colors.size],
+                width = sz,
+                height = sz * (Random.nextFloat() * 1f + 0.5f),
+                initialRotation = Random.nextFloat() * 360f,
+                drift = (Random.nextFloat() - 0.5f) * 60f,
+                delay = (Random.nextFloat() * 400).toInt(),
+                duration = (Random.nextFloat() * 1200 + 1800).toInt()
             )
         }
     }
 
-    val time by rememberInfiniteTransition().animateFloat(
-        initialValue = 0f,
-        targetValue = 1000f,
-        animationSpec = infiniteRepeatable(tween(100000, easing = LinearEasing))
-    )
+    var launched by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) {
+        kotlinx.coroutines.delay(100)
+        launched = true
+    }
+
+    val progress = pieces.map { piece ->
+        animateFloatAsState(
+            targetValue = if (launched) 1f else 0f,
+            animationSpec = tween(
+                durationMillis = piece.duration,
+                delayMillis = piece.delay,
+                easing = EaseIn
+            )
+        )
+    }
 
     Canvas(modifier = Modifier.fillMaxSize()) {
-        for (c in confetti) {
-            val x = (c.x + c.speedX * time + sin(time * 0.02f + c.rotation) * 0.02f) % 1f
-            val y = (c.y + c.speedY * time) % 1.5f
-            if (y < 0f || y > 1f) continue
-            drawCircle(
-                color = c.color.copy(alpha = 0.8f),
-                radius = c.size,
-                center = Offset(x * size.width, y * size.height)
-            )
+        val w = size.width
+        val h = size.height
+
+        pieces.forEachIndexed { i, piece ->
+            val t = progress[i].value
+            if (t <= 0f) return@forEachIndexed
+
+            val fadeAlpha = if (t > 0.7f) (1f - t) / 0.3f else 1f
+            if (fadeAlpha <= 0f) return@forEachIndexed
+
+            val px = piece.x * w + piece.drift * t
+            val py = -20f + (h + 60f) * t
+            val rotation = piece.initialRotation + 720f * t
+
+            rotate(degrees = rotation, pivot = Offset(px, py)) {
+                drawRoundRect(
+                    color = piece.color.copy(alpha = 0.9f * fadeAlpha),
+                    topLeft = Offset(px - piece.width / 2f, py - piece.height / 2f),
+                    size = Size(piece.width, piece.height),
+                    cornerRadius = CornerRadius(piece.width * 0.2f)
+                )
+            }
         }
     }
 }

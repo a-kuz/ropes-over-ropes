@@ -33,4 +33,9 @@ extension Renderer {
         camera.orthoHalfHeight = cameraBaseOrthoHalfHeight / cameraZoomScale
         onZoomChanged?(cameraZoomScale)
     }
+
+    func resetCameraOrientation() {
+        camera.tiltAngle = 0
+        camera.rotationAngle = 0
+    }
 }

@@ -1,6 +1,6 @@
 pub mod camera;
 pub mod frame_types;
-pub mod rope_mesh;
+pub mod gpu;
 pub mod hole_mesh;
 pub mod passes;
-pub mod gpu;
+pub mod rope_mesh;

@@ -87,6 +87,11 @@ class LowerAnimation(
     }
 }
 
+data class LowerAnimationKey(
+    val bandIndex: Int,
+    val endIndex: Int
+)
+
 // --- CollisionPair ---
 
 class CollisionPair(
@@ -119,8 +124,11 @@ class BandSnapshot(
     val active: Boolean,
     val fadeOut: Float,
     val suckHole: Int,      // -1 means nil
+    val suckTailHole: Int,  // -1 means nil
     val suckFromEnd: Int,
-    val suckConsumed: Float
+    val suckConsumed: Float,
+    val suckSegLengths: FloatArray,
+    val suckOrigPositions: FloatArray
 )
 
 // --- Snapshot ---
@@ -159,6 +167,17 @@ class LevelAction(
     enum class ActionType { PIN, DRAG }
 }
 
+// --- StickyBond ---
+
+class StickyBond(
+    val bandA: Int,
+    val particleA: Int,
+    val bandB: Int,
+    val particleB: Int,
+    var restDistance: Float,
+    var life: Float = 1.0f
+)
+
 // --- Band (stride-3 FloatArray layout) ---
 
 class Band(
@@ -181,8 +200,12 @@ class Band(
     var fadeOut: Float = 0f,
     /** Hole index for suck animation, or -1 if none */
     var suckHole: Int = -1,
+    var suckTailHole: Int = -1,
     var suckFromEnd: Int = 1,
-    var suckConsumed: Float = 0f
+    var suckConsumed: Float = 0f,
+    var suckSegLengths: FloatArray = FloatArray(0),
+    var suckOrigPositions: FloatArray = FloatArray(0),
+    var suckFrame: Int = 0
 ) {
     /** Number of particles in this band */
     val particleCount: Int get() = positions.size / 3

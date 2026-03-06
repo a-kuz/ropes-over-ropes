@@ -34,6 +34,7 @@ struct FrameUniforms {
     float4 wormParams2;
     float4 wormParams3;
     float4 wormParams4;
+    float4 ropeMatParams4;
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
@@ -301,12 +302,15 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
     float wrapDiff = saturate((nl + diffuseWrap) / (1.0 + diffuseWrap));
     if (cartoonMode > 0.5) wrapDiff = toonStep(wrapDiff, cartoonLevels);
 
-    float sssNL = saturate(dot(-n, l));
-    float sssWrap = saturate((sssNL + 0.3) / 1.3);
-    float sssContrib = sssWrap * subsurface * 0.3;
+    float sssBackNL = saturate(dot(-n, l));
+    float sssBackWrap = saturate((sssBackNL + 0.5) / 1.5);
+    float sssForwardWrap = saturate((-nl + 0.8) / 1.8);
+    float sssViewEdge = pow(1.0 - nv, 2.0);
+    float sssContrib = (sssBackWrap * 0.5 + sssForwardWrap * 0.35 + sssViewEdge * 0.15) * subsurface;
+    float3 sssTint = albedo * float3(1.25, 0.85, 0.7);
 
     float ambientBase = mix(0.20, 0.45, matteAmount);
-    float3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff + sssContrib);
+    float3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff) + sssTint * sssContrib;
 
     float rough = mix(0.18, 0.92, matteAmount) + roughness * 0.1;
     float taut2 = taut * taut;
@@ -766,14 +770,15 @@ static float3 wormShading(float3 baseColor, float3 n, float3 l, float3 v, float3
 fragment float4 ropeFragment(RopeOut in [[stage_in]],
                              constant FrameUniforms& frame [[buffer(1)]],
                              depth2d<float> shadowMap [[texture(2)]],
-                             texture2d<float> noiseTex [[texture(3)]]) {
+                             texture2d<float> noiseTex [[texture(3)]],
+                             texture2d<float> envTex [[texture(4)]]) {
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float lightI = frame.lightDir_intensity.w;
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
     float3 n = normalize(in.normal);
     float taut = saturate(in.params.x);
     float pinch = saturate(in.params.y);
-    float repel = saturate(in.params.z);
+    float repel = in.params.z < 0.0 ? 0.0 : saturate(in.params.z);
     float isWorm = in.params.w;
 
     float microBump = frame.ropeMatParams2.z;
@@ -821,6 +826,34 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float cartoonMode = frame.visualParams.z;
     int cartoonLevels = int(frame.visualParams.w);
 
+    // Shadow debug modes via ropeMatParams4.w
+    float shadowDbgMode = frame.ropeMatParams4.w;
+    if (shadowDbgMode > 0.5) {
+        float4 lp = frame.lightViewProj * float4(in.worldPos, 1.0);
+        float3 ndc = lp.xyz / max(1e-6, lp.w);
+        float2 suv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+        constexpr sampler depthSampler(coord::normalized, address::clamp_to_edge, filter::linear);
+        float storedDepth = shadowMap.sample(depthSampler, suv);
+
+        if (shadowDbgMode < 1.5) {
+            // Mode 1: shadow comparison result
+            float shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
+            return float4(shadow, shadow, shadow, 1.0);
+        } else if (shadowDbgMode < 2.5) {
+            // Mode 2: stored depth from shadow map
+            return float4(storedDepth, storedDepth, storedDepth, 1.0);
+        } else if (shadowDbgMode < 3.5) {
+            // Mode 3: fragment ndc.z in light space
+            return float4(ndc.z, ndc.z, ndc.z, 1.0);
+        } else {
+            // Mode 4: depth difference (red = behind, green = in front) x500
+            float diff = ndc.z - storedDepth;
+            float r = clamp(diff * 500.0, 0.0, 1.0);
+            float g = clamp(-diff * 500.0, 0.0, 1.0);
+            return float4(r, g, 0.0, 1.0);
+        }
+    }
+
     float3 c;
     if (isWorm > 0.5) {
         float time = frame.timeDrag.x;
@@ -852,6 +885,34 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
         shadow = pow(shadow, 2.0);
         float ambient = frame.lightingParams.x + 0.04 * taut;
         c *= mix(ambient, 1.0, shadow);
+
+        float envReflect = frame.ropeMatParams4.x;
+        float subsurfaceAtten = 1.0 - frame.ropeMatParams.w * 0.7;
+        float envSpread = max(0.01, frame.ropeMatParams4.z);
+        if (envReflect > 0.001 && envTex.get_width() > 1) {
+            constexpr sampler envSampler(address::clamp_to_edge, filter::linear);
+            float2 screenUV = in.position.xy / float2(envTex.get_width(), envTex.get_height());
+            float nv2 = saturate(dot(n, v));
+            float envFresnel = pow(1.0 - nv2, 2.5);
+
+            float3 r = reflect(-v, n);
+            float2 offset = r.xy * envSpread;
+
+            float2 envUV = screenUV + offset;
+            float3 envSample = envTex.sample(envSampler, envUV).rgb;
+            float envStrength = envReflect * (0.4 + 0.6 * envFresnel) * subsurfaceAtten;
+            bool debugEnv = frame.ropeMatParams4.y > 0.5;
+            if (debugEnv) {
+                c = envSample;
+            } else {
+                float3 ropeColor = in.color;
+                float3 tinted = envSample * mix(float3(1.0), ropeColor, 0.5);
+                float envLum = dot(envSample, float3(0.299, 0.587, 0.114));
+                float selfLum = dot(c, float3(0.299, 0.587, 0.114));
+                float bleedAmount = saturate(envLum - selfLum * 0.5);
+                c += tinted * envStrength * bleedAmount;
+            }
+        }
     }
 
     return float4(c, 1.0);

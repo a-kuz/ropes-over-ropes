@@ -9,18 +9,27 @@ import android.util.Log
 import com.uzls.four.game.TouchPhase
 import com.uzls.four.level.LevelGenerator
 import com.uzls.four.level.LevelLoader
+import com.uzls.four.simulation.MaterialFrame
 import com.uzls.four.simulation.VerletSimulator
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
+import kotlin.math.sqrt
 import javax.microedition.khronos.egl.EGLConfig
 import javax.microedition.khronos.opengles.GL10
 
 class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
+    private val enableAgentDebugLogs = false
 
     // Public callbacks (set from main thread)
     var onLevelComplete: (() -> Unit)? = null
     var onFpsUpdate: ((Float) -> Unit)? = null
     var onUndoStackChanged: ((Boolean) -> Unit)? = null
+    var onMoveCountUpdate: ((Int) -> Unit)? = null
+
+    var moveCount = 0
+        private set
+    var levelRopeCount = 0
+        private set
 
     // Pending commands from UI thread (volatile for cross-thread visibility)
     @Volatile var pendingLevelId: Int = -1
@@ -35,6 +44,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var pendingCameraZoom = 1f
     private var pendingCameraSpin = 0f
     private var pendingCameraDebugToggle = false
+    private var pendingCameraReset = false
 
     // GL state
     private var viewWidth = 0
@@ -53,6 +63,9 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var bloomThreshProg: ShaderProgram? = null
     private var bloomBlurProg: ShaderProgram? = null
     private var postProg: ShaderProgram? = null
+
+    // Noise texture for rope bump mapping
+    private var noiseTexId = 0
 
     // Uniform buffer
     private val frameUniforms = FrameUniforms()
@@ -73,15 +86,36 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var holeIndexCount = 0; private var holeInstanceVbo = 0
     private var holeInstanceCount = 0
     private var holeInstanceData = FloatArray(0) // (x, y, elevation, radius) per hole
+    private var holeMeshSquareMode = true
+    private var holeScaleApplied = Float.NaN
     private var fullscreenVao = 0
     private var boardVao = 0; private var boardVbo = 0; private var boardIbo = 0
     private var boardIndexCount = 0
+    private var currentBoards: List<Board> = emptyList()
 
     // Timing
     private var lastFrameTime = 0L
     private var fpsFrameCount = 0
     private var fpsAccumulator = 0f
     private var gameTime = 0f
+    private var perfTotalMs = 0f
+    private var perfPhysicsMs = 0f
+    private var perfMeshMs = 0f
+    private var perfRenderMs = 0f
+    private var perfCmdMs = 0f
+    private var perfTouchMs = 0f
+    private var perfSamples = 0
+    private var debugLoadLevelCount = 0
+    private var perfDragTotalMs = 0f
+    private var perfDragPhysicsMs = 0f
+    private var perfDragMeshMs = 0f
+    private var perfDragRenderMs = 0f
+    private var perfDragSamples = 0
+    private var perfIdleTotalMs = 0f
+    private var perfIdlePhysicsMs = 0f
+    private var perfIdleMeshMs = 0f
+    private var perfIdleRenderMs = 0f
+    private var perfIdleSamples = 0
 
     // Drag / interaction state
     private var dragState: DragState? = null
@@ -89,14 +123,29 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private var cameraDragLastY = 0f
     var highlightHoleIndex = -1f
 
+    // Settle check (iOS: RendererLevelFlowCoordinator)
+    private var settleCheckTimer: Float? = null
+    private val settleCheckDelay = 0.5f
+    private var levelCompleteNotified = false
+
     // Undo
-    private val undoStack = ArrayDeque<Any>() // SimSnapshot
+    private data class UndoEntry(
+        val simulatorSnapshot: com.uzls.four.simulation.Snapshot,
+        val holeOccupied: BooleanArray,
+        val moveCount: Int
+    )
+    private val undoStack = ArrayDeque<UndoEntry>()
     private val maxUndoSteps = 20
+
+    // Hole occupancy tracking
+    private var holeOccupied = BooleanArray(0)
 
     // Parameters — iOS defaults from ContentView.swift
     var gravity = -5.0f
     var damping = 0.97f
     var constraintIterations = 8
+    var maxSubsteps = 4
+    var physicsRate = 120f
     var settleSteps = 5
     var liftHeight = 0.30f
     var dragHeight = 0.35f
@@ -108,10 +157,17 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     var holeRadiusScale = 0.734f
     var ropeRadiusScale = 1.062f  // iOS: 1.0618677139282227
     var stretchThinning = 0.5f
-    var squareCrossSection = false
+    var squareCrossSection = true
     var bendCompliance = 0.0015f
     var bendVelocityCoupling = 0.45f
     var frictionCoefficient = 0.8f
+
+    // Sticky adhesion
+    var stickyEnabled = false
+    var stickyStrength = 0.5f
+    var stickyRadius = 1.5f
+    var stickyDamping = 0.9f
+    var stickyBreakThreshold = 0.8f
 
     // Lighting — iOS defaults from Renderer.swift
     var lightDirX = -0.0294f; var lightDirY = -0.2213f; var lightDirZ = 0.8749f
@@ -142,11 +198,15 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     var ropeBumpScale = 3.0f
     var ropeStretchGloss = 0.7f
     var ropeStretchSpec = 1.0f
+    var ropeEnvReflect = 0.15f
 
     // Table — iOS defaults
     var tableStyle = 0
     var tableColor1R = 0.08f; var tableColor1G = 0.09f; var tableColor1B = 0.13f
     var tableColor2R = 0.12f; var tableColor2G = 0.13f; var tableColor2B = 0.20f
+    var woodSeed = 0.20f
+    var woodBrightness = 1.18f
+    var woodPatternScale = 3.8f
 
     // Cartoon — iOS default is true, but screenshots show wood texture = cartoon off
     var cartoonMode = 0.0f
@@ -183,6 +243,10 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         synchronized(touchLock) { pendingCameraDebugToggle = true }
     }
 
+    fun postCameraReset() {
+        synchronized(touchLock) { pendingCameraReset = true }
+    }
+
     // ===== GLSurfaceView.Renderer =====
 
     override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
@@ -195,6 +259,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         frameUniforms.create()
         compileShaders()
         createGeometry()
+        noiseTexId = generateNoiseTexture(2048)
         loadLevel(currentLevelId)
 
         lastFrameTime = System.nanoTime()
@@ -208,7 +273,8 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     override fun onDrawFrame(gl: GL10?) {
-        val now = System.nanoTime()
+        val frameStartNs = System.nanoTime()
+        val now = frameStartNs
         val dt = ((now - lastFrameTime) / 1_000_000_000f).coerceIn(0.001f, 0.1f)
         lastFrameTime = now
         gameTime += dt
@@ -224,17 +290,27 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
 
         // Process pending commands
+        val cmdStartNs = System.nanoTime()
         processPendingCommands()
+        val cmdEndNs = System.nanoTime()
         processTouch()
+        val touchEndNs = System.nanoTime()
 
         // Update physics
+        val physicsStartNs = touchEndNs
         simulator?.let { sim ->
             syncPhysicsParams(sim)
             sim.update(dt)
         }
+        val physicsEndNs = System.nanoTime()
+
+        refreshHoleMeshIfNeeded()
+        refreshHoleInstancesIfNeeded()
 
         // Update rope mesh
+        val meshStartNs = System.nanoTime()
         updateRopeMesh()
+        val meshEndNs = System.nanoTime()
 
         // Render
         val aspect = viewWidth.toFloat() / viewHeight.toFloat()
@@ -258,6 +334,12 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 // Holes (instanced) — shadow mode 1
                 prog.setInt("uShadowMode", 1)
                 drawShadowHoles(prog)
+
+                // Boards — shadow mode 2
+                if (boardIndexCount > 0) {
+                    prog.setInt("uShadowMode", 2)
+                    drawBoards()
+                }
 
                 // Ropes — shadow mode 0
                 prog.setInt("uShadowMode", 0)
@@ -288,6 +370,20 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 drawFullscreenTriangle()
             }
 
+            // Boards (between table and holes, matching iOS draw order)
+            if (boardIndexCount > 0) {
+                boardProg?.let { prog ->
+                    prog.use()
+                    prog.bindUbo("FrameBlock", 0)
+                    GLES30.glEnable(GLES30.GL_DEPTH_TEST)
+                    GLES30.glDepthFunc(GLES30.GL_LEQUAL)
+                    GLES30.glDepthMask(true)
+                    bindShadowMap(prog, 2)
+                    uploadHoleUniforms(prog)
+                    drawBoards()
+                }
+            }
+
             // Holes
             holeProg?.let { prog ->
                 prog.use()
@@ -296,12 +392,16 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
                 drawHoles(prog)
             }
 
-            // Ropes — Metal default cull mode = none, so disable culling for ropes
             ropeProg?.let { prog ->
                 prog.use()
                 prog.bindUbo("FrameBlock", 0)
                 GLES30.glDisable(GLES30.GL_CULL_FACE)
                 bindShadowMap(prog, 2)
+                if (noiseTexId != 0) {
+                    GLES30.glActiveTexture(GLES30.GL_TEXTURE3)
+                    GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, noiseTexId)
+                    prog.setInt("uNoiseTex", 3)
+                }
                 drawRopes()
                 GLES30.glEnable(GLES30.GL_CULL_FACE)
             }
@@ -344,8 +444,98 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             drawFullscreenTriangle()
         }
 
-        // Win check
-        checkWinCondition()
+        // Settle check — only run untangle detection after a delay (iOS: RendererLevelFlowCoordinator)
+        settleCheckTimer?.let { timer ->
+            val remaining = timer - dt
+            if (remaining <= 0f) {
+                settleCheckTimer = null
+                if (dragState != null || simulator?.dragInfo != null || simulator?.hasLowerAnimations == true) {
+                    settleCheckTimer = settleCheckDelay
+                } else {
+                    removeUntangledRopes()
+                }
+            } else {
+                settleCheckTimer = remaining
+            }
+        }
+
+        // Check level complete (fade-out animations may finish any frame)
+        if (!levelCompleteNotified) {
+            checkLevelComplete()
+        }
+
+        val frameEndNs = System.nanoTime()
+        val dragActiveNow = dragState != null || simulator?.dragInfo != null || simulator?.hasLowerAnimations == true
+        perfSamples++
+        perfTotalMs += (frameEndNs - frameStartNs) / 1_000_000f
+        perfCmdMs += (cmdEndNs - cmdStartNs) / 1_000_000f
+        perfTouchMs += (touchEndNs - cmdEndNs) / 1_000_000f
+        perfPhysicsMs += (physicsEndNs - physicsStartNs) / 1_000_000f
+        perfMeshMs += (meshEndNs - meshStartNs) / 1_000_000f
+        perfRenderMs += (frameEndNs - meshEndNs) / 1_000_000f
+        if (dragActiveNow) {
+            perfDragSamples++
+            perfDragTotalMs += (frameEndNs - frameStartNs) / 1_000_000f
+            perfDragPhysicsMs += (physicsEndNs - physicsStartNs) / 1_000_000f
+            perfDragMeshMs += (meshEndNs - meshStartNs) / 1_000_000f
+            perfDragRenderMs += (frameEndNs - meshEndNs) / 1_000_000f
+        } else {
+            perfIdleSamples++
+            perfIdleTotalMs += (frameEndNs - frameStartNs) / 1_000_000f
+            perfIdlePhysicsMs += (physicsEndNs - physicsStartNs) / 1_000_000f
+            perfIdleMeshMs += (meshEndNs - meshStartNs) / 1_000_000f
+            perfIdleRenderMs += (frameEndNs - meshEndNs) / 1_000_000f
+        }
+        if (perfSamples >= 30) {
+            val inv = 1f / perfSamples
+            val avgTotal = perfTotalMs * inv
+            val avgCmd = perfCmdMs * inv
+            val avgTouch = perfTouchMs * inv
+            val avgPhysics = perfPhysicsMs * inv
+            val avgMesh = perfMeshMs * inv
+            val avgRender = perfRenderMs * inv
+            if (enableAgentDebugLogs) {
+                Log.w(
+                    "GameRenderer",
+                    "[AGENTDBG] {\"sessionId\":\"d31f9b\",\"runId\":\"baseline\",\"hypothesisId\":\"H1_H2_H3_H4_H5\",\"location\":\"GameRenderer.kt:onDrawFrame\",\"message\":\"frame_breakdown\",\"data\":{\"avgTotalMs\":$avgTotal,\"avgCmdMs\":$avgCmd,\"avgTouchMs\":$avgTouch,\"avgPhysicsMs\":$avgPhysics,\"avgMeshMs\":$avgMesh,\"avgRenderMs\":$avgRender,\"fps\":${if (avgTotal > 0f) 1000f / avgTotal else 0f},\"level\":$currentLevelId,\"particles\":$particleCount},\"timestamp\":${System.currentTimeMillis()}}"
+                )
+            }
+            perfSamples = 0
+            perfTotalMs = 0f
+            perfCmdMs = 0f
+            perfTouchMs = 0f
+            perfPhysicsMs = 0f
+            perfMeshMs = 0f
+            perfRenderMs = 0f
+        }
+        if (perfDragSamples >= 15) {
+            val inv = 1f / perfDragSamples
+            if (enableAgentDebugLogs) {
+                Log.w(
+                    "GameRenderer",
+                    "[AGENTDBG] {\"sessionId\":\"d31f9b\",\"runId\":\"baseline\",\"hypothesisId\":\"H_drag\",\"location\":\"GameRenderer.kt:onDrawFrame\",\"message\":\"drag_breakdown\",\"data\":{\"avgTotalMs\":${perfDragTotalMs * inv},\"avgPhysicsMs\":${perfDragPhysicsMs * inv},\"avgMeshMs\":${perfDragMeshMs * inv},\"avgRenderMs\":${perfDragRenderMs * inv},\"fps\":${if (perfDragTotalMs > 0f) 1000f / (perfDragTotalMs * inv) else 0f},\"ropeIndexCount\":$ropeIndexCount,\"particles\":$particleCount,\"level\":$currentLevelId},\"timestamp\":${System.currentTimeMillis()}}"
+                )
+            }
+            perfDragSamples = 0
+            perfDragTotalMs = 0f
+            perfDragPhysicsMs = 0f
+            perfDragMeshMs = 0f
+            perfDragRenderMs = 0f
+        }
+        if (perfIdleSamples >= 30) {
+            val inv = 1f / perfIdleSamples
+            if (enableAgentDebugLogs) {
+                Log.w(
+                    "GameRenderer",
+                    "[AGENTDBG] {\"sessionId\":\"d31f9b\",\"runId\":\"baseline\",\"hypothesisId\":\"H_idle\",\"location\":\"GameRenderer.kt:onDrawFrame\",\"message\":\"idle_breakdown\",\"data\":{\"avgTotalMs\":${perfIdleTotalMs * inv},\"avgPhysicsMs\":${perfIdlePhysicsMs * inv},\"avgMeshMs\":${perfIdleMeshMs * inv},\"avgRenderMs\":${perfIdleRenderMs * inv},\"fps\":${if (perfIdleTotalMs > 0f) 1000f / (perfIdleTotalMs * inv) else 0f},\"ropeIndexCount\":$ropeIndexCount,\"particles\":$particleCount,\"level\":$currentLevelId},\"timestamp\":${System.currentTimeMillis()}}"
+                )
+            }
+            perfIdleSamples = 0
+            perfIdleTotalMs = 0f
+            perfIdlePhysicsMs = 0f
+            perfIdleMeshMs = 0f
+            perfIdleRenderMs = 0f
+        }
     }
 
     // ===== Private helpers =====
@@ -369,7 +559,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private fun processTouch() {
         var phase: TouchPhase? = null
         var x = 0f; var y = 0f
-        var zoom = 1f; var spin = 0f; var debugToggle = false
+        var zoom = 1f; var spin = 0f; var debugToggle = false; var cameraReset = false
 
         synchronized(touchLock) {
             phase = touchPhase; x = touchX; y = touchY
@@ -377,9 +567,15 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             zoom = pendingCameraZoom; pendingCameraZoom = 1f
             spin = pendingCameraSpin; pendingCameraSpin = 0f
             debugToggle = pendingCameraDebugToggle; pendingCameraDebugToggle = false
+            cameraReset = pendingCameraReset; pendingCameraReset = false
         }
 
         if (debugToggle) cameraDebugMode = !cameraDebugMode
+
+        if (cameraReset) {
+            camera.tiltAngle = 0f
+            camera.rotationAngle = 0f
+        }
 
         if (zoom != 1f) {
             camera.orthoHalfHeight *= zoom
@@ -391,7 +587,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     }
 
     private fun handleTouch(phase: TouchPhase, screenX: Float, screenY: Float) {
-        val world = camera.screenToWorld(screenX, screenY, viewWidth, viewHeight)
+        val world = camera.screenToWorld(screenX, screenY, viewWidth, viewHeight, currentBoards.ifEmpty { null })
         val wx = world[0]; val wy = world[1]
 
         when (phase) {
@@ -473,26 +669,26 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         if (bestBand < 0) return null
 
-        // Push undo
-        // sim.takeSnapshot()... (simplified for now)
+        pushUndoState()
 
-        val band = sim.bands[bestBand]
-        val originalHole = if (bestEnd == 0) band.pinStart else band.pinEnd
+        val originalHole = sim.currentHoleIndex(bestBand, bestEnd)
+        if (originalHole in holeOccupied.indices) holeOccupied[originalHole] = false
+
         sim.beginDrag(bestBand, bestEnd, wx, wy)
 
-        return DragState(bestBand, bestEnd, originalHole ?: -1)
+        return DragState(bestBand, bestEnd, originalHole)
     }
 
     private fun updateDrag(wx: Float, wy: Float) {
         val sim = simulator ?: return
         sim.updateDrag(wx, wy)
 
-        // Find nearest hole for highlight
         val snapRadius = holeRadius * 1.9f
         var bestDist = snapRadius
         var bestHole = -1
         val holeCount = sim.holePositions.size / 2
         for (i in 0 until holeCount) {
+            if (i < holeOccupied.size && holeOccupied[i]) continue
             val hx = sim.holePositions[i * 2]; val hy = sim.holePositions[i * 2 + 1]
             val dx = wx - hx; val dy = wy - hy
             val dist = kotlin.math.sqrt(dx * dx + dy * dy)
@@ -507,54 +703,139 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
     private fun endDrag(wx: Float, wy: Float) {
         val sim = simulator ?: return
         val ds = dragState ?: return
+        if (ds.bandIndex !in sim.bands.indices) {
+            highlightHoleIndex = -1f
+            settleCheckTimer = settleCheckDelay
+            return
+        }
 
         val snapRadius = holeRadius * 1.9f
         var bestDist = snapRadius
-        var targetHole = ds.originalHoleIndex
+        var snappedHole: Int? = null
 
         val holeCount = sim.holePositions.size / 2
         for (i in 0 until holeCount) {
+            if (i < holeOccupied.size && holeOccupied[i]) continue
             val hx = sim.holePositions[i * 2]; val hy = sim.holePositions[i * 2 + 1]
             val dx = wx - hx; val dy = wy - hy
             val dist = kotlin.math.sqrt(dx * dx + dy * dy)
             if (dist < bestDist) {
                 bestDist = dist
-                targetHole = i
+                snappedHole = i
             }
         }
 
+        val targetHole = snappedHole ?: ds.originalHoleIndex
+
+        val band = sim.bands[ds.bandIndex]
+        if (!band.active || band.fadeOut != 0f) {
+            highlightHoleIndex = -1f
+            settleCheckTimer = settleCheckDelay
+            return
+        }
+
         sim.endDrag(targetHole)
+
+        if (targetHole != ds.originalHoleIndex) {
+            moveCount++
+            mainHandler.post { onMoveCountUpdate?.invoke(moveCount) }
+        }
+
+        if (targetHole in holeOccupied.indices) {
+            holeOccupied[targetHole] = true
+        }
+
         highlightHoleIndex = -1f
+        settleCheckTimer = settleCheckDelay
     }
 
     private fun cancelDrag() {
+        val sim = simulator ?: return
         val ds = dragState ?: return
-        simulator?.endDrag(ds.originalHoleIndex)
+        if (ds.bandIndex !in sim.bands.indices) {
+            highlightHoleIndex = -1f
+            settleCheckTimer = settleCheckDelay
+            return
+        }
+        val band = sim.bands[ds.bandIndex]
+        if (!band.active || band.fadeOut != 0f) {
+            highlightHoleIndex = -1f
+            settleCheckTimer = settleCheckDelay
+            return
+        }
+
+        sim.endDrag(ds.originalHoleIndex)
+        if (ds.originalHoleIndex in holeOccupied.indices) {
+            holeOccupied[ds.originalHoleIndex] = true
+        }
         highlightHoleIndex = -1f
+        settleCheckTimer = settleCheckDelay
+    }
+
+    private fun pushUndoState() {
+        val sim = simulator ?: return
+        val entry = UndoEntry(
+            simulatorSnapshot = sim.takeSnapshot(),
+            holeOccupied = holeOccupied.copyOf(),
+            moveCount = moveCount
+        )
+        undoStack.addLast(entry)
+        if (undoStack.size > maxUndoSteps) undoStack.removeFirst()
+        mainHandler.post { onUndoStackChanged?.invoke(true) }
     }
 
     private fun performUndo() {
-        // TODO: restore from undo stack
+        if (undoStack.isEmpty()) return
+        val entry = undoStack.removeLast()
+        val sim = simulator ?: return
+        dragState = null
+        highlightHoleIndex = -1f
+        settleCheckTimer = null
+        sim.restoreSnapshot(entry.simulatorSnapshot)
+        holeOccupied = entry.holeOccupied.copyOf()
+        moveCount = entry.moveCount
+        mainHandler.post { onMoveCountUpdate?.invoke(moveCount) }
+        mainHandler.post { onUndoStackChanged?.invoke(undoStack.isNotEmpty()) }
     }
 
     private fun syncPhysicsParams(sim: VerletSimulator) {
         sim.gravity = gravity
         sim.damping = damping
         sim.constraintIterations = constraintIterations
+        sim.maxSubstepsPerFrame = maxSubsteps
+        sim.physicsRate = physicsRate
         sim.ropeTension = ropeTension
+        sim.frictionCoefficient = frictionCoefficient
         sim.liftHeight = liftHeight
         sim.bendCompliance = bendCompliance
         sim.bendVelocityCoupling = bendVelocityCoupling
         sim.stretchThinning = stretchThinning
         sim.squareCrossSection = squareCrossSection
+        sim.stickyEnabled = stickyEnabled
+        sim.stickyStrength = stickyStrength
+        sim.stickyRadius = stickyRadius
+        sim.stickyDamping = stickyDamping
+        sim.stickyBreakThreshold = stickyBreakThreshold
     }
 
     fun loadLevel(levelId: Int) {
+        debugLoadLevelCount++
+        if (enableAgentDebugLogs) {
+            Log.w(
+                "GameRenderer",
+                "[AGENTDBG] {\"sessionId\":\"d31f9b\",\"runId\":\"baseline\",\"hypothesisId\":\"H_reload\",\"location\":\"GameRenderer.kt:loadLevel\",\"message\":\"load_level\",\"data\":{\"level\":$levelId,\"loadCount\":$debugLoadLevelCount},\"timestamp\":${System.currentTimeMillis()}}"
+            )
+        }
         currentLevelId = levelId
+        settleCheckTimer = null
+        levelCompleteNotified = false
+        moveCount = 0
+        mainHandler.post { onMoveCountUpdate?.invoke(0) }
 
         // Try JSON first, fall back to procedural
         val level = LevelLoader.load(context, levelId)
             ?: LevelGenerator.generate(levelId, boardElevation)
+        levelRopeCount = level.ropes.size
 
         val holePositions = FloatArray(level.holes.size * 2)
         val holeElevations = FloatArray(level.holes.size)
@@ -570,7 +851,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         val boardDefs = boards.map { com.uzls.four.simulation.BoardDef(it.centerX, it.centerY, it.width, it.height, it.elevation) }.toTypedArray()
         val sim = VerletSimulator(holePositions, holeElevations, level.holeRadius, boardDefs)
-        sim.particleCount = level.particlesPerRope
+        sim.particleCount = particleCount.coerceAtLeast(2)
         syncPhysicsParams(sim)
 
         // Build rope configs and actions for initializeLevel
@@ -603,12 +884,28 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             }
         }
 
+        holeOccupied = BooleanArray(level.holes.size)
+        for (bi in sim.bands.indices) {
+            val band = sim.bands[bi]
+            if (!band.active) continue
+            val ps = band.pinStart
+            val pe = band.pinEnd
+            if (ps in holeOccupied.indices) holeOccupied[ps] = true
+            if (pe in holeOccupied.indices) holeOccupied[pe] = true
+        }
+
+        undoStack.clear()
+        mainHandler.post { onUndoStackChanged?.invoke(false) }
+
         // Camera fit
         val maxElev = holeElevations.maxOrNull() ?: 0f
         camera.fitToHoles(holePositions, level.holeRadius, viewWidth.toFloat() / viewHeight.coerceAtLeast(1), maxElev)
 
         // Update hole instances
         updateHoleInstances(holePositions, holeElevations, level.holeRadius)
+
+        // Build board mesh
+        buildBoardMesh(boards)
 
         this.simulator = sim
         this.holeRadius = level.holeRadius
@@ -618,11 +915,12 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val count = positions.size / 2
         holeInstanceCount = count
         val data = FloatArray(count * 4) // x, y, elevation, radius
+        val scaledRadius = radius * holeRadiusScale
         for (i in 0 until count) {
             data[i * 4] = positions[i * 2]
             data[i * 4 + 1] = positions[i * 2 + 1]
             data[i * 4 + 2] = if (i < elevations.size) elevations[i] else 0f
-            data[i * 4 + 3] = radius
+            data[i * 4 + 3] = scaledRadius
         }
         holeInstanceData = data.copyOf()
 
@@ -637,6 +935,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, holeInstanceVbo)
         GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, data.size * 4, buf, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, 0)
+        holeScaleApplied = holeRadiusScale
     }
 
     private fun updateRopeMesh() {
@@ -648,31 +947,223 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         val meshes = mutableListOf<RopeMesh>()
         for (bi in sim.bands.indices) {
             val band = sim.bands[bi]
-            if (!band.active && band.fadeOut <= 0f) continue
+            if (!band.active) continue
+            if (band.pinStart < 0 && band.pinEnd < 0 && band.fadeOut == 0f) continue
 
-            // iOS: ropeRadius = ropes[i].radius * 1.3
             val ropeRadius = band.radius * 1.3f * ropeRadiusScale
 
-            // Get cached material frames for rectangular cross-sections
-            val frames = if ((band.crossSection.isRectangular || squareCrossSection) &&
+            var meshPoints = band.positions
+            var meshPointCount = band.particleCount
+            var meshFrames: Array<MaterialFrame>? = if ((band.crossSection.isRectangular || squareCrossSection) &&
                 bi < sim.cachedFrames.size && sim.cachedFrames[bi].isNotEmpty())
                 sim.cachedFrames[bi] else null
 
+            if (band.fadeOut > 0f && band.suckHole >= 0) {
+                val n = band.particleCount
+                val clipZ = -ropeRadius * 1.5f
+                var lo = 0
+                var hi = n - 1
+
+                while (lo < n && band.positions[lo * 3 + 2] < clipZ) lo++
+                while (hi >= 0 && band.positions[hi * 3 + 2] < clipZ) hi--
+
+                if (hi - lo >= 1) {
+                    val sinkZ = -ropeRadius * 2.5f
+
+                    val addHead = if (lo > 0) 1 else 0
+                    val addTail = if (hi < n - 1) 1 else 0
+                    val visCount = (hi - lo + 1) + addHead + addTail
+                    val visPoints = FloatArray(visCount * 3)
+
+                    var off = 0
+                    if (addHead > 0) {
+                        val suckHi = band.suckHole * 2
+                        visPoints[off] = sim.holePositions[suckHi]
+                        visPoints[off + 1] = sim.holePositions[suckHi + 1]
+                        visPoints[off + 2] = sinkZ
+                        off += 3
+                    }
+                    System.arraycopy(band.positions, lo * 3, visPoints, off, (hi - lo + 1) * 3)
+                    off += (hi - lo + 1) * 3
+                    if (addTail > 0) {
+                        val tailHoleIdx = if (band.suckTailHole >= 0) band.suckTailHole else band.suckHole
+                        val tailHi = tailHoleIdx * 2
+                        visPoints[off] = sim.holePositions[tailHi]
+                        visPoints[off + 1] = sim.holePositions[tailHi + 1]
+                        visPoints[off + 2] = sinkZ
+                    }
+
+                    var visFrames: Array<MaterialFrame>? = null
+                    val origFrames = meshFrames
+                    if (origFrames != null && origFrames.size == n) {
+                        val clipped = origFrames.sliceArray(lo..hi)
+                        val arr = ArrayList<MaterialFrame>(visCount)
+                        if (addHead > 0) arr.add(clipped[0])
+                        arr.addAll(clipped.toList())
+                        if (addTail > 0) arr.add(clipped[clipped.size - 1])
+                        visFrames = arr.toTypedArray()
+                    }
+
+                    meshPoints = visPoints
+                    meshPointCount = visCount
+                    meshFrames = visFrames
+                } else {
+                    continue
+                }
+            }
+
             val mesh = RopeMeshBuilder.buildRect(
-                band.positions, band.particleCount,
+                meshPoints, meshPointCount,
                 ropeRadius,
                 band.colorR, band.colorG, band.colorB,
-                tautness = band.tautness,
+                tautness = 1f,
                 crossSection = band.crossSection,
-                materialFrames = frames,
+                materialFrames = meshFrames,
                 profileSegments = profileSegments,
                 stretchThinning = stretchThinning,
                 restLength = band.segmentLength * (band.particleCount - 1).toFloat(),
                 squareCrossSection = squareCrossSection
             )
-            meshes.add(mesh)
-            totalVerts += mesh.vertexCount
-            totalIndices += mesh.indexCount
+            val finalMesh = if (band.fadeOut > 0f && band.suckHole >= 0) {
+                val verts = mesh.vertices.copyOf()
+                val stride = 15
+                val pulse = 0.85f + 0.15f * kotlin.math.sin(gameTime * 14f)
+                val fadeEdge = kotlin.math.min(band.fadeOut * 1.8f, 0.95f)
+                for (vi in 0 until mesh.vertexCount) {
+                    val base = vi * stride
+                    val u = verts[base + 9]
+                    val suckU = if (band.suckFromEnd == 1) u else (1f - u)
+                    val nearHole = kotlin.math.max(0f, fadeEdge - suckU) / kotlin.math.max(fadeEdge, 1e-6f)
+                    val brightness = 1f - nearHole * 0.4f + nearHole * (pulse - 0.85f) * 3f
+                    verts[base + 6] *= brightness
+                    verts[base + 7] *= brightness
+                    verts[base + 8] *= brightness
+                }
+                RopeMesh(verts, mesh.vertexCount, mesh.indices, mesh.indexCount)
+            } else {
+                mesh
+            }
+            meshes.add(finalMesh)
+            totalVerts += finalMesh.vertexCount
+            totalIndices += finalMesh.indexCount
+
+            if (meshPointCount >= 2) {
+                val isSucking = band.fadeOut > 0f && band.suckHole >= 0
+                val suckFromEnd = band.suckFromEnd
+
+                if (squareCrossSection) {
+                    val bandHalf = ropeRadius
+                    val hr = holeRadius * holeRadiusScale
+
+                    fun swivelFrame(idx: Int): FloatArray {
+                        if (meshFrames != null && meshFrames.size > idx) {
+                            val fr = meshFrames[idx]
+                            return floatArrayOf(fr.d1x, fr.d1y, fr.d1z, fr.d2x, fr.d2y, fr.d2z)
+                        }
+                        var tX: Float; var tY: Float; var tZ: Float
+                        if (idx == 0 && meshPointCount >= 2) {
+                            tX = meshPoints[3] - meshPoints[0]
+                            tY = meshPoints[4] - meshPoints[1]
+                            tZ = meshPoints[5] - meshPoints[2]
+                        } else if (idx == meshPointCount - 1 && meshPointCount >= 2) {
+                            val li = idx * 3; val pi = (idx - 1) * 3
+                            tX = meshPoints[li] - meshPoints[pi]
+                            tY = meshPoints[li+1] - meshPoints[pi+1]
+                            tZ = meshPoints[li+2] - meshPoints[pi+2]
+                        } else {
+                            tX = 1f; tY = 0f; tZ = 0f
+                        }
+                        val tLen = sqrt(tX*tX + tY*tY + tZ*tZ)
+                        if (tLen > 1e-9f) { tX /= tLen; tY /= tLen; tZ /= tLen }
+                        val upDotT = tZ
+                        val upProjX = -tX * upDotT; val upProjY = -tY * upDotT; val upProjZ = 1f - tZ * upDotT
+                        val upProjLen2 = upProjX*upProjX + upProjY*upProjY + upProjZ*upProjZ
+                        if (upProjLen2 > 1e-6f) {
+                            val upProjLen = sqrt(upProjLen2)
+                            val bX = upProjX/upProjLen; val bY = upProjY/upProjLen; val bZ = upProjZ/upProjLen
+                            var nX = bY*tZ - bZ*tY; var nY = bZ*tX - bX*tZ; var nZ = bX*tY - bY*tX
+                            val nLen = sqrt(nX*nX + nY*nY + nZ*nZ)
+                            if (nLen > 1e-9f) { nX /= nLen; nY /= nLen; nZ /= nLen }
+                            return floatArrayOf(nX, nY, nZ, bX, bY, bZ)
+                        }
+                        return floatArrayOf(1f, 0f, 0f, 0f, 1f, 0f)
+                    }
+
+                    if (!isSucking || suckFromEnd == 0) {
+                        val px = meshPoints[0]; val py = meshPoints[1]; val pz = meshPoints[2]
+                        var tX = meshPoints[3] - px; var tY = meshPoints[4] - py; var tZ = meshPoints[5] - pz
+                        val tLen = sqrt(tX*tX + tY*tY + tZ*tZ)
+                        if (tLen > 1e-9f) { tX /= tLen; tY /= tLen; tZ /= tLen }
+                        val fr = swivelFrame(0)
+                        val swivel = RopeMeshBuilder.buildSwivel(
+                            px, py, pz, -tX, -tY, -tZ,
+                            hr, bandHalf,
+                            fr[0], fr[1], fr[2], fr[3], fr[4], fr[5],
+                            band.colorR, band.colorG, band.colorB
+                        )
+                        meshes.add(swivel)
+                        totalVerts += swivel.vertexCount
+                        totalIndices += swivel.indexCount
+                    }
+
+                    if (!isSucking || suckFromEnd == 1) {
+                        val lastIdx = meshPointCount - 1
+                        val li = lastIdx * 3; val pi = (lastIdx - 1) * 3
+                        val px = meshPoints[li]; val py = meshPoints[li+1]; val pz = meshPoints[li+2]
+                        var tX = px - meshPoints[pi]; var tY = py - meshPoints[pi+1]; var tZ = pz - meshPoints[pi+2]
+                        val tLen = sqrt(tX*tX + tY*tY + tZ*tZ)
+                        if (tLen > 1e-9f) { tX /= tLen; tY /= tLen; tZ /= tLen }
+                        val fr = swivelFrame(lastIdx)
+                        val swivel = RopeMeshBuilder.buildSwivel(
+                            px, py, pz, tX, tY, tZ,
+                            hr, bandHalf,
+                            fr[0], fr[1], fr[2], fr[3], fr[4], fr[5],
+                            band.colorR, band.colorG, band.colorB
+                        )
+                        meshes.add(swivel)
+                        totalVerts += swivel.vertexCount
+                        totalIndices += swivel.indexCount
+                    }
+                } else {
+                    val sphereRadius = holeRadius * holeRadiusScale * capRadiusScale
+                    val drawStart = !isSucking || suckFromEnd == 0
+                    val drawEnd = !isSucking || suckFromEnd == 1
+
+                    if (drawStart) {
+                        val px = meshPoints[0]; val py = meshPoints[1]; val pz = meshPoints[2]
+                        var tX = meshPoints[3] - px; var tY = meshPoints[4] - py; var tZ = meshPoints[5] - pz
+                        val tLen = sqrt(tX*tX + tY*tY + tZ*tZ)
+                        if (tLen > 1e-9f) { tX /= tLen; tY /= tLen; tZ /= tLen }
+                        val cap = RopeMeshBuilder.buildHemisphere(
+                            px, py, pz, sphereRadius,
+                            -tX, -tY, -tZ,
+                            band.colorR, band.colorG, band.colorB,
+                            capSegments, capRings, capDarken
+                        )
+                        meshes.add(cap)
+                        totalVerts += cap.vertexCount
+                        totalIndices += cap.indexCount
+                    }
+
+                    if (drawEnd) {
+                        val lastIdx = meshPointCount - 1
+                        val li = lastIdx * 3; val pi = (lastIdx - 1) * 3
+                        val px = meshPoints[li]; val py = meshPoints[li+1]; val pz = meshPoints[li+2]
+                        var tX = px - meshPoints[pi]; var tY = py - meshPoints[pi+1]; var tZ = pz - meshPoints[pi+2]
+                        val tLen = sqrt(tX*tX + tY*tY + tZ*tZ)
+                        if (tLen > 1e-9f) { tX /= tLen; tY /= tLen; tZ /= tLen }
+                        val cap = RopeMeshBuilder.buildHemisphere(
+                            px, py, pz, sphereRadius,
+                            tX, tY, tZ,
+                            band.colorR, band.colorG, band.colorB,
+                            capSegments, capRings, capDarken
+                        )
+                        meshes.add(cap)
+                        totalVerts += cap.vertexCount
+                        totalIndices += cap.indexCount
+                    }
+                }
+            }
         }
 
         if (totalVerts == 0) { ropeIndexCount = 0; return }
@@ -779,6 +1270,88 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         }
     }
 
+    private fun buildBoardMesh(boards: List<Board>) {
+        currentBoards = boards
+        if (boards.isEmpty()) { boardIndexCount = 0; Log.i("GameRenderer", "buildBoardMesh: no boards"); return }
+        Log.i("GameRenderer", "buildBoardMesh: ${boards.size} boards, first: cx=${boards[0].centerX} cy=${boards[0].centerY} w=${boards[0].width} h=${boards[0].height} elev=${boards[0].elevation}")
+
+        val vertStride = 8
+        val maxVerts = boards.size * 20
+        val maxIndices = boards.size * 30
+        val verts = FloatArray(maxVerts * vertStride)
+        val indices = IntArray(maxIndices)
+        var vi = 0; var ii = 0
+
+        for (board in boards) {
+            val hw = board.width * 0.5f
+            val hh = board.height * 0.5f
+            val z = board.elevation
+            val cx = board.centerX
+            val cy = board.centerY
+            val base = vi
+
+            fun putVert(px: Float, py: Float, pz: Float, nx: Float, ny: Float, nz: Float, wxy_x: Float, wxy_y: Float) {
+                val off = vi * vertStride
+                verts[off] = px; verts[off+1] = py; verts[off+2] = pz
+                verts[off+3] = nx; verts[off+4] = ny; verts[off+5] = nz
+                verts[off+6] = wxy_x; verts[off+7] = wxy_y
+                vi++
+            }
+
+            putVert(cx-hw, cy-hh, z, 0f, 0f, 1f, cx-hw, cy-hh)
+            putVert(cx+hw, cy-hh, z, 0f, 0f, 1f, cx+hw, cy-hh)
+            putVert(cx+hw, cy+hh, z, 0f, 0f, 1f, cx+hw, cy+hh)
+            putVert(cx-hw, cy+hh, z, 0f, 0f, 1f, cx-hw, cy+hh)
+            indices[ii++] = base; indices[ii++] = base+1; indices[ii++] = base+2
+            indices[ii++] = base; indices[ii++] = base+2; indices[ii++] = base+3
+
+            data class Side(val p0x: Float, val p0y: Float, val p1x: Float, val p1y: Float, val nx: Float, val ny: Float, val nz: Float)
+            val sides = listOf(
+                Side(cx-hw, cy-hh, cx+hw, cy-hh, 0f, -1f, 0f),
+                Side(cx+hw, cy-hh, cx+hw, cy+hh, 1f, 0f, 0f),
+                Side(cx+hw, cy+hh, cx-hw, cy+hh, 0f, 1f, 0f),
+                Side(cx-hw, cy+hh, cx-hw, cy-hh, -1f, 0f, 0f)
+            )
+            for (s in sides) {
+                val sb = vi
+                putVert(s.p0x, s.p0y, z, s.nx, s.ny, s.nz, s.p0x, s.p0y)
+                putVert(s.p1x, s.p1y, z, s.nx, s.ny, s.nz, s.p1x, s.p1y)
+                putVert(s.p1x, s.p1y, 0f, s.nx, s.ny, s.nz, s.p1x, s.p1y)
+                putVert(s.p0x, s.p0y, 0f, s.nx, s.ny, s.nz, s.p0x, s.p0y)
+                indices[ii++] = sb; indices[ii++] = sb+2; indices[ii++] = sb+1
+                indices[ii++] = sb; indices[ii++] = sb+3; indices[ii++] = sb+2
+            }
+        }
+
+        boardIndexCount = ii
+
+        val vBuf = ByteBuffer.allocateDirect(vi * vertStride * 4).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        vBuf.put(verts, 0, vi * vertStride).position(0)
+        val iBuf = ByteBuffer.allocateDirect(ii * 4).order(ByteOrder.nativeOrder()).asIntBuffer()
+        iBuf.put(indices, 0, ii).position(0)
+
+        GLES30.glBindVertexArray(boardVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, boardVbo)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, vi * vertStride * 4, vBuf, GLES30.GL_STATIC_DRAW)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, boardIbo)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, ii * 4, iBuf, GLES30.GL_STATIC_DRAW)
+        val bStride = vertStride * 4
+        GLES30.glEnableVertexAttribArray(0)
+        GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, bStride, 0)
+        GLES30.glEnableVertexAttribArray(1)
+        GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, bStride, 12)
+        GLES30.glEnableVertexAttribArray(2)
+        GLES30.glVertexAttribPointer(2, 2, GLES30.GL_FLOAT, false, bStride, 24)
+        GLES30.glBindVertexArray(0)
+    }
+
+    private fun drawBoards() {
+        if (boardIndexCount <= 0) return
+        GLES30.glBindVertexArray(boardVao)
+        GLES30.glDrawElements(GLES30.GL_TRIANGLES, boardIndexCount, GLES30.GL_UNSIGNED_INT, 0)
+        GLES30.glBindVertexArray(0)
+    }
+
     private fun encodeBloomPass() {
         val hdrTex = hdrFbo?.colorTexId ?: return
         val fboA = bloomFboA ?: return
@@ -861,8 +1434,8 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             cameraPos = floatArrayOf(camPosX, camPosY, camPosZ, 1f),
             orthoHalfSizeShadowBias = floatArrayOf(halfW, halfH, shadowBias, shadowType.toFloat()),
             shadowInvSize = floatArrayOf(1f / 2048f, 1f / 2048f, camera.centerX, camera.centerY),
-            timeDrag = floatArrayOf(gameTime, 0f, currentLevelId.toFloat(), if (dragState != null) 1f else 0f),
-            woodBoundsMin = floatArrayOf(-5f, -5f, 0f, 0f),
+            timeDrag = floatArrayOf(gameTime, 0f, currentLevelId.toFloat() + woodSeed * 100f, if (dragState != null) 1f else 0f),
+            woodBoundsMin = floatArrayOf(-5f, -5f, woodBrightness, woodPatternScale),
             woodBoundsMax = floatArrayOf(5f, 5f, 0f, 0f),
             holeTint = floatArrayOf(holeTintR, holeTintG, holeTintB, holeTintAmount),
             visualParams = floatArrayOf(exposure, bloomStrength, cartoonMode, cartoonLevels),
@@ -876,74 +1449,100 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             wormParams1 = floatArrayOf(0f, 0f, 0f, 0f),
             wormParams2 = floatArrayOf(0f, 0f, 0f, 0f),
             wormParams3 = floatArrayOf(0f, 0f, 0f, 0f),
-            wormParams4 = floatArrayOf(0f, 0f, 0f, 0f)
+            wormParams4 = floatArrayOf(0f, 0f, 0f, 0f),
+            ropeMatParams4 = floatArrayOf(ropeEnvReflect, 0f, 0f, 0f)
         )
         frameUniforms.bind(0)
     }
 
-    private fun checkWinCondition() {
+    private fun removeUntangledRopes() {
         val sim = simulator ?: return
-        // Check for untangled ropes
         var removed = true
         while (removed) {
             removed = false
             for (bi in sim.bands.indices) {
                 val band = sim.bands[bi]
-                if (!band.active || band.fadeOut > 0f) continue
-                if (isRopeUntangled(sim, bi)) {
+                if (!band.active) continue
+                if (band.fadeOut != 0f) continue
+                if (band.pinStart < 0 && band.pinEnd < 0) continue
+                val crossCount = countCrossings(sim, bi)
+                if (crossCount == 0) {
+                    Log.i("WinCheck", "Rope $bi untangled (pinS=${band.pinStart} pinE=${band.pinEnd} n=${band.particleCount}) — fading out")
+                    val sh = band.pinStart
+                    val eh = band.pinEnd
+                    if (sh in holeOccupied.indices) holeOccupied[sh] = false
+                    if (eh in holeOccupied.indices) holeOccupied[eh] = false
                     sim.startFadeOut(bi)
                     removed = true
                     break
+                } else {
+                    Log.d("WinCheck", "Rope $bi has $crossCount crossings — keeping")
                 }
             }
         }
 
-        // Check level complete
-        val allDone = sim.bands.all { !it.active || it.fadeOut > 0f }
+        checkLevelComplete()
+    }
+
+    private fun checkLevelComplete() {
+        val sim = simulator ?: return
+        if (levelCompleteNotified) return
         val allInactive = sim.bands.all { !it.active }
         if (allInactive) {
+            levelCompleteNotified = true
             mainHandler.post { onLevelComplete?.invoke() }
         }
     }
 
-    private fun isRopeUntangled(sim: VerletSimulator, ropeIndex: Int): Boolean {
+    private fun countCrossings(sim: VerletSimulator, ropeIndex: Int): Int {
         val bandA = sim.bands[ropeIndex]
-        if (bandA.particleCount < 4) return true
+        if (!bandA.active) return 0
+        val nA = bandA.particleCount
+        val skip = 3
+        var total = 0
 
         for (bi in sim.bands.indices) {
             if (bi == ropeIndex) continue
             val bandB = sim.bands[bi]
-            if (!bandB.active || bandB.fadeOut > 0f) continue
-            if (bandB.particleCount < 4) continue
+            if (!bandB.active || bandB.fadeOut != 0f) continue
+            val nB = bandB.particleCount
 
-            // Check 2D crossings, skip 3 segments near pins
-            val skipA = 3
-            val skipB = 3
-            for (ai in skipA until bandA.particleCount - 1 - skipA) {
-                val a0x = bandA.positions[ai * 3]; val a0y = bandA.positions[ai * 3 + 1]
-                val a1x = bandA.positions[(ai + 1) * 3]; val a1y = bandA.positions[(ai + 1) * 3 + 1]
-                for (bii in skipB until bandB.particleCount - 1 - skipB) {
-                    val b0x = bandB.positions[bii * 3]; val b0y = bandB.positions[bii * 3 + 1]
-                    val b1x = bandB.positions[(bii + 1) * 3]; val b1y = bandB.positions[(bii + 1) * 3 + 1]
-                    if (segmentsCross2D(a0x, a0y, a1x, a1y, b0x, b0y, b1x, b1y)) return false
+            val startA = skip
+            val endA = kotlin.math.max(startA, nA - 1 - skip)
+            val startB = skip
+            val endB = kotlin.math.max(startB, nB - 1 - skip)
+
+            for (i in startA until endA) {
+                val a0x = bandA.positions[i * 3]
+                val a0y = bandA.positions[i * 3 + 1]
+                val a1x = bandA.positions[(i + 1) * 3]
+                val a1y = bandA.positions[(i + 1) * 3 + 1]
+                for (j in startB until endB) {
+                    val b0x = bandB.positions[j * 3]
+                    val b0y = bandB.positions[j * 3 + 1]
+                    val b1x = bandB.positions[(j + 1) * 3]
+                    val b1y = bandB.positions[(j + 1) * 3 + 1]
+                    if (segmentsCross2D(a0x, a0y, a1x, a1y, b0x, b0y, b1x, b1y)) {
+                        total++
+                    }
                 }
             }
         }
-        return true
+        return total
     }
 
     private fun segmentsCross2D(
         a0x: Float, a0y: Float, a1x: Float, a1y: Float,
         b0x: Float, b0y: Float, b1x: Float, b1y: Float
     ): Boolean {
-        val dx = a1x - a0x; val dy = a1y - a0y
-        val ex = b1x - b0x; val ey = b1y - b0y
-        val cross = dx * ey - dy * ex
+        val d1x = a1x - a0x; val d1y = a1y - a0y
+        val d2x = b1x - b0x; val d2y = b1y - b0y
+        val cross = d1x * d2y - d1y * d2x
         if (kotlin.math.abs(cross) < 1e-9f) return false
-        val fx = b0x - a0x; val fy = b0y - a0y
-        val t = (fx * ey - fy * ex) / cross
-        val u = (fx * dy - fy * dx) / cross
-        return t in 0.01f..0.99f && u in 0.01f..0.99f
+        val dx = b0x - a0x; val dy = b0y - a0y
+        val t = (dx * d2y - dy * d2x) / cross
+        val u = (dx * d1y - dy * d1x) / cross
+        return t > 0.01f && t < 0.99f && u > 0.01f && u < 0.99f
     }
 
     // ===== Initialization =====
@@ -953,6 +1552,12 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             ropeProg = ShaderProgram(loadAsset("shaders/rope.vert"), loadAsset("shaders/rope.frag"))
             holeProg = ShaderProgram(loadAsset("shaders/hole.vert"), loadAsset("shaders/hole.frag"))
             tableProg = ShaderProgram(loadAsset("shaders/table.vert"), loadAsset("shaders/table.frag"))
+            try {
+                boardProg = ShaderProgram(loadAsset("shaders/board.vert"), loadAsset("shaders/board.frag"))
+            } catch (e: Exception) {
+                Log.e("GameRenderer", "Board shader compile failed", e)
+                boardProg = null
+            }
             shadowProg = ShaderProgram(loadAsset("shaders/shadow.vert"), loadAsset("shaders/shadow.frag"))
             bloomThreshProg = ShaderProgram(loadAsset("shaders/fullscreen.vert"), loadAsset("shaders/bloom_threshold.frag"))
             bloomBlurProg = ShaderProgram(loadAsset("shaders/fullscreen.vert"), loadAsset("shaders/bloom_blur.frag"))
@@ -970,7 +1575,7 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
             layout(location=0) in vec3 aPos;
             layout(location=1) in vec3 aNormal;
             layout(location=2) in vec3 aColor;
-            layout(std140) uniform FrameBlock { mat4 uViewProj; mat4 uInvViewProj; mat4 uLightViewProj; vec4 uLD; vec4 uAC; vec4 uCP; vec4 uOH; vec4 uSI; vec4 uTD; vec4 uWBMin; vec4 uWBMax; vec4 uHT; vec4 uVP; vec4 uLP; vec4 uTP; vec4 uTP2; vec4 uRMP; vec4 uRMP2; vec4 uRMP3; vec4 uCaP; vec4 uWP1; vec4 uWP2; vec4 uWP3; vec4 uWP4; };
+            layout(std140) uniform FrameBlock { mat4 uViewProj; mat4 uInvViewProj; mat4 uLightViewProj; vec4 uLD; vec4 uAC; vec4 uCP; vec4 uOH; vec4 uSI; vec4 uTD; vec4 uWBMin; vec4 uWBMax; vec4 uHT; vec4 uVP; vec4 uLP; vec4 uTP; vec4 uTP2; vec4 uRMP; vec4 uRMP2; vec4 uRMP3; vec4 uCaP; vec4 uWP1; vec4 uWP2; vec4 uWP3; vec4 uWP4; vec4 uRMP4; };
             out vec3 vColor;
             out vec3 vNormal;
             void main() {
@@ -1077,25 +1682,17 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
 
         // Build hole mesh
         // iOS: holeSegments = 19, square = squareCrossSection
-        val holeMesh = if (squareCrossSection) HoleMeshBuilder.buildSquare()
-                       else HoleMeshBuilder.build(segments = 19)
-        val hvBuf = ByteBuffer.allocateDirect(holeMesh.vertexCount * 24).order(ByteOrder.nativeOrder()).asFloatBuffer()
-        hvBuf.put(holeMesh.vertices, 0, holeMesh.vertexCount * 6).position(0)
-        val hiBuf = ByteBuffer.allocateDirect(holeMesh.indexCount * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
-        hiBuf.put(holeMesh.indices, 0, holeMesh.indexCount).position(0)
-
         GLES30.glBindVertexArray(holeVao)
         GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, holeVbo)
-        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, holeMesh.vertexCount * 24, hvBuf, GLES30.GL_STATIC_DRAW)
         GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, holeIbo)
-        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, holeMesh.indexCount * 2, hiBuf, GLES30.GL_STATIC_DRAW)
         // Hole vertex: pos(0) + normal(1) = 6 floats, stride 24
         GLES30.glEnableVertexAttribArray(0)
         GLES30.glVertexAttribPointer(0, 3, GLES30.GL_FLOAT, false, 24, 0)
         GLES30.glEnableVertexAttribArray(1)
         GLES30.glVertexAttribPointer(1, 3, GLES30.GL_FLOAT, false, 24, 12)
-        holeIndexCount = holeMesh.indexCount
         GLES30.glBindVertexArray(0)
+        holeMeshSquareMode = squareCrossSection
+        uploadHoleMesh(if (squareCrossSection) HoleMeshBuilder.buildSquare() else HoleMeshBuilder.build(segments = 19))
 
         // Fullscreen triangle VAO (no VBO - uses gl_VertexID)
         GLES30.glBindVertexArray(fullscreenVao)
@@ -1114,9 +1711,104 @@ class GameRenderer(private val context: Context) : GLSurfaceView.Renderer {
         bloomFboB = Fbo.makeBloom(w / 2, h / 2)
     }
 
+    private fun refreshHoleMeshIfNeeded() {
+        if (holeMeshSquareMode == squareCrossSection) return
+        holeMeshSquareMode = squareCrossSection
+        val holeMesh = if (squareCrossSection) HoleMeshBuilder.buildSquare() else HoleMeshBuilder.build(segments = 19)
+        uploadHoleMesh(holeMesh)
+    }
+
+    private fun refreshHoleInstancesIfNeeded() {
+        if (holeScaleApplied == holeRadiusScale) return
+        val sim = simulator ?: return
+        updateHoleInstances(sim.holePositions, sim.holeElevations, holeRadius)
+    }
+
+    private fun uploadHoleMesh(holeMesh: HoleMesh) {
+        val hvBuf = ByteBuffer.allocateDirect(holeMesh.vertexCount * 24).order(ByteOrder.nativeOrder()).asFloatBuffer()
+        hvBuf.put(holeMesh.vertices, 0, holeMesh.vertexCount * 6).position(0)
+        val hiBuf = ByteBuffer.allocateDirect(holeMesh.indexCount * 2).order(ByteOrder.nativeOrder()).asShortBuffer()
+        hiBuf.put(holeMesh.indices, 0, holeMesh.indexCount).position(0)
+
+        GLES30.glBindVertexArray(holeVao)
+        GLES30.glBindBuffer(GLES30.GL_ARRAY_BUFFER, holeVbo)
+        GLES30.glBufferData(GLES30.GL_ARRAY_BUFFER, holeMesh.vertexCount * 24, hvBuf, GLES30.GL_STATIC_DRAW)
+        GLES30.glBindBuffer(GLES30.GL_ELEMENT_ARRAY_BUFFER, holeIbo)
+        GLES30.glBufferData(GLES30.GL_ELEMENT_ARRAY_BUFFER, holeMesh.indexCount * 2, hiBuf, GLES30.GL_STATIC_DRAW)
+        GLES30.glBindVertexArray(0)
+        holeIndexCount = holeMesh.indexCount
+    }
+
     private fun loadAsset(path: String): String {
         return context.assets.open(path).bufferedReader().readText()
     }
 
     data class DragState(val bandIndex: Int, val endIndex: Int, val originalHoleIndex: Int)
+
+    private fun generateNoiseTexture(size: Int): Int {
+        val ids = IntArray(1)
+        GLES30.glGenTextures(1, ids, 0)
+        val texId = ids[0]
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, texId)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MIN_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_MAG_FILTER, GLES30.GL_LINEAR)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_S, GLES30.GL_REPEAT)
+        GLES30.glTexParameteri(GLES30.GL_TEXTURE_2D, GLES30.GL_TEXTURE_WRAP_T, GLES30.GL_REPEAT)
+
+        val gridSize = 128
+        var rng = 0xDEAD_BEEF.toInt()
+        fun lcg(): Float {
+            rng = rng * 1_664_525 + 1_013_904_223
+            return (rng ushr 8).toFloat() / 16_777_216f
+        }
+        val grid = FloatArray(gridSize * gridSize * 2)
+        for (i in grid.indices) grid[i] = lcg()
+
+        fun gridVal(gx: Int, gy: Int, ch: Int): Float {
+            val wx = ((gx % gridSize) + gridSize) % gridSize
+            val wy = ((gy % gridSize) + gridSize) % gridSize
+            return grid[(wy * gridSize + wx) * 2 + ch]
+        }
+        fun smooth(t: Float): Float = t * t * (3f - 2f * t)
+        fun valueNoise(x: Float, y: Float, freq: Int, ch: Int): Float {
+            val fx = x * freq; val fy = y * freq
+            val ix = kotlin.math.floor(fx).toInt(); val iy = kotlin.math.floor(fy).toInt()
+            val tx = smooth(fx - kotlin.math.floor(fx)); val ty = smooth(fy - kotlin.math.floor(fy))
+            val c00 = gridVal(ix, iy, ch); val c10 = gridVal(ix + 1, iy, ch)
+            val c01 = gridVal(ix, iy + 1, ch); val c11 = gridVal(ix + 1, iy + 1, ch)
+            val a = c00 + (c10 - c00) * tx
+            val b = c01 + (c11 - c01) * tx
+            return a + (b - a) * ty
+        }
+
+        val pixels = ByteArray(size * size * 2)
+        for (y in 0 until size) {
+            for (x in 0 until size) {
+                val u = x.toFloat() / size
+                val v = y.toFloat() / size
+                val idx = (y * size + x) * 2
+                for (ch in 0..1) {
+                    val o1 = valueNoise(u, v, 16, ch)
+                    val o2 = valueNoise(u, v, 37, ch)
+                    val o3 = valueNoise(u, v, 79, ch)
+                    val o4 = valueNoise(u, v, 128, ch)
+                    val fbm = o1 * 0.15f + o2 * 0.30f + o3 * 0.30f + o4 * 0.15f
+                    val white = lcg()
+                    val value = fbm * 0.85f + white * 0.15f
+                    pixels[idx + ch] = (value.coerceIn(0f, 1f) * 255f).toInt().toByte()
+                }
+            }
+        }
+
+        val buf = ByteBuffer.allocateDirect(pixels.size).order(ByteOrder.nativeOrder())
+        buf.put(pixels).position(0)
+        GLES30.glTexImage2D(
+            GLES30.GL_TEXTURE_2D, 0, GLES30.GL_RG8,
+            size, size, 0,
+            GLES30.GL_RG, GLES30.GL_UNSIGNED_BYTE, buf
+        )
+        GLES30.glBindTexture(GLES30.GL_TEXTURE_2D, 0)
+        Log.i("GameRenderer", "Noise texture generated: ${size}x${size} RG8")
+        return texId
+    }
 }

@@ -28,7 +28,8 @@ enum LevelGenerator {
         let maxRopes = max(1, (holes.count - 3) / 2)
         let ropeCount = min(diff.ropeCount, maxRopes)
 
-        let ropePairs = pickStructuredPairs(holes: holes, count: ropeCount, rng: &rng)
+        let shortCount = min(diff.shortRopeCount, ropeCount - 1)
+        let ropePairs = pickStructuredPairs(holes: holes, count: ropeCount, shortCount: shortCount, rng: &rng)
         let ropes = ropePairs.enumerated().map { i, pair in
             LevelDefinition.Rope(
                 startHole: pair.0,
@@ -38,7 +39,7 @@ enum LevelGenerator {
             )
         }
 
-        let actions = buildActions(ropes: ropes, holes: holes, totalDrags: diff.totalDrags)
+        let actions = buildActions(ropes: ropes, holes: holes, totalDrags: diff.totalDrags, shortCount: shortCount)
 
         return LevelDefinition(
             id: levelId,
@@ -77,18 +78,20 @@ enum LevelGenerator {
     private struct Difficulty {
         let ropeCount: Int
         let totalDrags: Int
+        let shortRopeCount: Int
     }
 
     private static func difficulty(for levelId: Int) -> Difficulty {
         switch levelId {
-        case 1...2:   return Difficulty(ropeCount: 3, totalDrags: 3)
-        case 3...5:   return Difficulty(ropeCount: 4, totalDrags: 4)
-        case 6...9:   return Difficulty(ropeCount: 5, totalDrags: 6)
-        case 10...15: return Difficulty(ropeCount: 6, totalDrags: 8)
-        case 16...25: return Difficulty(ropeCount: 7, totalDrags: 10)
-        case 26...50: return Difficulty(ropeCount: 8, totalDrags: 12 + (levelId - 25) / 5)
+        case 1...2:   return Difficulty(ropeCount: 3, totalDrags: 3, shortRopeCount: 0)
+        case 3...5:   return Difficulty(ropeCount: 4, totalDrags: 4, shortRopeCount: levelId >= 4 ? 2 : 0)
+        case 6...9:   return Difficulty(ropeCount: 5, totalDrags: 6, shortRopeCount: 3)
+        case 10...15: return Difficulty(ropeCount: 6, totalDrags: 8, shortRopeCount: 4)
+        case 16...25: return Difficulty(ropeCount: 7, totalDrags: 10, shortRopeCount: 5)
+        case 26...50: return Difficulty(ropeCount: 8, totalDrags: 12 + (levelId - 25) / 5, shortRopeCount: 6)
         default:      return Difficulty(ropeCount: min(10, 8 + (levelId - 50) / 25),
-                                        totalDrags: min(22, 16 + (levelId - 50) / 10))
+                                        totalDrags: min(22, 16 + (levelId - 50) / 10),
+                                        shortRopeCount: min(8, 6 + (levelId - 50) / 30))
         }
     }
 
@@ -129,7 +132,7 @@ enum LevelGenerator {
     // MARK: - Rope pair selection
 
     private static func pickStructuredPairs(
-        holes: [LevelDefinition.Vec2], count: Int, rng: inout SeededRNG
+        holes: [LevelDefinition.Vec2], count: Int, shortCount: Int, rng: inout SeededRNG
     ) -> [(Int, Int)] {
         guard holes.count >= 4 else { return [] }
 
@@ -143,9 +146,37 @@ enum LevelGenerator {
         let offset = rng.next(bound: sorted.count)
         let n = sorted.count
         let half = n / 2
+        let quarter = max(1, n / 4)
 
         var pairs: [(Int, Int)] = []
         var usedHoles = Set<Int>()
+
+        if shortCount > 0 {
+            let sectorStart = offset % n
+            let sectorLen = min(quarter + shortCount, n / 2)
+
+            var sectorHoles: [Int] = []
+            for k in 0..<sectorLen {
+                sectorHoles.append(sorted[(sectorStart + k) % n].idx)
+            }
+
+            let minShortDist: Float = 0.3
+            for i in 0..<sectorHoles.count {
+                guard pairs.count < shortCount else { break }
+                let a = sectorHoles[i]
+                if usedHoles.contains(a) { continue }
+                let shift = max(2, min(quarter / 2, sectorHoles.count / 3))
+                for delta in stride(from: shift, to: sectorHoles.count, by: 1) {
+                    let b = sectorHoles[(i + delta) % sectorHoles.count]
+                    if b == a || usedHoles.contains(b) { continue }
+                    if simd_length(holes[a].simd - holes[b].simd) < minShortDist { continue }
+                    pairs.append((a, b))
+                    usedHoles.insert(a)
+                    usedHoles.insert(b)
+                    break
+                }
+            }
+        }
 
         for i in 0..<count {
             guard pairs.count < count else { break }
@@ -190,10 +221,32 @@ enum LevelGenerator {
     private static func buildActions(
         ropes: [LevelDefinition.Rope],
         holes: [LevelDefinition.Vec2],
-        totalDrags: Int
+        totalDrags: Int,
+        shortCount: Int
     ) -> [LevelDefinition.Action] {
         var actions: [LevelDefinition.Action] = []
         let holeSimd = holes.map { $0.simd }
+
+        var shortCenter: SIMD2<Float> = .zero
+        if shortCount > 0 {
+            var sum = SIMD2<Float>.zero
+            var cnt: Float = 0
+            for i in 0..<shortCount {
+                sum += holeSimd[ropes[i].startHole]
+                sum += holeSimd[ropes[i].endHole]
+                cnt += 2
+            }
+            shortCenter = sum / cnt
+        }
+        let shortRadius: Float = {
+            guard shortCount > 0 else { return 0 }
+            var maxD: Float = 0
+            for i in 0..<shortCount {
+                maxD = max(maxD, simd_length(holeSimd[ropes[i].startHole] - shortCenter))
+                maxD = max(maxD, simd_length(holeSimd[ropes[i].endHole] - shortCenter))
+            }
+            return maxD + 0.35
+        }()
 
         for i in 0..<ropes.count {
             actions.append(.init(type: "pin", ropeIndex: i, endIndex: 0, holeIndex: ropes[i].startHole))
@@ -204,12 +257,13 @@ enum LevelGenerator {
         var usedHoles = Set(endpoints.flatMap { [$0.0, $0.1] })
 
         @discardableResult
-        func tryDrag(ropeIdx: Int, endIdx: Int, targetRopeIdx: Int) -> Bool {
+        func tryDrag(ropeIdx: Int, endIdx: Int, targetRopeIdx: Int, unconstrained: Bool = false) -> Bool {
             let currentHole = endIdx == 0 ? endpoints[ropeIdx].0 : endpoints[ropeIdx].1
             let anchorHole = endIdx == 0 ? endpoints[ropeIdx].1 : endpoints[ropeIdx].0
             let anchorPos = holeSimd[anchorHole]
             let tS = holeSimd[endpoints[targetRopeIdx].0]
             let tE = holeSimd[endpoints[targetRopeIdx].1]
+            let isShort = !unconstrained && ropeIdx < shortCount
 
             let otherUsed = Set(
                 (0..<ropes.count).filter { $0 != ropeIdx }
@@ -223,6 +277,7 @@ enum LevelGenerator {
                 if candidate == currentHole || candidate == anchorHole { continue }
                 if otherUsed.contains(candidate) { continue }
                 let cPos = holeSimd[candidate]
+                if isShort && simd_length(cPos - shortCenter) > shortRadius { continue }
                 if segmentsCross(anchorPos, cPos, tS, tE) {
                     let score = -simd_length(cPos - (tS + tE) * 0.5)
                     if score > bestScore {
@@ -245,6 +300,17 @@ enum LevelGenerator {
             return true
         }
 
+        if shortCount >= 2 {
+            for d in 0..<shortCount {
+                let ropeIdx = d
+                for targetIdx in 0..<shortCount where targetIdx != ropeIdx {
+                    let endIdx = d % 2
+                    if tryDrag(ropeIdx: ropeIdx, endIdx: endIdx, targetRopeIdx: targetIdx) { break }
+                    if tryDrag(ropeIdx: ropeIdx, endIdx: 1 - endIdx, targetRopeIdx: targetIdx) { break }
+                }
+            }
+        }
+
         for d in 0..<totalDrags {
             let ropeIdx = d % ropes.count
             let targetRopeIdx = (ropeIdx + 1 + d / ropes.count) % ropes.count
@@ -255,7 +321,7 @@ enum LevelGenerator {
             }
         }
 
-        for attempt in 0..<ropes.count * 4 {
+        for attempt in 0..<ropes.count * 8 {
             let crossings = ropeCrossings(endpoints: endpoints, holes: holeSimd)
             let isolated = (0..<ropes.count).filter { crossings[$0] == 0 }
             if isolated.isEmpty { break }
@@ -264,7 +330,39 @@ enum LevelGenerator {
             var fixed = false
             for other in 0..<ropes.count where other != ropeIdx && !fixed {
                 for endIdx in 0...1 where !fixed {
-                    fixed = tryDrag(ropeIdx: ropeIdx, endIdx: endIdx, targetRopeIdx: other)
+                    fixed = tryDrag(ropeIdx: ropeIdx, endIdx: endIdx, targetRopeIdx: other, unconstrained: true)
+                }
+            }
+            if !fixed {
+                for other in 0..<ropes.count where other != ropeIdx && !fixed {
+                    for endIdx in 0...1 where !fixed {
+                        fixed = tryDrag(ropeIdx: other, endIdx: endIdx, targetRopeIdx: ropeIdx, unconstrained: true)
+                    }
+                }
+            }
+            if !fixed {
+                let allUsed = Set(endpoints.flatMap { [$0.0, $0.1] })
+                let freeHoles = (0..<holes.count).filter { !allUsed.contains($0) }
+                for other in 0..<ropes.count where other != ropeIdx && !fixed {
+                    let oS = holeSimd[endpoints[other].0]
+                    let oE = holeSimd[endpoints[other].1]
+                    for h0 in freeHoles where !fixed {
+                        for h1 in freeHoles where h1 != h0 && !fixed {
+                            if segmentsCross(holeSimd[h0], holeSimd[h1], oS, oE) {
+                                let old0 = endpoints[ropeIdx].0
+                                let old1 = endpoints[ropeIdx].1
+                                usedHoles.remove(old0)
+                                usedHoles.remove(old1)
+                                endpoints[ropeIdx].0 = h0
+                                endpoints[ropeIdx].1 = h1
+                                usedHoles.insert(h0)
+                                usedHoles.insert(h1)
+                                actions.append(.init(type: "drag", ropeIndex: ropeIdx, endIndex: 0, holeIndex: h0))
+                                actions.append(.init(type: "drag", ropeIndex: ropeIdx, endIndex: 1, holeIndex: h1))
+                                fixed = true
+                            }
+                        }
+                    }
                 }
             }
         }

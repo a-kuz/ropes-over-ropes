@@ -26,7 +26,19 @@ extension Renderer {
 
     private func checkLevelComplete() {
         let allDone = ropes.allSatisfy { $0.startHole == -1 }
+        let allBandsInactive = simulator?.bands.allSatisfy { !$0.active } ?? false
+        let occupiedHoles = holeOccupied.enumerated().compactMap { index, occupied in occupied ? String(index) : nil }
+
+        if allBandsInactive && !allDone {
+            Self.logger.error("[WIN-DIAG] all bands inactive but ropes not cleared ropes=\(self.winDiagRopeStates()) occupied=[\(occupiedHoles.joined(separator: ","))]")
+        }
+
+        if allDone && !occupiedHoles.isEmpty {
+            Self.logger.error("[WIN-DIAG] ropes cleared but occupied holes remain occupied=[\(occupiedHoles.joined(separator: ","))] ropes=\(self.winDiagRopeStates())")
+        }
+
         if allDone {
+            Self.logger.info("[WIN-DIAG] level complete ropes=\(self.winDiagRopeStates()) occupied=[\(occupiedHoles.joined(separator: ","))]")
             Haptics.success()
             onLevelComplete?()
         }
@@ -54,19 +66,41 @@ extension Renderer {
             suckFromEnd = 1
         }
 
+        let tailHole = suckFromEnd == 1 ? holeE : holeS
+
         sim.bands[ropeIndex].suckHole = suckTarget
+        sim.bands[ropeIndex].suckTailHole = tailHole
         sim.bands[ropeIndex].suckFromEnd = suckFromEnd
         sim.bands[ropeIndex].suckConsumed = 0
+        sim.bands[ropeIndex].suckFrame = 0
+
+        var suckSegs = ContiguousArray<Float>()
+        let positions = sim.bands[ropeIndex].positions
+        let pc = positions.count
+        suckSegs.reserveCapacity(max(0, pc - 1))
+        for k in 0..<(pc - 1) {
+            suckSegs.append(simd_length(positions[k + 1] - positions[k]))
+        }
+        sim.bands[ropeIndex].suckSegLengths = suckSegs
+        sim.bands[ropeIndex].suckOrigPositions = positions
+
         sim.bands[ropeIndex].fadeOut = 0.001
         sim.bands[ropeIndex].pinStart = nil
         sim.bands[ropeIndex].pinEnd = nil
 
+        let band = sim.bands[ropeIndex]
+        let totalArc = band.suckSegLengths.reduce(0, +)
+        let estDuration = totalArc / max(VerletSimulator.Band.fadeOutSpeed * band.segmentLength, 1e-9)
+        Self.logger.info("[SUCK-START] rope=\(ropeIndex) n=\(band.positions.count) totalArc=\(String(format:"%.3f", totalArc)) estDuration=\(String(format:"%.1f", estDuration))s")
+
         let sh = ropes[ropeIndex].startHole
         let eh = ropes[ropeIndex].endHole
+        Self.logger.warning("[WIN-DIAG] startFadeOut rope=\(ropeIndex) ropeHoles=(\(sh),\(eh)) simPins=(\(pinS.map(String.init) ?? "nil"),\(pinE.map(String.init) ?? "nil")) suckTarget=\(suckTarget) tailHole=\(tailHole.map(String.init) ?? "nil") occupiedBefore=\(self.winDiagOccupiedHoles())")
         if sh >= 0 && sh < holeOccupied.count { holeOccupied[sh] = false }
         if eh >= 0 && eh < holeOccupied.count { holeOccupied[eh] = false }
         ropes[ropeIndex].startHole = -1
         ropes[ropeIndex].endHole = -1
+        Self.logger.warning("[WIN-DIAG] startFadeOut cleared rope=\(ropeIndex) occupiedAfter=\(self.winDiagOccupiedHoles()) ropes=\(self.winDiagRopeStates())")
     }
 
     /// A rope is untangled if it has ZERO 2D crossings with any other active rope.
@@ -122,5 +156,23 @@ extension Renderer {
         let t = (d.x * d2.y - d.y * d2.x) / cross
         let u = (d.x * d1.y - d.y * d1.x) / cross
         return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99
+    }
+
+    private func winDiagOccupiedHoles() -> String {
+        let occupied = holeOccupied.enumerated().compactMap { index, value in value ? String(index) : nil }
+        return "[\(occupied.joined(separator: ","))]"
+    }
+
+    private func winDiagRopeStates() -> String {
+        let sim = simulator
+        return ropes.enumerated().map { index, rope in
+            let band = sim?.bands[safe: index]
+            let active = band?.active == true ? "1" : "0"
+            let fadeOut = band.map { String(format: "%.3f", $0.fadeOut) } ?? "nil"
+            let pinStart = band?.pinStart.map(String.init) ?? "nil"
+            let pinEnd = band?.pinEnd.map(String.init) ?? "nil"
+            let suckHole = band?.suckHole.map(String.init) ?? "nil"
+            return "r\(index){rope=(\(rope.startHole),\(rope.endHole)) active=\(active) fade=\(fadeOut) pins=(\(pinStart),\(pinEnd)) suck=\(suckHole)}"
+        }.joined(separator: " ")
     }
 }

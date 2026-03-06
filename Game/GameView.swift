@@ -248,6 +248,18 @@ class GameController: ObservableObject {
     @Published var ropeStretchSpec: Float = 0.371 {
         didSet { renderer?.ropeStretchSpec = ropeStretchSpec; persist("v.rss", ropeStretchSpec) }
     }
+    @Published var ropeEnvReflect: Float = 0.15 {
+        didSet { renderer?.ropeEnvReflect = ropeEnvReflect; persist("v.renv", ropeEnvReflect) }
+    }
+    @Published var ropeEnvSpread: Float = 0.15 {
+        didSet { renderer?.ropeEnvSpread = ropeEnvSpread; persist("v.rens", ropeEnvSpread) }
+    }
+    @Published var ropeEnvDebug: Bool = false {
+        didSet { renderer?.ropeEnvDebug = ropeEnvDebug }
+    }
+    @Published var shadowDebugMode: Int = 0 {
+        didSet { renderer?.shadowDebugMode = shadowDebugMode }
+    }
     @Published var wormMode: Bool = false {
         didSet { renderer?.wormMode = wormMode; persist("v.wrm", wormMode ? 1 : 0) }
     }
@@ -329,8 +341,16 @@ class GameController: ObservableObject {
     @Published var currentLevel: Int = 1 {
         didSet { persist("p.lvl", Float(currentLevel)) }
     }
+    @Published var moveCount: Int = 0
     @Published var showLevelComplete: Bool = false
+    @Published var isNewRecord: Bool = false
+    @Published var previousRecord: Int? = nil
     @Published var canUndo: Bool = false
+    @Published var percentile: Int? = nil
+    @Published var globalBest: Int? = nil
+    @Published var starCount: Int = 3
+    @Published var leaderboardUsername: String = ""
+    private var levelStartTime: Date?
     @Published var frictionSoundEnabled: Bool = true {
         didSet { renderer?.frictionSound.enabled = frictionSoundEnabled; persist("p.snd", frictionSoundEnabled ? 1 : 0) }
     }
@@ -345,6 +365,7 @@ class GameController: ObservableObject {
 
     init() {
         loadSaved()
+        leaderboardUsername = LeaderboardAPI.shared.username
         fpsTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor [weak self] in
                 guard let self, let r = self.renderer else { return }
@@ -356,6 +377,10 @@ class GameController: ObservableObject {
                     self.profilerSummary = PhysicsProfiler.shared.summaryString()
                 }
             }
+        }
+        Task {
+            await LeaderboardAPI.shared.ensureRegistered()
+            self.leaderboardUsername = LeaderboardAPI.shared.username
         }
     }
 
@@ -434,6 +459,8 @@ class GameController: ObservableObject {
         if let v = f("v.rlgw") { ropeLiftGlow = v }
         if let v = f("v.rsg") { ropeStretchGloss = v }
         if let v = f("v.rss") { ropeStretchSpec = v }
+        if let v = f("v.renv") { ropeEnvReflect = v }
+        if let v = f("v.rens") { ropeEnvSpread = v }
         if let v = f("v.sqcs") { squareCrossSection = v > 0.5 }
         if let v = f("v.rsc"), v > 0 { renderScale = v }
         if let v = f("v.wrm") { wormMode = v > 0.5 }
@@ -532,6 +559,8 @@ class GameController: ObservableObject {
         ropeLiftGlow = 0
         ropeStretchGloss = 0.879
         ropeStretchSpec = 0.371
+        ropeEnvReflect = 0.15
+        ropeEnvSpread = 0.15
         squareCrossSection = true
         renderScale = 1.0
         wormMode = false
@@ -548,15 +577,81 @@ class GameController: ObservableObject {
         renderer.performUndo()
     }
 
+    func bestRecord(for level: Int) -> Int? {
+        let key = "record.lvl.\(level)"
+        return UserDefaults.standard.object(forKey: key) != nil ? UserDefaults.standard.integer(forKey: key) : nil
+    }
+
+    func saveRecord(for level: Int, moves: Int) {
+        let key = "record.lvl.\(level)"
+        UserDefaults.standard.set(moves, forKey: key)
+    }
+
+    func onLevelComplete() {
+        let moves = moveCount
+        let level = currentLevel
+        let prev = bestRecord(for: level)
+        previousRecord = prev
+        if prev == nil || moves < prev! {
+            isNewRecord = true
+            saveRecord(for: level, moves: moves)
+        } else {
+            isNewRecord = false
+        }
+        percentile = nil
+        globalBest = nil
+        starCount = 3
+        showLevelComplete = true
+
+        let timeMs = Int((Date().timeIntervalSince(levelStartTime ?? Date())) * 1000)
+        Task {
+            if isNewRecord {
+                let _ = await LeaderboardAPI.shared.submitResult(
+                    levelId: level, moves: moves, timeMs: timeMs
+                )
+            }
+            let stats = await LeaderboardAPI.shared.fetchStats(levelId: level, moves: moves)
+            self.percentile = stats?.percentile
+            if let best = stats?.best_moves, best > 0 {
+                self.globalBest = best
+                if moves <= best || moves <= Int(ceil(Double(best) * 1.5)) {
+                    self.starCount = 3
+                } else if moves > best * 5 {
+                    self.starCount = 1
+                } else {
+                    self.starCount = 2
+                }
+            }
+        }
+    }
+
+    func updateLeaderboardUsername(_ newName: String) {
+        LeaderboardAPI.shared.setUsername(newName)
+        leaderboardUsername = newName
+    }
+
+    func loginAsPlayer(_ name: String) {
+        LeaderboardAPI.shared.loginAs(name)
+        leaderboardUsername = name
+    }
+
+    func resetCamera() {
+        renderer?.resetCameraOrientation()
+    }
+
     func restartLevel() {
         guard let renderer = renderer else { return }
         renderer.loadLevel(levelId: renderer.currentLevelId)
+        levelStartTime = Date()
+        percentile = nil
     }
 
     func loadLevel(_ id: Int) {
         guard let renderer = renderer else { return }
         renderer.loadLevel(levelId: id)
         currentLevel = id
+        levelStartTime = Date()
+        percentile = nil
     }
 
     func dumpSettingsToClipboard() -> Bool {
@@ -626,6 +721,8 @@ class GameController: ObservableObject {
             "ropeLiftGlow": ropeLiftGlow,
             "ropeStretchGloss": ropeStretchGloss,
             "ropeStretchSpec": ropeStretchSpec,
+            "ropeEnvReflect": ropeEnvReflect,
+            "ropeEnvSpread": ropeEnvSpread,
             "squareCrossSection": squareCrossSection,
             "wormMode": wormMode,
             "renderScale": renderScale
@@ -638,6 +735,123 @@ class GameController: ObservableObject {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(str, forType: .string)
         #endif
+        return true
+    }
+
+    func importSettingsFromClipboard() -> Bool {
+        #if os(iOS)
+        guard let str = UIPasteboard.general.string else { return false }
+        #elseif os(macOS)
+        guard let str = NSPasteboard.general.string(forType: .string) else { return false }
+        #else
+        return false
+        #endif
+        guard let data = str.data(using: .utf8),
+              let dict = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+
+        func f(_ key: String) -> Float? {
+            if let v = dict[key] as? Double { return Float(v) }
+            if let v = dict[key] as? Int { return Float(v) }
+            return nil
+        }
+        func b(_ key: String) -> Bool? { dict[key] as? Bool }
+
+        if let v = f("particleCount") { particleCount = v }
+        if let v = f("gravity") { gravity = v }
+        if let v = f("damping") { damping = v }
+        if let v = f("constraintIterations") { constraintIterations = v }
+        if let v = f("settleSteps") { settleSteps = v }
+        if let v = f("bendCompliance") { bendCompliance = v }
+        if let v = f("bendVelocityCoupling") { bendVelocityCoupling = v }
+        if let v = f("dragHeight") { dragHeight = v }
+        if let v = f("liftHeight") { liftHeight = v }
+        if let v = f("ropeTension") { ropeTension = v }
+        if let v = f("profileSegments") { profileSegments = v }
+        if let v = f("holeRadiusScale") { holeRadiusScale = v }
+        if let v = f("holeSegments") { holeSegments = v }
+        if let v = f("ropeRadiusScale") { ropeRadiusScale = v }
+        if let v = f("stretchThinning") { stretchThinning = v }
+        if let v = f("holeTintR") { holeTintR = v }
+        if let v = f("holeTintG") { holeTintG = v }
+        if let v = f("holeTintB") { holeTintB = v }
+        if let v = f("holeTintAmount") { holeTintAmount = v }
+        if let v = f("exposure") { exposure = v }
+        if let v = f("bloomStrength") { bloomStrength = v }
+        if let s = dict["shadowType"] as? String {
+            for t in ShadowType.allCases where t.label == s { shadowType = t; break }
+        }
+        if let v = b("shadowsEnabled") { shadowsEnabled = v }
+        if let v = f("lightIntensity") { lightIntensity = v }
+        if let v = f("lightDirX") { lightDirX = v }
+        if let v = f("lightDirY") { lightDirY = v }
+        if let v = f("lightDirZ") { lightDirZ = v }
+        if let v = f("ambient") { ambient = v }
+        if let v = f("shadowBias") { shadowBias = v }
+        if let v = f("shadowDarkness") { shadowDarkness = v }
+        if let v = f("lightSize") { lightSize = v }
+        if let v = b("cartoonShaderEnabled") { cartoonShaderEnabled = v }
+        if let v = f("cartoonExposure") { cartoonExposure = v }
+        if let v = f("cartoonBloom") { cartoonBloom = v }
+        if let v = f("cartoonEdgeStrength") { cartoonEdgeStrength = v }
+        if let v = f("cartoonLevels") { cartoonLevels = v }
+        if let s = dict["tableStyle"] as? String {
+            for t in TableStyle.allCases where t.label == s { tableStyle = t; break }
+        }
+        if let v = f("tableColor1R") { tableColor1R = v }
+        if let v = f("tableColor1G") { tableColor1G = v }
+        if let v = f("tableColor1B") { tableColor1B = v }
+        if let v = f("tableColor2R") { tableColor2R = v }
+        if let v = f("tableColor2G") { tableColor2G = v }
+        if let v = f("tableColor2B") { tableColor2B = v }
+        if let v = f("woodSeed") { woodSeed = v }
+        if let v = f("woodBrightness") { woodBrightness = v }
+        if let v = f("woodPatternScale") { woodPatternScale = v }
+        if let v = f("capRadiusScale") { capRadiusScale = v }
+        if let v = f("capSegments") { capSegments = v }
+        if let v = f("capRings") { capRings = v }
+        if let v = f("capDarken") { capDarken = v }
+        if let v = b("frictionSoundEnabled") { frictionSoundEnabled = v }
+        if let v = f("zoomScale") { zoomScale = v }
+        if let v = f("ropeMatte") { ropeMatte = v }
+        if let v = f("ropeGloss") { ropeGloss = v }
+        if let v = f("ropeDiffuseWrap") { ropeDiffuseWrap = v }
+        if let v = f("ropeSubsurface") { ropeSubsurface = v }
+        if let v = f("ropeEdgeLight") { ropeEdgeLight = v }
+        if let v = f("ropeSaturation") { ropeSaturation = v }
+        if let v = f("ropeMicroBump") { ropeMicroBump = v }
+        if let v = f("ropeBumpScale") { ropeBumpScale = v }
+        if let v = f("ropeContactAO") { ropeContactAO = v }
+        if let v = f("ropeLiftGlow") { ropeLiftGlow = v }
+        if let v = f("ropeStretchGloss") { ropeStretchGloss = v }
+        if let v = f("ropeStretchSpec") { ropeStretchSpec = v }
+        if let v = f("ropeEnvReflect") { ropeEnvReflect = v }
+        if let v = f("ropeEnvSpread") { ropeEnvSpread = v }
+        if let v = b("squareCrossSection") { squareCrossSection = v }
+        if let v = b("wormMode") { wormMode = v }
+        if let v = f("renderScale") { renderScale = v }
+        if let v = f("wormSegFreq") { wormSegFreq = v }
+        if let v = f("wormSegBulge") { wormSegBulge = v }
+        if let v = f("wormThickness") { wormThickness = v }
+        if let v = f("wormTaperLen") { wormTaperLen = v }
+        if let v = f("wormGrooveDepth") { wormGrooveDepth = v }
+        if let v = f("wormBellyBright") { wormBellyBright = v }
+        if let v = f("wormBackDark") { wormBackDark = v }
+        if let v = f("wormSkinNoise") { wormSkinNoise = v }
+        if let v = f("wormSSS") { wormSSS = v }
+        if let v = f("wormRoughness") { wormRoughness = v }
+        if let v = f("wormSpecular") { wormSpecular = v }
+        if let v = f("wormRimStrength") { wormRimStrength = v }
+        if let v = f("wormEyeSize") { wormEyeSize = v }
+        if let v = f("wormPulseSpeed") { wormPulseSpeed = v }
+        if let v = f("wormPulseAmp") { wormPulseAmp = v }
+        if let v = f("wormCrawlSpeed") { wormCrawlSpeed = v }
+        if let v = f("wormCrawlAmp") { wormCrawlAmp = v }
+        if let v = f("wormSideAmp") { wormSideAmp = v }
+
+        if let lvl = dict["currentLevel"] as? Int, lvl >= 1 {
+            loadLevel(lvl)
+        }
+
         return true
     }
 
@@ -703,7 +917,12 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     controller.renderer = renderer
     renderer.onLevelComplete = { [weak controller] in
         DispatchQueue.main.async {
-            controller?.showLevelComplete = true
+            controller?.onLevelComplete()
+        }
+    }
+    renderer.onMoveCountChanged = { [weak controller] count in
+        DispatchQueue.main.async {
+            controller?.moveCount = count
         }
     }
     renderer.onUndoStackChanged = { [weak controller] hasEntries in
@@ -779,6 +998,10 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.ropeLiftGlow = controller.ropeLiftGlow
     renderer.ropeStretchGloss = controller.ropeStretchGloss
     renderer.ropeStretchSpec = controller.ropeStretchSpec
+    renderer.ropeEnvReflect = controller.ropeEnvReflect
+    renderer.ropeEnvSpread = controller.ropeEnvSpread
+    renderer.ropeEnvDebug = controller.ropeEnvDebug
+    renderer.shadowDebugMode = controller.shadowDebugMode
     renderer.squareCrossSection = controller.squareCrossSection
     renderer.wormMode = controller.wormMode
     renderer.wormSegFreq = controller.wormSegFreq

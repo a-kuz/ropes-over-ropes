@@ -1,5 +1,5 @@
-use glam::Vec2;
 use crate::renderer::camera::Camera;
+use glam::Vec2;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum InputPhase {
@@ -20,11 +20,7 @@ pub enum DragResult {
     Cancelled,
 }
 
-pub fn screen_to_world(
-    location: (f32, f32),
-    viewport_size: (f32, f32),
-    camera: &Camera,
-) -> Vec2 {
+pub fn screen_to_world(location: (f32, f32), viewport_size: (f32, f32), camera: &Camera) -> Vec2 {
     let (width, height) = viewport_size;
     let width = width.max(1.0);
     let height = height.max(1.0);
@@ -71,7 +67,12 @@ pub fn find_nearest_endpoint(
 
         let start_distance = (world - start_pos).length();
         let start_top_allowed = start_z >= end_z;
-        let start_score = start_distance + if start_top_allowed { 0.0 } else { hit_radius * 0.75 };
+        let start_score = start_distance
+            + if start_top_allowed {
+                0.0
+            } else {
+                hit_radius * 0.75
+            };
         if start_distance < hit_radius {
             if best.is_none() || start_score < best.unwrap().3 {
                 best = Some((rope_index, 0, start_hole, start_score));
@@ -80,7 +81,12 @@ pub fn find_nearest_endpoint(
 
         let end_distance = (world - end_pos).length();
         let end_top_allowed = end_z >= start_z;
-        let end_score = end_distance + if end_top_allowed { 0.0 } else { hit_radius * 0.75 };
+        let end_score = end_distance
+            + if end_top_allowed {
+                0.0
+            } else {
+                hit_radius * 0.75
+            };
         if end_distance < hit_radius {
             if best.is_none() || end_score < best.unwrap().3 {
                 best = Some((rope_index, 1, end_hole, end_score));
@@ -124,10 +130,19 @@ pub fn begin_drag_action(
     hole_radius: f32,
 ) -> Option<(DragState, usize)> {
     let world = screen_to_world(screen_pos, viewport, camera);
-    let (rope_index, end_index, hole_index) =
-        find_nearest_endpoint(world, hole_positions, rope_endpoints, endpoint_z, hole_radius)?;
+    let (rope_index, end_index, hole_index) = find_nearest_endpoint(
+        world,
+        hole_positions,
+        rope_endpoints,
+        endpoint_z,
+        hole_radius,
+    )?;
     Some((
-        DragState { rope_index, end_index, original_hole_index: hole_index },
+        DragState {
+            rope_index,
+            end_index,
+            original_hole_index: hole_index,
+        },
         hole_index,
     ))
 }
@@ -164,5 +179,5 @@ pub fn apply_camera_pan(
     let dx = (cur.0 - prev.0) / surface_w as f32 * half_w * 2.0;
     let dy = (cur.1 - prev.1) / surface_h as f32 * half_h * 2.0;
     camera.center.x -= dx;
-    camera.center.y += dy;
+    camera.center.y -= dy;
 }
