@@ -412,6 +412,175 @@ enum LevelGenerator {
         return actions
     }
 
+    // MARK: - Particle-based braid levels
+
+    static func generateParticleBraidLevel(levelId: Int) -> LevelDefinition {
+        let localId = levelId - 3000
+        let strandCount: Int
+        let crossingCount: Int
+        switch localId {
+        case 1:  strandCount = 3; crossingCount = 4
+        case 2:  strandCount = 3; crossingCount = 6
+        case 3:  strandCount = 3; crossingCount = 8
+        case 4:  strandCount = 4; crossingCount = 6
+        case 5:  strandCount = 4; crossingCount = 8
+        case 6:  strandCount = 4; crossingCount = 10
+        case 7:  strandCount = 5; crossingCount = 8
+        case 8:  strandCount = 5; crossingCount = 10
+        case 9:  strandCount = 5; crossingCount = 12
+        case 10: strandCount = 6; crossingCount = 12
+        default:
+            strandCount = min(8, 3 + (localId - 1) / 3)
+            crossingCount = min(16, 4 + localId)
+        }
+        return buildParticleBraidLevel(levelId: levelId, strandCount: strandCount, crossingCount: crossingCount)
+    }
+
+    private static func buildParticleBraidLevel(levelId: Int, strandCount: Int, crossingCount: Int) -> LevelDefinition {
+        let n = strandCount
+        let K = crossingCount
+        let P = 48 // particles per strand
+        let ropeRadius: Float = 0.038
+        let spacing: Float = 0.14 // lane spacing — tight braid
+        let totalWidth = Float(n - 1) * spacing
+        let startX = -totalWidth / 2
+        let yTop: Float = 0.55
+        let yBot: Float = -0.55
+        let yRange = yTop - yBot
+
+        let zOver: Float = ropeRadius * 4.0
+        let zUnder: Float = ropeRadius * 0.3
+        let zNeutral: Float = ropeRadius * 1.5
+
+        func laneX(_ lane: Int) -> Float {
+            startX + Float(lane) * spacing
+        }
+
+        // Crossing schedule
+        struct CrossingInfo {
+            let lane: Int
+            let y: Float
+            let overStrand: Int
+            let underStrand: Int
+        }
+
+        let crossingSpacing = yRange / Float(K + 1)
+        let regionHalf = crossingSpacing * 0.4
+
+        var strandAtLane = Array(0..<n)
+        var crossingList: [CrossingInfo] = []
+        // laneHistory[strand][k]: lane of strand after k crossings (index 0 = initial)
+        var laneHistory = (0..<n).map { [$0] }
+
+        for k in 0..<K {
+            let lane: Int
+            if n == 3 {
+                // Classic 3-strand braid: alternate σ₀, σ₁
+                lane = k % 2 == 0 ? 0 : 1
+            } else {
+                // N strands: cycle through σ₀, σ₁, ..., σ_{n-2}
+                lane = k % (n - 1)
+            }
+            let y = yTop - crossingSpacing * Float(k + 1)
+            let overStrand = strandAtLane[lane]
+            let underStrand = strandAtLane[lane + 1]
+            crossingList.append(CrossingInfo(lane: lane, y: y, overStrand: overStrand, underStrand: underStrand))
+            strandAtLane.swapAt(lane, lane + 1)
+            for s in 0..<n {
+                laneHistory[s].append(strandAtLane.firstIndex(of: s)!)
+            }
+        }
+
+        // Generate particles for each strand
+        var allParticles: [[LevelDefinition.Vec2]] = []
+
+        for s in 0..<n {
+            var particles: [LevelDefinition.Vec2] = []
+
+            for i in 0..<P {
+                let t = Float(i) / Float(P - 1)
+                let y = yTop + (yBot - yTop) * t
+
+                // Find current segment (how many crossings we've passed)
+                var segIdx = K
+                for k in 0..<K {
+                    if y > crossingList[k].y {
+                        segIdx = k
+                        break
+                    }
+                }
+
+                var x: Float = laneX(laneHistory[s][segIdx])
+                var z: Float = zNeutral
+
+                // Check if in a crossing transition region
+                for k in 0..<K {
+                    let cy = crossingList[k].y
+                    guard y <= cy + regionHalf && y >= cy - regionHalf else { continue }
+
+                    let cr = crossingList[k]
+                    let transT = (cy + regionHalf - y) / (2 * regionHalf) // 0 at top, 1 at bottom
+                    let smoothT = (1 - cos(Float.pi * transT)) / 2
+
+                    if cr.overStrand == s || cr.underStrand == s {
+                        let fromLane = laneHistory[s][k]
+                        let toLane = laneHistory[s][k + 1]
+                        x = laneX(fromLane) + (laneX(toLane) - laneX(fromLane)) * smoothT
+
+                        // Bell curve for Z peaking at midpoint
+                        let bellT = 4 * transT * (1 - transT)
+                        if cr.overStrand == s {
+                            z = zNeutral + (zOver - zNeutral) * bellT
+                        } else {
+                            z = zNeutral + (zUnder - zNeutral) * bellT
+                        }
+                    }
+                    break
+                }
+
+                // Endpoints at hole level
+                if i == 0 || i == P - 1 {
+                    z = 0
+                }
+
+                particles.append(LevelDefinition.Vec2(xPosition: x, yPosition: y, zPosition: z))
+            }
+
+            allParticles.append(particles)
+        }
+
+        // Holes: N at top (index 0..<n), N at bottom (index n..<2n)
+        var holes: [LevelDefinition.Vec2] = []
+        for i in 0..<n {
+            holes.append(.init(xPosition: laneX(i), yPosition: yTop))
+        }
+        for i in 0..<n {
+            holes.append(.init(xPosition: laneX(i), yPosition: yBot))
+        }
+
+        // Ropes: strand i connects top[i] to bottom[finalLane(i)]
+        let ropes = (0..<n).map { i in
+            let finalLane = laneHistory[i][K]
+            return LevelDefinition.Rope(startHole: i, endHole: n + finalLane,
+                                        color: colors[i % colors.count], radius: ropeRadius)
+        }
+
+        // Pin actions (needed for pin tracking, but positions come from ropeParticles)
+        var actions: [LevelDefinition.Action] = []
+        for (i, rope) in ropes.enumerated() {
+            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 0, holeIndex: rope.startHole))
+            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 1, holeIndex: rope.endHole))
+        }
+
+        return LevelDefinition(
+            mode: nil, id: levelId, holeRadius: 0.08, particlesPerRope: P,
+            holes: holes, ropes: ropes, hooks: nil, actions: actions, boards: nil,
+            weights: nil, targets: nil,
+            rails: nil, carts: nil, stations: nil,
+            ropeParticles: allParticles
+        )
+    }
+
     // MARK: - Braid mode levels
 
     static func generateBraidLevel(levelId: Int) -> LevelDefinition {
@@ -840,16 +1009,13 @@ enum LevelGenerator {
     // Store last computed debug geometry for visualization
     nonisolated(unsafe) static var lastBraidDebug: BraidDebugGeometry?
 
-    /// Build a braid level using HookGeometryCalculator-style incremental crossing logic.
+    /// Build a braid level: 3 parallel ropes, all drags to center hole.
     ///
-    /// Algorithm (from TopologySampler + HookGeometryCalculator on main branch):
-    /// 1. Pin 2 ropes in X (crossing at center). Snap to nearest holes.
-    /// 2. Compute sigma axis (from midpoint of starts to midpoint of ends).
-    /// 3. Incrementally add crossing centers along sigma. For each center, compute
-    ///    contact points on a circle of radius R around it.
-    /// 4. Drag the appropriate rope end to the nearest hole to the contact point.
-    ///    The drag path crosses the braid zone → simulateDrag creates physical wrapping.
-    /// 5. Both ends of both ropes are dragged (matching user recordings).
+    /// Algorithm (from user's recording on level 3001):
+    /// 1. Find 3 top holes + 3 bottom holes from existing layout.
+    /// 2. Pin 3 ropes parallel: left→left, center→center, right→right.
+    /// 3. Cycle drags: rope2→centerBot, rope0→centerBot, rope1→centerBot, repeat.
+    /// 4. simulateDrag lifts each end over the others → classic 3-strand braid.
     private static func buildBraidLevel(
         holes: [LevelDefinition.Vec2],
         ropeCount: Int,
@@ -858,309 +1024,51 @@ enum LevelGenerator {
     ) -> BraidResult {
         let holeSimd = holes.map { $0.simd }
         let center = holeSimd.reduce(SIMD2<Float>.zero, +) / Float(holeSimd.count)
-        let maxR = holeSimd.map { simd_length($0 - center) }.max() ?? 1.0
-
-        let n = 2
         guard holes.count >= 6 else { return BraidResult(ropes: [], actions: []) }
 
-        let baseAngle = Float(rng.next(bound: 1000)) / 1000.0 * .pi
-        let R = maxR * 0.85
-        let spokeStep = Float.pi / Float(n)
+        // Pick a random direction as "up"
+        let baseAngle = Float(rng.next(bound: 1000)) / 1000.0 * 2 * .pi
+        let upDir = SIMD2<Float>(cos(baseAngle), sin(baseAngle))
+        let perpDir = SIMD2<Float>(-upDir.y, upDir.x)
 
-        // --- Phase 1: Pin 2 ropes in X, snap to holes ---
-        var usedHoles = Set<Int>()
-        func snapNearest(_ pos: SIMD2<Float>) -> Int {
-            var best = 0
-            var bestDist: Float = .greatestFiniteMagnitude
-            for (i, h) in holeSimd.enumerated() where !usedHoles.contains(i) {
-                let d = simd_length(h - pos)
-                if d < bestDist { bestDist = d; best = i }
-            }
-            usedHoles.insert(best)
-            return best
+        // Sort holes by projection onto upDir (highest first)
+        let sorted = holeSimd.indices.sorted {
+            simd_dot(holeSimd[$0] - center, upDir) > simd_dot(holeSimd[$1] - center, upDir)
         }
 
-        // endpoints[i] = (end0hole, end1hole)
-        var endpoints = [(Int, Int)]()
-        for i in 0..<n {
-            let a = baseAngle + Float(i) * spokeStep
-            let d = SIMD2<Float>(cos(a), sin(a))
-            let h0 = snapNearest(center + d * R)
-            let h1 = snapNearest(center - d * R)
-            endpoints.append((h0, h1))
-        }
-        let initialEndpoints = endpoints
+        // Top 3 holes (highest projection), sorted left-to-right by perpDir
+        let topCandidates = Array(sorted.prefix(max(3, holes.count / 3)))
+        let topSorted = topCandidates.sorted { simd_dot(holeSimd[$0], perpDir) < simd_dot(holeSimd[$1], perpDir) }
+        let top = [topSorted.first!, topSorted[topSorted.count / 2], topSorted.last!]
 
-        // --- Phase 2: Compute braid geometry (HookGeometryCalculator style) ---
-        // sigma axis: from S1=mid(A_start, B_start) to S2=mid(A_end, B_end)
-        let A1 = holeSimd[endpoints[0].0]
-        let A2 = holeSimd[endpoints[0].1]
-        let B1 = holeSimd[endpoints[1].0]
-        let B2 = holeSimd[endpoints[1].1]
+        // Bottom 3 holes (lowest projection), sorted left-to-right
+        let botCandidates = Array(sorted.suffix(max(3, holes.count / 3)))
+        let botSorted = botCandidates.sorted { simd_dot(holeSimd[$0], perpDir) < simd_dot(holeSimd[$1], perpDir) }
+        let bot = [botSorted.first!, botSorted[botSorted.count / 2], botSorted.last!]
 
-        let S1 = (A1 + B1) * 0.5
-        let S2 = (A2 + B2) * 0.5
-        var sigmaVec = S2 - S1
-        var sigmaLen = simd_length(sigmaVec)
-        let mid = (S1 + S2) * 0.5
+        let centerBot = bot[1] // ALL drags go here
 
-        let sigma: SIMD2<Float>
-        if sigmaLen > 0.05 {
-            sigma = sigmaVec / sigmaLen
-        } else {
-            // Fallback: perpendicular to rope A direction
-            let dirA = A2 - A1
-            let dirALen = simd_length(dirA)
-            if dirALen > 1e-6 {
-                sigma = SIMD2<Float>(-dirA.y, dirA.x) / dirALen
-            } else {
-                sigma = SIMD2<Float>(0, 1)
-            }
-            sigmaLen = 1.0
-        }
-        let sigmaPerp = SIMD2<Float>(-sigma.y, sigma.x)
-
-        // Crossing count = number of braid steps
-        let crossingCount = max(totalDrags, 4)
-        let ropeR: Float = 0.055
-
-        // --- Full HookGeometryCalculator logic (ported from main branch) ---
-        // R for path computation: at HOLE LAYOUT scale, not rope-rendering scale.
-        // The zigzag must swing wide enough for drag arcs between holes to cross it.
-        let hookStepMultiplier: Float = 0.09
-        let hookRadiusMultiplier: Float = 0.92
-        let hookStepLimitMultiplier: Float = 2.5
-        let hookR = maxR * 0.3
-
-        let centerCount = crossingCount - 1
-
-        // For N=1: no centers, just a simple crossing (pathA=[A1,A2], pathB=[B1,B2])
-        // For N>1: place centers along sigma, build zigzag paths
-        var centers = [SIMD2<Float>]()
-        var pathA = [A1]
-        var pathB = [B1]
-
-        if centerCount > 0 {
-            let L = simd_length(A2 - A1) + simd_length(B2 - B1)
-            let d = (abs(simd_dot(A1 - mid, sigmaPerp)) +
-                     abs(simd_dot(A2 - mid, sigmaPerp)) +
-                     abs(simd_dot(B1 - mid, sigmaPerp)) +
-                     abs(simd_dot(B2 - mid, sigmaPerp))) / 4.0
-            let repulse = 100.0 / (d + 0.1)
-            let baseStep = hookR + hookR * (2.0 * sigmaLen) / max(0.01, L)
-            let stepLimit = (sigmaLen / Float(max(1, centerCount))) * hookStepLimitMultiplier
-            let minStep = hookR * 2.1
-            let step = max(minStep, min(baseStep * repulse * hookStepMultiplier, stepLimit))
-
-            // centeredPoints
-            if centerCount == 1 {
-                centers = [mid]
-            } else {
-                let halfSpan = Float(centerCount - 1) / 2.0
-                for i in 0..<centerCount {
-                    centers.append(mid + sigma * (Float(i) - halfSpan) * step)
-                }
-            }
-
-            // Build zigzag pathA/pathB through contact points (alternating sides)
-            let baseAngle = atan2(sigma.y, sigma.x)
-            func side(_ p: SIMD2<Float>) -> Int {
-                simd_dot(p - mid, sigmaPerp) > 0 ? 1 : -1
-            }
-            var prev = side(A1)
-
-            for c in centers {
-                let s = -prev
-                let ang = baseAngle + Float(s) * Float.pi / 2.0
-                let pA = c + SIMD2<Float>(cos(ang), sin(ang)) * hookR
-                let pB = c + SIMD2<Float>(cos(ang + .pi), sin(ang + .pi)) * hookR
-                pathA.append(pA)
-                pathB.append(pB)
-                prev = side(pA)
-            }
-        }
-        pathA.append(A2)
-        pathB.append(B2)
-
-        // --- Phase 3: Generate drags ---
-        // Each drag must cross pathB (for rope A drags) or pathA (for rope B drags).
-        // The drag target is a hole such that the drag arc from the current endpoint
-        // to the target hole intersects one of the OTHER rope's path segments.
-        struct DragRecord { let ropeIndex: Int; let endIndex: Int; let holeIndex: Int }
-        var drags = [DragRecord]()
-        var debugContactsA = [SIMD2<Float>]()
-        var debugContactsB = [SIMD2<Float>]()
-        var debugDragTargets = [(from: SIMD2<Float>, to: SIMD2<Float>, ropeIndex: Int)]()
-
-        debugContactsA = pathA
-        debugContactsB = pathB
-
-        // For each crossing we need to add, drag one end across the other rope's path.
-        // Alternate between rope0 and rope1, and between end0 and end1.
-        // Track upper/lower state for each rope end.
-        // Rope 1 pinned second → settles onto rope 0 → rope 1 is LOWER at crossing.
-        // Rope 0 pinned first → already settled → rope 1 drapes under → rope 0 is UPPER.
-        // N=1 (odd): both ends of a rope are on same side (both upper or both lower).
-        // We must drag the LOWER one first → drag rope 1 first.
-        var isLower = [[false, false], [true, true]]
-
-        func sideOf(_ p: SIMD2<Float>) -> Int {
-            simd_dot(p - mid, sigmaPerp) > 0 ? 1 : -1
-        }
-
-        for crossIdx in 0..<crossingCount {
-            // Find a LOWER end to drag across sigma.
-            // The lower end must cross to the other side of sigma → becomes upper.
-            var ri = -1
-            var ei = -1
-            // Try all ends, pick the first lower one
-            for tryRi in 0..<n {
-                for tryEi in 0..<2 {
-                    if isLower[tryRi][tryEi] {
-                        ri = tryRi; ei = tryEi; break
-                    }
-                }
-                if ri >= 0 { break }
-            }
-            guard ri >= 0 else { continue }
-
-            let otherRi = 1 - ri
-            let otherPath = ri == 0 ? pathB : pathA
-
-            let currentHole = ei == 0 ? endpoints[ri].0 : endpoints[ri].1
-            let currentPos = holeSimd[currentHole]
-            let currentSide = sideOf(currentPos)
-
-            var occupied = Set<Int>()
-            for j in 0..<n {
-                if j != ri || 0 != ei { occupied.insert(endpoints[j].0) }
-                if j != ri || 1 != ei { occupied.insert(endpoints[j].1) }
-            }
-            occupied.insert(currentHole)
-
-            // Target must be on the OTHER SIDE of sigma from current position,
-            // AND the drag arc must cross the other rope's path.
-            var bestHole = -1
-            var bestDist: Float = .greatestFiniteMagnitude
-            for (hi, hp) in holeSimd.enumerated() where !occupied.contains(hi) {
-                let candSide = sideOf(hp)
-                // Must cross sigma (different side)
-                guard candSide != currentSide else { continue }
-                // Drag arc must cross the other rope's path
-                var crosses = false
-                for si in 0..<(otherPath.count - 1) {
-                    if segmentsCross(currentPos, hp, otherPath[si], otherPath[si + 1]) {
-                        crosses = true; break
-                    }
-                }
-                guard crosses else { continue }
-                let d = simd_length(hp - currentPos)
-                if d < bestDist { bestDist = d; bestHole = hi }
-            }
-
-            // Fallback: other side without crossing check
-            if bestHole < 0 {
-                bestDist = .greatestFiniteMagnitude
-                for (hi, hp) in holeSimd.enumerated() where !occupied.contains(hi) {
-                    let candSide = sideOf(hp)
-                    guard candSide != currentSide else { continue }
-                    let d = simd_length(hp - currentPos)
-                    if d < bestDist { bestDist = d; bestHole = hi }
-                }
-            }
-
-            guard bestHole >= 0 else { continue }
-            debugDragTargets.append((from: currentPos, to: holeSimd[bestHole], ropeIndex: ri))
-            if ei == 0 { endpoints[ri].0 = bestHole } else { endpoints[ri].1 = bestHole }
-            drags.append(DragRecord(ropeIndex: ri, endIndex: ei, holeIndex: bestHole))
-
-            // Update upper/lower: dragged end becomes UPPER.
-            // The other rope's end on the TARGET side becomes LOWER.
-            isLower[ri][ei] = false // dragged end → upper
-            let targetSide = sideOf(holeSimd[bestHole])
-            for otherEi in 0..<2 {
-                let otherHole = otherEi == 0 ? endpoints[otherRi].0 : endpoints[otherRi].1
-                if sideOf(holeSimd[otherHole]) == targetSide {
-                    isLower[otherRi][otherEi] = true // other rope's end on same side → lower
-                }
-            }
-
-            // Recompute pathA/pathB with updated endpoints and N
-            let newA1 = holeSimd[endpoints[0].0]
-            let newA2 = holeSimd[endpoints[0].1]
-            let newB1 = holeSimd[endpoints[1].0]
-            let newB2 = holeSimd[endpoints[1].1]
-            let newN = crossIdx + 2
-
-            let newS1 = (newA1 + newB1) * 0.5
-            let newS2 = (newA2 + newB2) * 0.5
-            let newSigmaVec = newS2 - newS1
-            let newSigmaLen = simd_length(newSigmaVec)
-
-            if newSigmaLen > 0.05 && newN > 1 {
-                let newSigma = newSigmaVec / newSigmaLen
-                let newMid = (newS1 + newS2) * 0.5
-                let newSigmaPerp = SIMD2<Float>(-newSigma.y, newSigma.x)
-                let newCenterCount = newN - 1
-                let newL = simd_length(newA2 - newA1) + simd_length(newB2 - newB1)
-                let newD = (abs(simd_dot(newA1 - newMid, newSigmaPerp)) +
-                            abs(simd_dot(newA2 - newMid, newSigmaPerp)) +
-                            abs(simd_dot(newB1 - newMid, newSigmaPerp)) +
-                            abs(simd_dot(newB2 - newMid, newSigmaPerp))) / 4.0
-                let newRepulse = 100.0 / (newD + 0.1)
-                let newBaseStep = hookR + hookR * (2.0 * newSigmaLen) / max(0.01, newL)
-                let newStepLimit = (newSigmaLen / Float(max(1, newCenterCount))) * hookStepLimitMultiplier
-                let newStep = max(hookR * 2.1, min(newBaseStep * newRepulse * hookStepMultiplier, newStepLimit))
-
-                var newCenters = [SIMD2<Float>]()
-                if newCenterCount == 1 {
-                    newCenters = [newMid]
-                } else {
-                    let h2 = Float(newCenterCount - 1) / 2.0
-                    for i in 0..<newCenterCount {
-                        newCenters.append(newMid + newSigma * (Float(i) - h2) * newStep)
-                    }
-                }
-
-                let newBaseAngle = atan2(newSigma.y, newSigma.x)
-                var newPrev = Int(simd_dot(newA1 - newMid, newSigmaPerp) > 0 ? 1 : -1)
-                pathA = [newA1]
-                pathB = [newB1]
-                for c in newCenters {
-                    let s = -newPrev
-                    let ang = newBaseAngle + Float(s) * Float.pi / 2.0
-                    pathA.append(c + SIMD2<Float>(cos(ang), sin(ang)) * hookR)
-                    pathB.append(c + SIMD2<Float>(cos(ang + .pi), sin(ang + .pi)) * hookR)
-                    newPrev = Int(simd_dot(pathA.last! - newMid, newSigmaPerp) > 0 ? 1 : -1)
-                }
-                pathA.append(newA2)
-                pathB.append(newB2)
-            }
-        }
-
-        // Save debug geometry for visualization
-        lastBraidDebug = BraidDebugGeometry(
-            mid: mid, sigma: sigma, sigmaLen: sigmaLen,
-            centers: centers, contactsA: debugContactsA, contactsB: debugContactsB,
-            dragTargets: debugDragTargets, holes: holeSimd
-        )
-
-        // --- Phase 4: Generate actions ---
-        let ropes = (0..<n).map { i in
-            LevelDefinition.Rope(startHole: initialEndpoints[i].0, endHole: initialEndpoints[i].1,
+        // 3 ropes: left, center, right
+        let ropesDef = (0..<3).map { i in
+            LevelDefinition.Rope(startHole: top[i], endHole: bot[i],
                                  color: colors[i % colors.count], radius: 0.055)
         }
 
         var actions = [LevelDefinition.Action]()
-        for i in 0..<n {
-            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 0, holeIndex: initialEndpoints[i].0))
-            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 1, holeIndex: initialEndpoints[i].1))
-        }
-        for drag in drags {
-            actions.append(.init(type: "drag", ropeIndex: drag.ropeIndex, endIndex: drag.endIndex, holeIndex: drag.holeIndex))
+        for i in 0..<3 {
+            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 0, holeIndex: top[i]))
+            actions.append(.init(type: "pin", ropeIndex: i, endIndex: 1, holeIndex: bot[i]))
         }
 
-        return BraidResult(ropes: ropes, actions: actions)
+        // Drags: cycle 2, 0, 1 — all end1 to centerBot (from user recording)
+        let dragCount = max(totalDrags, 6)
+        let cycle = [2, 0, 1]
+        for d in 0..<dragCount {
+            actions.append(.init(type: "drag", ropeIndex: cycle[d % 3], endIndex: 1, holeIndex: centerBot))
+        }
+
+        lastBraidDebug = nil
+        return BraidResult(ropes: ropesDef, actions: actions)
     }
 
     // MARK: - Geometry helpers

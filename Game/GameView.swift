@@ -69,6 +69,9 @@ class GameController: ObservableObject {
     @Published var boardElevation: Float = Defaults.boardElevation {
         didSet { renderer?.boardElevation = boardElevation; persist("p.bel", boardElevation) }
     }
+    @Published var useParticleBraid: Bool = false {
+        didSet { renderer?.useParticleBraid = useParticleBraid }
+    }
 
     @Published var profileSegments: Float = 10 {
         didSet { renderer?.profileSegments = Int(profileSegments); persist("v.prf", profileSegments) }

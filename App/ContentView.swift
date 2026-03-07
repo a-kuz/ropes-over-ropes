@@ -133,11 +133,6 @@ struct ContentView: View {
                     .ignoresSafeArea()
             }
 
-            // Braid debug overlay
-            if let debug = LevelGenerator.lastBraidDebug {
-                BraidDebugOverlay(debug: debug)
-                    .allowsHitTesting(false)
-            }
 
             if !gameController.showLevelComplete {
             VStack(spacing: 0) {
@@ -215,6 +210,17 @@ struct ContentView: View {
                             }) {
                                 Label(mode.rawValue, systemImage: mode == gameMode ? "checkmark.circle.fill" : "circle")
                             }
+                        }
+                        Divider()
+                        Button(action: {
+                            gameController.useParticleBraid.toggle()
+                            // Reload current braid level with new method
+                            if gameMode == .braid {
+                                gameController.loadLevel(gameController.currentLevel)
+                            }
+                        }) {
+                            Label(gameController.useParticleBraid ? "Particle Braid ✓" : "Particle Braid",
+                                  systemImage: gameController.useParticleBraid ? "checkmark.circle.fill" : "circle")
                         }
                         Divider()
                         Button(action: { showEditor = true }) {

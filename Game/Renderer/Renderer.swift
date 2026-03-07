@@ -367,6 +367,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsBendVelocityCoupling: Float = 0.45 {
         didSet { simulator?.bendVelocityCoupling = physicsBendVelocityCoupling }
     }
+    var useParticleBraid: Bool = false
 
     init(view: MTKView) {
         guard let device = view.device else { fatalError("Metal device is required") }
@@ -433,8 +434,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
             level = jsonLevel
         } else if levelId >= 3001 {
-            Self.logger.info("Level \(levelId) generated as braid mode")
-            level = LevelGenerator.generateBraidLevel(levelId: levelId)
+            if useParticleBraid {
+                Self.logger.info("Level \(levelId) generated as particle braid")
+                level = LevelGenerator.generateParticleBraidLevel(levelId: levelId)
+            } else {
+                Self.logger.info("Level \(levelId) generated as braid mode")
+                level = LevelGenerator.generateBraidLevel(levelId: levelId)
+            }
         } else if levelId >= 2001 {
             Self.logger.info("Level \(levelId) generated as rail mode")
             level = LevelGenerator.generateRailLevel(levelId: levelId)
@@ -589,23 +595,14 @@ final class Renderer: NSObject, MTKViewDelegate {
             stationRenderInfos = []
         }
 
-        t0 = CACurrentMediaTime()
-        let hasDragActions = simActions.contains(where: { $0.type == .drag })
-        if hasDragActions {
-            // Slow braid replay: only pin, then compute drags LIVE from actual particle positions
-            let pinActions = simActions.filter { $0.type == .pin }
-            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: pinActions)
-            let dragCount = simActions.filter({ $0.type == .drag }).count
-            braidRemainingCrossings = dragCount
-            braidIsLower = [[false, false], [true, true]] // rope0=upper(first pin), rope1=lower
-            pendingBraidDrags = []
-            braidDragTimer = 0
-            braidDragPhase = .idle
-        } else {
-            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
-            pendingBraidDrags = []
-            braidRemainingCrossings = 0
+        let simParticles: [[SIMD3<Float>]]? = level.ropeParticles.map { ropes in
+            ropes.map { particles in particles.map { $0.simd3 } }
         }
+
+        t0 = CACurrentMediaTime()
+        sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions, ropeParticles: simParticles)
+        pendingBraidDrags = []
+        braidRemainingCrossings = 0
 
         let tPhysics = CACurrentMediaTime()
         self.simulator = sim

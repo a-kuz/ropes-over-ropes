@@ -166,12 +166,48 @@ extension VerletSimulator {
         bands[bandIndex].previousPositions[idx] = wPos
     }
 
-    func initializeLevel(ropeConfigs: [RopeConfig], actions: [LevelAction]) {
+    func initializeLevel(ropeConfigs: [RopeConfig], actions: [LevelAction], ropeParticles: [[SIMD3<Float>]]? = nil) {
         bands.removeAll()
         currentTension = ropeTension
 
+        // Particle-based initialization: use explicit positions directly
+        if let particles = ropeParticles, !particles.isEmpty {
+            for (i, config) in ropeConfigs.enumerated() {
+                guard i < particles.count, particles[i].count >= 2 else {
+                    let _ = addBand(radius: config.radius, crossSection: config.crossSection, particleCount: particleCount)
+                    pin(bandIndex: i, startHole: config.startHole, endHole: config.endHole)
+                    continue
+                }
+                let pos = particles[i]
+                let n = pos.count
+                let bandIndex = addBand(radius: config.radius, crossSection: config.crossSection, particleCount: n)
+
+                // Set positions from particle data
+                for j in 0..<n {
+                    bands[bandIndex].positions[j] = pos[j]
+                }
+                // Snap endpoints to hole positions
+                bands[bandIndex].positions[0] = pinPosition3D(config.startHole)
+                bands[bandIndex].positions[n - 1] = pinPosition3D(config.endHole)
+                bands[bandIndex].previousPositions = bands[bandIndex].positions
+
+                // Compute segment length from actual path
+                var totalLength: Float = 0
+                for j in 1..<n {
+                    totalLength += simd_length(bands[bandIndex].positions[j] - bands[bandIndex].positions[j - 1])
+                }
+                bands[bandIndex].segmentLength = totalLength / Float(max(1, n - 1))
+                bands[bandIndex].pinStart = config.startHole
+                bands[bandIndex].pinEnd = config.endHole
+                bands[bandIndex].active = true
+            }
+            // Small settle with collision to stabilize
+            doSteps(settleSteps, collide: true)
+            return
+        }
+
         for config in ropeConfigs {
-            addBand(radius: config.radius, crossSection: config.crossSection, particleCount: particleCount)
+            let _ = addBand(radius: config.radius, crossSection: config.crossSection, particleCount: particleCount)
         }
 
         if actions.isEmpty {

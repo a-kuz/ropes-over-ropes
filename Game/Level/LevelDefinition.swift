@@ -230,6 +230,10 @@ struct LevelDefinition: Codable {
     /// Braid mode: minimum total 2D crossing count for a valid braid
     let braidMinCrossings: Int?
 
+    /// Explicit particle positions per rope (alternative to action-based initialization).
+    /// ropeParticles[ropeIndex] = array of Vec2 (with z) for each particle along the rope.
+    let ropeParticles: [[Vec2]]?
+
     var isTensionMode: Bool { mode == "tension" }
     var isRailMode: Bool { mode == "rail" }
     var isBraidMode: Bool { mode == "braid" }
@@ -238,7 +242,8 @@ struct LevelDefinition: Codable {
          holes: [Vec2], ropes: [Rope], hooks: [Hook]?, actions: [Action]?,
          boards: [Board]?, weights: [WeightDef]?, targets: [TargetDef]?,
          rails: [RailDef]?, carts: [CartDef]?, stations: [StationDef]?,
-         braidTargets: [Int]? = nil, braidMinCrossings: Int? = nil) {
+         braidTargets: [Int]? = nil, braidMinCrossings: Int? = nil,
+         ropeParticles: [[Vec2]]? = nil) {
         self.mode = mode
         self.id = id
         self.holeRadius = holeRadius
@@ -255,6 +260,7 @@ struct LevelDefinition: Codable {
         self.stations = stations
         self.braidTargets = braidTargets
         self.braidMinCrossings = braidMinCrossings
+        self.ropeParticles = ropeParticles
     }
 }
 
