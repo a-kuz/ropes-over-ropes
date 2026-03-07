@@ -1,7 +1,7 @@
 use crate::leaderboard::LeaderboardResult;
 use crate::renderer::frame_types::{
     CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, TableSettings,
-    VisualSettings,
+    VisualSettings, WormSettings,
 };
 use crate::renderer::gpu::GpuTimings;
 use serde_json::Value;
@@ -77,8 +77,10 @@ pub fn draw_hud(
     table: &mut TableSettings,
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
+    worm: &mut WormSettings,
     render_scale: &mut f32,
     square_cross: &mut bool,
+    current_level: usize,
     lb_result: &LeaderboardResult,
 ) -> HudAction {
     let mut action = HudAction::default();
@@ -316,19 +318,11 @@ pub fn draw_hud(
             });
     } // end if victory_time <= 0.0
 
-    if victory_time > 0.0 {
-        let appear_t = (victory_time / 0.4).min(1.0);
-        let bounce = if appear_t < 1.0 {
-            let t = appear_t;
-            let overshoot = 1.0 + (1.0 - t).powi(2) * 0.3 * (t * std::f32::consts::PI * 3.0).sin();
-            t * overshoot
-        } else {
-            1.0 + (victory_time * 2.5).sin() * 0.015
-        };
+    if victory_time > 0.0 && !cfg!(target_arch = "wasm32") {
+        let appear_t = (victory_time / 0.2).min(1.0);
         let alpha = (appear_t * 255.0).min(255.0) as u8;
-        let bg_alpha = (appear_t * 200.0).min(200.0) as u8;
-        let btn_alpha = ((appear_t - 0.3).max(0.0) / 0.3).min(1.0);
-
+        let bg_alpha = (appear_t * 180.0).min(180.0) as u8;
+        let btn_alpha = ((appear_t - 0.15).max(0.0) / 0.15).min(1.0);
         let star_count: usize = if lb_result.ready {
             lb_result.stars as usize
         } else if (move_count as f32) < min_moves as f32 * 1.5 {
@@ -338,24 +332,9 @@ pub fn draw_hud(
         } else {
             1
         };
-        let is_perfect = star_count >= 3;
-
-        let star_delay = [0.5, 0.9, 1.3];
-        let star_anim: Vec<f32> = (0..3)
-            .map(|i| ((victory_time - star_delay[i]).max(0.0) / 0.3).min(1.0))
-            .collect();
-
-        let perfect_anim = if is_perfect {
-            ((victory_time - 1.6).max(0.0) / 0.4).min(1.0)
-        } else {
-            0.0
-        };
 
         egui::Area::new(egui::Id::new("victory"))
-            .anchor(
-                egui::Align2::CENTER_CENTER,
-                egui::vec2(0.0, -20.0 * (1.0 - appear_t)),
-            )
+            .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
             .show(ctx, |ui| {
                 egui::Frame::none()
                     .fill(egui::Color32::from_black_alpha(bg_alpha))
@@ -367,100 +346,79 @@ pub fn draw_hud(
                         bottom: 24,
                     })
                     .show(ui, |ui| {
+                        ui.set_min_width(320.0);
                         ui.vertical_centered(|ui| {
                             ui.label(
-                                egui::RichText::new("YOU WIN!")
+                                egui::RichText::new(format!("Level {}", level))
                                     .color(egui::Color32::from_rgba_unmultiplied(
-                                        255, 220, 60, alpha,
+                                        255, 255, 255, alpha,
                                     ))
-                                    .size(48.0 * bounce)
+                                    .size(34.0)
                                     .strong(),
                             );
                             ui.add_space(4.0);
                             ui.label(
-                                egui::RichText::new(format!("Level {}", level))
+                                egui::RichText::new("Complete")
                                     .color(egui::Color32::from_rgba_unmultiplied(
-                                        255,
-                                        255,
-                                        255,
-                                        (alpha as f32 * 0.8) as u8,
+                                        255, 255, 255, (alpha as f32 * 0.75) as u8,
                                     ))
-                                    .size(20.0)
-                                    .strong(),
+                                    .size(18.0),
                             );
-                            ui.add_space(8.0);
-                            {
-                                let mut job = egui::text::LayoutJob::default();
-                                for i in 0..3 {
-                                    if i > 0 {
-                                        job.append(
-                                            "  ",
-                                            0.0,
-                                            egui::TextFormat {
-                                                font_id: egui::FontId::proportional(40.0),
-                                                color: egui::Color32::TRANSPARENT,
-                                                ..Default::default()
-                                            },
-                                        );
-                                    }
-                                    let filled = i < star_count && star_anim[i] > 0.01;
-                                    let anim_scale = star_anim[i];
-                                    let c = if filled {
-                                        let glow = (anim_scale * 255.0).min(255.0) as u8;
-                                        egui::Color32::from_rgba_unmultiplied(255, 210, 50, glow)
-                                    } else {
-                                        let dim = (star_anim[i] * 100.0).min(100.0) as u8;
-                                        egui::Color32::from_white_alpha(dim)
-                                    };
-                                    let size = 40.0 * (0.5 + 0.5 * anim_scale);
+                            ui.add_space(12.0);
+                            let mut job = egui::text::LayoutJob::default();
+                            for i in 0..3 {
+                                if i > 0 {
                                     job.append(
-                                        if filled { "\u{2605}" } else { "\u{2606}" },
+                                        "  ",
                                         0.0,
                                         egui::TextFormat {
-                                            font_id: egui::FontId::proportional(size),
-                                            color: c,
+                                            font_id: egui::FontId::proportional(34.0),
+                                            color: egui::Color32::TRANSPARENT,
                                             ..Default::default()
                                         },
                                     );
                                 }
-                                job.halign = egui::Align::Center;
-                                ui.label(job);
-                            }
-                            ui.add_space(6.0);
-                            if is_perfect && perfect_anim > 0.01 {
-                                let pa = perfect_anim;
-                                let glow =
-                                    ((victory_time * 4.0).sin() * 0.15 + 0.85).clamp(0.0, 1.0);
-                                let perfect_alpha = (pa * 255.0 * glow) as u8;
-                                let scale = 1.0 + (1.0 - pa) * 0.5;
-                                ui.label(
-                                    egui::RichText::new("\u{2728} PERFECT \u{2728}")
-                                        .color(egui::Color32::from_rgba_unmultiplied(
-                                            255,
-                                            200,
-                                            50,
-                                            perfect_alpha,
-                                        ))
-                                        .size(28.0 * scale)
-                                        .strong(),
+                                let color = if i < star_count {
+                                    egui::Color32::from_rgba_unmultiplied(255, 210, 50, alpha)
+                                } else {
+                                    egui::Color32::from_rgba_unmultiplied(
+                                        255,
+                                        255,
+                                        255,
+                                        (alpha as f32 * 0.22) as u8,
+                                    )
+                                };
+                                job.append(
+                                    if i < star_count { "\u{2605}" } else { "\u{2606}" },
+                                    0.0,
+                                    egui::TextFormat {
+                                        font_id: egui::FontId::proportional(34.0),
+                                        color,
+                                        ..Default::default()
+                                    },
                                 );
-                                ui.add_space(4.0);
                             }
+                            job.halign = egui::Align::Center;
+                            ui.label(job);
                             if let Some(pct) = lb_result.percentile {
                                 if pct >= 50 {
+                                    ui.add_space(8.0);
                                     ui.label(
                                         egui::RichText::new(format!(
                                             "Better than {}% of players",
                                             pct
                                         ))
                                         .color(egui::Color32::from_rgba_unmultiplied(
-                                            200, 220, 255, alpha,
+                                            200,
+                                            220,
+                                            255,
+                                            (alpha as f32 * 0.85) as u8,
                                         ))
                                         .size(15.0),
                                     );
                                 }
                             }
-                            ui.add_space(12.0);
+                            ui.add_space(14.0);
                             if btn_alpha > 0.01 {
                                 let btn_color = egui::Color32::from_rgba_unmultiplied(
                                     100,
@@ -496,22 +454,20 @@ pub fn draw_hud(
                         });
                     });
             });
-
-        ctx.request_repaint();
+    } else {
+        egui::Area::new(egui::Id::new("debug_min"))
+            .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-8.0, -4.0))
+            .show(ctx, |ui| {
+                ui.label(
+                    egui::RichText::new(format!("par {}", min_moves))
+                        .color(egui::Color32::from_white_alpha(35))
+                        .size(10.0)
+                        .monospace(),
+                );
+            });
     }
 
-    egui::Area::new(egui::Id::new("debug_min"))
-        .anchor(egui::Align2::RIGHT_BOTTOM, egui::vec2(-8.0, -4.0))
-        .show(ctx, |ui| {
-            ui.label(
-                egui::RichText::new(format!("par {}", min_moves))
-                    .color(egui::Color32::from_white_alpha(35))
-                    .size(10.0)
-                    .monospace(),
-            );
-        });
-
-    if prof_show {
+    if prof_show && victory_time <= 0.0 {
         egui::Area::new(egui::Id::new("profiling_overlay"))
             .anchor(egui::Align2::LEFT_BOTTOM, egui::vec2(12.0, -12.0))
             .show(ctx, |ui| {
@@ -604,7 +560,7 @@ pub fn draw_hud(
             });
     }
 
-    if settings_open {
+    if settings_open && victory_time <= 0.0 {
         egui::Window::new("Settings")
             .id(egui::Id::new("settings_panel"))
             .anchor(egui::Align2::RIGHT_TOP, egui::vec2(-12.0, 64.0))
@@ -671,6 +627,15 @@ pub fn draw_hud(
                                     egui::Slider::new(&mut rope_mat.env_reflect, 0.0..=3.0)
                                         .text("Reflection"),
                                 );
+                                ui.separator();
+                                ui.add(
+                                    egui::Slider::new(&mut cap.radius_scale, 0.3..=2.0)
+                                        .text("Cap scale"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut cap.smin_k, 0.0..=0.5)
+                                        .text("Cap smin k"),
+                                );
                             });
 
                         egui::CollapsingHeader::new("Lighting")
@@ -723,6 +688,85 @@ pub fn draw_hud(
                                     });
                             });
 
+                        egui::CollapsingHeader::new("Visual")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                let mut seg_v = visual.profile_segments as f32;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut seg_v, 3.0..=32.0)
+                                            .text("Profile segments")
+                                            .step_by(1.0),
+                                    )
+                                    .changed()
+                                {
+                                    visual.profile_segments = seg_v.round().max(3.0) as usize;
+                                }
+                                ui.add(
+                                    egui::Slider::new(&mut visual.wave_energy, 0.0..=2.0)
+                                        .text("Wave energy"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut visual.stretch_thinning, 0.0..=1.0)
+                                        .text("Stretch thinning"),
+                                );
+                            });
+
+                        egui::CollapsingHeader::new("Worm")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params1[0], 0.0..=1.0)
+                                        .text("Groove depth"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params1[1], 0.0..=3.0)
+                                        .text("Belly bright"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params1[2], 0.0..=3.0)
+                                        .text("Back dark"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params1[3], 0.0..=0.5)
+                                        .text("Skin noise"),
+                                );
+                                ui.separator();
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params2[0], 0.0..=2.0)
+                                        .text("SSS strength"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params2[1], 0.0..=1.0)
+                                        .text("Roughness"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params2[2], 0.0..=5.0)
+                                        .text("Spec strength"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params2[3], 0.0..=2.0)
+                                        .text("Rim strength"),
+                                );
+                                ui.separator();
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params3[0], 0.0..=0.3)
+                                        .text("Eye size"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params3[1], 0.0..=10.0)
+                                        .text("Pulse speed"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params3[2], 0.0..=1.0)
+                                        .text("Pulse amp"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut worm.params3[3], 0.0..=20.0)
+                                        .text("Seg freq"),
+                                );
+                            });
+
                         egui::CollapsingHeader::new("Table")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -765,6 +809,36 @@ pub fn draw_hud(
                                 *rope_mat = RopeMaterialSettings::default();
                                 *lighting = LightingSettings::default();
                                 *table = TableSettings::default();
+                                *worm = WormSettings::default();
+                                visual.wave_energy = 0.0;
+                            }
+                            let copy_id = egui::Id::new("copy_status");
+                            let copy_status: Option<f64> =
+                                ctx.data_mut(|d| d.get_temp(copy_id));
+                            let now = ctx.input(|i| i.time);
+                            let copy_active =
+                                copy_status.map_or(false, |t| now - t < 1.5);
+                            let copy_label = if copy_active {
+                                "\u{2705} Copied"
+                            } else {
+                                "\u{1F4CB} Copy settings"
+                            };
+                            if ui.button(copy_label).clicked() {
+                                let json = export_settings_to_json(
+                                    rope_mat,
+                                    lighting,
+                                    visual,
+                                    table,
+                                    cartoon,
+                                    cap,
+                                    worm,
+                                    *render_scale,
+                                    *cel_mode,
+                                    *square_cross,
+                                    current_level,
+                                );
+                                write_clipboard(&json);
+                                ctx.data_mut(|d| d.insert_temp(copy_id, now));
                             }
                             let import_id = egui::Id::new("import_status");
                             let status: Option<(bool, f64)> =
@@ -787,6 +861,7 @@ pub fn draw_hud(
                                     table,
                                     cartoon,
                                     cap,
+                                    worm,
                                     render_scale,
                                     cel_mode,
                                     square_cross,
@@ -815,6 +890,119 @@ fn read_clipboard() -> Option<String> {
     }
 }
 
+fn write_clipboard(text: &str) {
+    #[cfg(not(target_arch = "wasm32"))]
+    {
+        if let Ok(mut cb) = arboard::Clipboard::new() {
+            let _ = cb.set_text(text.to_string());
+        }
+    }
+    #[cfg(target_arch = "wasm32")]
+    {
+        let _ = text;
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn export_settings_to_json(
+    rope_mat: &RopeMaterialSettings,
+    lighting: &LightingSettings,
+    visual: &VisualSettings,
+    table: &TableSettings,
+    cartoon: &CartoonSettings,
+    cap: &CapSettings,
+    worm: &WormSettings,
+    render_scale: f32,
+    cel_mode: bool,
+    square_cross: bool,
+    current_level: usize,
+) -> String {
+    let shadow_type_str = match lighting.shadow_type {
+        0 => "ShadowMap",
+        1 => "PCF",
+        _ => "PCSS",
+    };
+    let table_style_str = match table.style {
+        0 => "Wood",
+        1 => "Gradient",
+        _ => "Solid",
+    };
+    serde_json::json!({
+        "currentLevel": current_level,
+        "ropeMatte": rope_mat.matte,
+        "ropeGloss": rope_mat.gloss,
+        "ropeDiffuseWrap": rope_mat.diffuse_wrap,
+        "ropeSubsurface": rope_mat.subsurface,
+        "ropeEdgeLight": rope_mat.edge_light,
+        "ropeSaturation": rope_mat.saturation,
+        "ropeMicroBump": rope_mat.micro_bump,
+        "ropeBumpScale": rope_mat.bump_scale,
+        "ropeContactAO": rope_mat.contact_ao,
+        "ropeLiftGlow": rope_mat.lift_glow,
+        "ropeStretchGloss": rope_mat.stretch_gloss,
+        "ropeStretchSpec": rope_mat.stretch_spec,
+        "ropeEnvReflect": rope_mat.env_reflect,
+        "ambient": lighting.ambient,
+        "shadowDarkness": lighting.shadow_darkness,
+        "lightIntensity": lighting.light_intensity,
+        "shadowBias": lighting.shadow_bias,
+        "lightSize": lighting.shadow_size,
+        "lightDirX": lighting.light_dir[0],
+        "lightDirY": lighting.light_dir[1],
+        "lightDirZ": lighting.light_dir[2],
+        "ropeRadiusScale": lighting.rope_radius_scale,
+        "shadowsEnabled": lighting.shadows_enabled,
+        "shadowType": shadow_type_str,
+        "profileSegments": visual.profile_segments,
+        "holeRadiusScale": visual.hole_radius_scale,
+        "stretchThinning": visual.stretch_thinning,
+        "exposure": visual.exposure,
+        "bloomStrength": visual.bloom_strength,
+        "holeTintR": visual.hole_tint[0],
+        "holeTintG": visual.hole_tint[1],
+        "holeTintB": visual.hole_tint[2],
+        "holeTintAmount": visual.hole_tint[3],
+        "waveEnergy": visual.wave_energy,
+        "tableStyle": table_style_str,
+        "tableColor1R": table.color1[0],
+        "tableColor1G": table.color1[1],
+        "tableColor1B": table.color1[2],
+        "tableColor2R": table.color2[0],
+        "tableColor2G": table.color2[1],
+        "tableColor2B": table.color2[2],
+        "woodSeed": table.wood_seed,
+        "woodBrightness": table.wood_brightness,
+        "woodPatternScale": table.wood_pattern_scale,
+        "cartoonExposure": cartoon.exposure,
+        "cartoonEdgeStrength": cartoon.edge_strength,
+        "cartoonShadowBright": cartoon.shadow_bright,
+        "cartoonWrap": cartoon.wrap,
+        "cartoonEdgeSmooth": cartoon.edge_smooth,
+        "cartoonLevels": visual.cartoon_levels,
+        "cartoonShaderEnabled": cel_mode,
+        "capRadiusScale": cap.radius_scale,
+        "capSegments": cap.segments,
+        "capRings": cap.rings,
+        "capSminK": cap.smin_k,
+        "capDarken": cap.darken,
+        "wormGrooveDepth": worm.params1[0],
+        "wormBellyBright": worm.params1[1],
+        "wormBackDark": worm.params1[2],
+        "wormSkinNoise": worm.params1[3],
+        "wormSssStr": worm.params2[0],
+        "wormRoughness": worm.params2[1],
+        "wormSpecStr": worm.params2[2],
+        "wormRimStr": worm.params2[3],
+        "wormEyeSize": worm.params3[0],
+        "wormPulseSpeed": worm.params3[1],
+        "wormPulseAmp": worm.params3[2],
+        "wormSegFreq": worm.params3[3],
+        "renderScale": render_scale,
+        "squareCrossSection": square_cross,
+    })
+    .to_string()
+}
+
 fn import_settings_from_clipboard(
     rope_mat: &mut RopeMaterialSettings,
     lighting: &mut LightingSettings,
@@ -822,6 +1010,7 @@ fn import_settings_from_clipboard(
     table: &mut TableSettings,
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
+    worm: &mut WormSettings,
     render_scale: &mut f32,
     cel_mode: &mut bool,
     square_cross: &mut bool,
@@ -943,6 +1132,9 @@ fn import_settings_from_clipboard(
     if let Some(v) = f("holeTintAmount") {
         visual.hole_tint[3] = v;
     }
+    if let Some(v) = f("waveEnergy") {
+        visual.wave_energy = v;
+    }
 
     if let Some(v) = json.get("tableStyle").and_then(|v| v.as_str()) {
         table.style = match v {
@@ -1014,6 +1206,9 @@ fn import_settings_from_clipboard(
     if let Some(v) = f("capRings") {
         cap.rings = v.round().max(1.0) as usize;
     }
+    if let Some(v) = f("capSminK") {
+        cap.smin_k = v;
+    }
     if let Some(v) = f("capDarken") {
         cap.darken = v;
     }
@@ -1026,6 +1221,19 @@ fn import_settings_from_clipboard(
         *square_cross = v;
         visual.square_cross_section = v;
     }
+
+    if let Some(v) = f("wormGrooveDepth") { worm.params1[0] = v; }
+    if let Some(v) = f("wormBellyBright") { worm.params1[1] = v; }
+    if let Some(v) = f("wormBackDark") { worm.params1[2] = v; }
+    if let Some(v) = f("wormSkinNoise") { worm.params1[3] = v; }
+    if let Some(v) = f("wormSssStr") { worm.params2[0] = v; }
+    if let Some(v) = f("wormRoughness") { worm.params2[1] = v; }
+    if let Some(v) = f("wormSpecStr") { worm.params2[2] = v; }
+    if let Some(v) = f("wormRimStr") { worm.params2[3] = v; }
+    if let Some(v) = f("wormEyeSize") { worm.params3[0] = v; }
+    if let Some(v) = f("wormPulseSpeed") { worm.params3[1] = v; }
+    if let Some(v) = f("wormPulseAmp") { worm.params3[2] = v; }
+    if let Some(v) = f("wormSegFreq") { worm.params3[3] = v; }
 
     let imported_level = json
         .get("currentLevel")

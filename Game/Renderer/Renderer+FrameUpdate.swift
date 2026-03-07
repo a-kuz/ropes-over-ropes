@@ -27,5 +27,21 @@ extension Renderer {
         }
 
         PhysicsProfiler.shared.measure(.meshBuild) { updateRopeMesh() }
+
+        // Tension mode: update weight render state and check win
+        if isTensionMode {
+            updateWeightRenderState()
+            if !tensionLevelCompleted, let sim = simulator, sim.allWeightsSettled {
+                checkTensionModeComplete()
+            }
+        }
+
+        // Rail mode: update cart render state and check win
+        if isRailMode {
+            updateCartRenderState()
+            if !railLevelCompleted, let sim = simulator, sim.allCartsSettled {
+                checkRailModeComplete()
+            }
+        }
     }
 }

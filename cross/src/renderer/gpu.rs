@@ -2104,9 +2104,14 @@ impl GpuRenderer {
             });
 
         let sd = render_mode == 0;
+        #[cfg(target_arch = "wasm32")]
+        let victory_simplify = victory_time > 0.0;
+        #[cfg(not(target_arch = "wasm32"))]
+        let victory_simplify = false;
         let do_shadow_pass =
-            !cel_mode && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
-        let do_planar_mask_pass = !cel_mode && self.draw_flags.table_shadow_mode == 1;
+            !cel_mode && !victory_simplify && (render_mode > 0 || self.draw_flags.table_shadow_mode == 0);
+        let do_planar_mask_pass =
+            !cel_mode && !victory_simplify && self.draw_flags.table_shadow_mode == 1;
         if do_shadow_pass {
             self.encode_shadow_pass(&mut encoder);
         }
@@ -2115,7 +2120,7 @@ impl GpuRenderer {
         }
         self.frame_index = self.frame_index.wrapping_add(1);
         self.encode_hdr_pass(&mut encoder);
-        if !sd && !cel_mode {
+        if !sd && !cel_mode && !victory_simplify {
             self.encode_bloom_pass(&mut encoder);
         }
         self.encode_composite_pass(&mut encoder, &screen_view);

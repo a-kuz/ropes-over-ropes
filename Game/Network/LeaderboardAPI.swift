@@ -4,11 +4,7 @@ import Foundation
 final class LeaderboardAPI {
     static let shared = LeaderboardAPI()
 
-    #if DEBUG
     private let baseURL = "https://uzls-leaderboard.a-kuz.workers.dev"
-    #else
-    private let baseURL = "https://uzls-leaderboard.a-kuz.workers.dev"
-    #endif
 
     private let ud = UserDefaults.standard
     private let session: URLSession = {

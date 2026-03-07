@@ -654,6 +654,14 @@ class GameController: ObservableObject {
         percentile = nil
     }
 
+    func loadLevelDefinition(_ def: LevelDefinition) {
+        guard let renderer = renderer else { return }
+        renderer.loadLevelDefinition(def)
+        currentLevel = def.id
+        levelStartTime = Date()
+        percentile = nil
+    }
+
     func dumpSettingsToClipboard() -> Bool {
         let dict: [String: Any] = [
             "particleCount": Int(particleCount),
@@ -888,6 +896,7 @@ class GameController: ObservableObject {
         }
 
         let def = LevelDefinition(
+            mode: nil,
             id: renderer.currentLevelId,
             holeRadius: renderer.holeRadius,
             particlesPerRope: renderer.physicsParticleCount,
@@ -895,7 +904,12 @@ class GameController: ObservableObject {
             ropes: levelRopes,
             hooks: levelHooks.isEmpty ? nil : levelHooks,
             actions: nil,
-            boards: nil
+            boards: nil,
+            weights: nil,
+            targets: nil,
+            rails: nil,
+            carts: nil,
+            stations: nil
         )
 
         let encoder = JSONEncoder()

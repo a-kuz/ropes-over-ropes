@@ -133,6 +133,12 @@ extension Renderer {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: holeIndexCount, indexType: .uint16, indexBuffer: holeIB, indexBufferOffset: 0, instanceCount: instanceCount)
         }
 
+        // Draw weights and targets (tension mode)
+        drawWeightsAndTargets(encoder: encoder)
+
+        // Draw rails, carts, stations (rail mode)
+        drawRailsAndCarts(encoder: encoder)
+
         encoder.setRenderPipelineState(ropePipeline)
         if let ropeVB, let ropeIB, ropeIndexCount > 0 {
             encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)

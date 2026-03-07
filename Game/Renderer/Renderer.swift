@@ -200,6 +200,60 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var currentLevelId: Int = 1
     var moveCount: Int = 0
+    var isTensionMode: Bool = false
+    var tensionLevelCompleted: Bool = false
+
+    // Tension mode rendering
+    struct WeightRenderInfo {
+        var position: SIMD2<Float>
+        var radius: Float
+        var settled: Bool
+    }
+    struct TargetRenderInfo {
+        var position: SIMD2<Float>
+        var radius: Float
+        var weightIndex: Int
+        var satisfied: Bool
+    }
+    var weightRenderInfos: [WeightRenderInfo] = []
+    var targetRenderInfos: [TargetRenderInfo] = []
+    var weightVB: MTLBuffer?
+    var weightIB: MTLBuffer?
+    var weightIndexCount: Int = 0
+    var targetVB: MTLBuffer?
+    var targetIB: MTLBuffer?
+    var targetIndexCount: Int = 0
+
+    // Rail mode rendering
+    var isRailMode: Bool = false
+    var railLevelCompleted: Bool = false
+    struct RailRenderInfo {
+        var points: [SIMD2<Float>]
+    }
+    struct CartRenderInfo {
+        var position: SIMD2<Float>
+        var radius: Float
+        var settled: Bool
+    }
+    struct StationRenderInfo {
+        var position: SIMD2<Float>
+        var radius: Float
+        var cartIndex: Int
+        var satisfied: Bool
+    }
+    var railRenderInfos: [RailRenderInfo] = []
+    var cartRenderInfos: [CartRenderInfo] = []
+    var stationRenderInfos: [StationRenderInfo] = []
+    var railVB: MTLBuffer?
+    var railIB: MTLBuffer?
+    var railIndexCount: Int = 0
+    var cartVB: MTLBuffer?
+    var cartIB: MTLBuffer?
+    var cartIndexCount: Int = 0
+    var stationVB: MTLBuffer?
+    var stationIB: MTLBuffer?
+    var stationIndexCount: Int = 0
+
     var onLevelComplete: (() -> Void)?
     var onMoveCountChanged: ((Int) -> Void)?
     var onUndoStackChanged: ((Bool) -> Void)?
@@ -306,11 +360,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         super.init()
     }
 
+    func loadLevelDefinition(_ def: LevelDefinition) {
+        _pendingLevelDef = def
+        loadLevel(levelId: def.id)
+    }
+
+    private var _pendingLevelDef: LevelDefinition?
+
     func loadLevel(levelId: Int) {
         let loadStart = CACurrentMediaTime()
         currentLevelId = levelId
         Self.logger.info("Loading level \(levelId)...")
-        
+
         dragState = nil
         dragWorld = .zero
         simulator = nil
@@ -319,12 +380,21 @@ final class Renderer: NSObject, MTKViewDelegate {
         moveCount = 0
         onMoveCountChanged?(0)
         onUndoStackChanged?(false)
-        
+
         var t0 = CACurrentMediaTime()
         let level: LevelDefinition
-        if let jsonLevel = LevelLoader.load(levelId: levelId) {
+        if let pending = _pendingLevelDef {
+            level = pending
+            _pendingLevelDef = nil
+        } else if let jsonLevel = LevelLoader.load(levelId: levelId) {
             Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
             level = jsonLevel
+        } else if levelId >= 2001 {
+            Self.logger.info("Level \(levelId) generated as rail mode")
+            level = LevelGenerator.generateRailLevel(levelId: levelId)
+        } else if levelId >= 1001 {
+            Self.logger.info("Level \(levelId) generated as tension mode")
+            level = LevelGenerator.generateTensionLevel(levelId: levelId)
         } else {
             Self.logger.info("Level \(levelId) generated procedurally")
             level = LevelGenerator.generate(levelId: levelId, boardElevation: boardElevation)
@@ -335,9 +405,10 @@ final class Renderer: NSObject, MTKViewDelegate {
         let levelHoleElevations = level.holes.map { $0.zPosition }
         let levelHoleRadius = level.holeRadius
 
+        let maxValidIndex = levelHoles.count + (level.weights?.count ?? 0) - 1
         let validatedRopes = level.ropes.filter { rope in
-            guard levelHoles.indices.contains(rope.startHole) else { return false }
-            guard levelHoles.indices.contains(rope.endHole) else { return false }
+            guard rope.startHole >= 0 && rope.startHole <= maxValidIndex else { return false }
+            guard rope.endHole >= 0 && rope.endHole <= maxValidIndex else { return false }
             return rope.startHole != rope.endHole
         }
 
@@ -398,28 +469,101 @@ final class Renderer: NSObject, MTKViewDelegate {
             return VerletSimulator.LevelAction(type: actionType, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
         } ?? []
 
+        // Tension mode setup
+        isTensionMode = level.isTensionMode
+        tensionLevelCompleted = false
+        sim.isTensionMode = isTensionMode
+
+        // Initialize weights BEFORE level init (actions reference them)
+        if isTensionMode, let weightDefs = level.weights, let targetDefs = level.targets {
+            let weightConfigs = weightDefs.enumerated().map { i, w in
+                let target = targetDefs.first(where: { $0.weightIndex == i })
+                return VerletSimulator.WeightConfig(
+                    position: w.position,
+                    mass: w.mass ?? 2.0,
+                    radius: w.radius ?? 0.15,
+                    targetPosition: target?.position,
+                    targetRadius: target?.radius ?? 0.2
+                )
+            }
+            sim.initializeWeights(weightConfigs)
+
+            weightRenderInfos = weightDefs.map {
+                WeightRenderInfo(position: $0.position, radius: $0.radius ?? 0.15, settled: false)
+            }
+            targetRenderInfos = targetDefs.map {
+                TargetRenderInfo(position: $0.position, radius: $0.radius ?? 0.2, weightIndex: $0.weightIndex, satisfied: false)
+            }
+            buildWeightMesh()
+            buildTargetMesh()
+        } else {
+            weightRenderInfos = []
+            targetRenderInfos = []
+        }
+
+        // Rail mode setup
+        isRailMode = level.isRailMode
+        railLevelCompleted = false
+        sim.isRailMode = isRailMode
+        if isRailMode, let railDefs = level.rails, let cartDefs = level.carts, let stationDefs = level.stations {
+            sim.initializeRails(railDefs: railDefs, cartDefs: cartDefs, stationDefs: stationDefs)
+            railRenderInfos = sim.rails.map { rail in
+                RailRenderInfo(points: rail.points)
+            }
+            cartRenderInfos = sim.carts.map { cart in
+                let pos = sim.rails[cart.railIndex].position(at: cart.t)
+                return CartRenderInfo(position: pos, radius: cart.radius, settled: false)
+            }
+            stationRenderInfos = sim.railStations.map { station in
+                let pos = sim.rails[station.railIndex].position(at: station.t)
+                return StationRenderInfo(position: pos, radius: station.radius, cartIndex: station.cartIndex, satisfied: false)
+            }
+            buildRailMesh()
+            buildCartMesh()
+            buildStationMesh()
+        } else {
+            railRenderInfos = []
+            cartRenderInfos = []
+            stationRenderInfos = []
+        }
+
         t0 = CACurrentMediaTime()
         sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
+
         let tPhysics = CACurrentMediaTime()
         self.simulator = sim
 
+        // Sync pin indices back to ropes array.
+        // Weight pins (negative) are converted to holeCount + weightIndex for Renderer use.
+        let holeCount = levelHoles.count
         for ropeIndex in ropes.indices {
             guard sim.bands.indices.contains(ropeIndex) else { continue }
             let band = sim.bands[ropeIndex]
             if let pinStart = band.pinStart {
-                ropes[ropeIndex].startHole = pinStart
+                if pinStart < 0 {
+                    ropes[ropeIndex].startHole = holeCount + VerletSimulator.weightIndex(from: pinStart)
+                } else {
+                    ropes[ropeIndex].startHole = pinStart
+                }
             }
             if let pinEnd = band.pinEnd {
-                ropes[ropeIndex].endHole = pinEnd
+                if pinEnd < 0 {
+                    ropes[ropeIndex].endHole = holeCount + VerletSimulator.weightIndex(from: pinEnd)
+                } else {
+                    ropes[ropeIndex].endHole = pinEnd
+                }
             }
         }
 
         for ropeIndex in ropes.indices {
             let startHoleIndex = ropes[ropeIndex].startHole
             let endHoleIndex = ropes[ropeIndex].endHole
-            guard holeOccupied.indices.contains(startHoleIndex), holeOccupied.indices.contains(endHoleIndex) else { continue }
-            holeOccupied[startHoleIndex] = true
-            holeOccupied[endHoleIndex] = true
+            if holeOccupied.indices.contains(startHoleIndex) {
+                holeOccupied[startHoleIndex] = true
+            }
+            if holeOccupied.indices.contains(endHoleIndex) {
+                holeOccupied[endHoleIndex] = true
+            }
         }
 
         let aspect = Float(lastViewSize.width / max(1, lastViewSize.height))

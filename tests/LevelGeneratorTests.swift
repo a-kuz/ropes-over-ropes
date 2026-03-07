@@ -384,4 +384,101 @@ final class LevelGeneratorTests: XCTestCase {
         let u = (d.x * d1.y - d.y * d1.x) / cross
         return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99
     }
+
+    // MARK: - Rail Mode E2E: Cart collision pushes cart
+
+    func testRailCartCollision() {
+        // Setup: straight horizontal rail with cart at center
+        // Rope pinned above and below the cart → particles drape over cart → push it
+        let holePositions: [SIMD2<Float>] = [
+            SIMD2(0.0, 0.4),    // 0: above cart
+            SIMD2(0.3, -0.4),   // 1: below-right of cart (diagonal creates lateral force)
+        ]
+        let holeElevations: [Float] = [0, 0]
+
+        let sim = VerletSimulator(
+            holePositions: holePositions,
+            holeElevations: holeElevations,
+            holeRadius: 0.08,
+            boards: []
+        )
+        sim.isRailMode = true
+        sim.gravity = -5.0
+        sim.damping = 0.97
+        sim.constraintIterations = 4
+        sim.particleCount = 20
+        sim.cartFriction = 0.05
+        sim.cartDamping = 0.98
+
+        // Rail: horizontal from -0.6 to 0.6
+        let railDef = LevelDefinition.RailDef(points: [
+            .init(xPosition: -0.6, yPosition: 0),
+            .init(xPosition: 0.6, yPosition: 0),
+        ])
+        // Cart starts at center (t=0.5), right where rope will cross
+        let cartDef = LevelDefinition.CartDef(railIndex: 0, startT: 0.5, radius: 0.12, mass: 0.3)
+        let stationDef = LevelDefinition.StationDef(railIndex: 0, t: 0.9, radius: 0.15, cartIndex: 0)
+        sim.initializeRails(railDefs: [railDef], cartDefs: [cartDef], stationDefs: [stationDef])
+
+        let initialT = sim.carts[0].t
+        XCTAssertEqual(initialT, 0.5, accuracy: 0.01)
+
+        // Rope from hole 0 (above) to hole 1 (below-right)
+        // This creates a diagonal rope that crosses the cart position
+        let ropeConfigs = [
+            VerletSimulator.RopeConfig(startHole: 0, endHole: 1, radius: 0.038, crossSection: .circular(radius: 0.038))
+        ]
+        let actions = [
+            VerletSimulator.LevelAction(type: .pin, ropeIndex: 0, endIndex: 0, holeIndex: 0),
+            VerletSimulator.LevelAction(type: .pin, ropeIndex: 0, endIndex: 1, holeIndex: 1),
+        ]
+        sim.initializeLevel(ropeConfigs: ropeConfigs, actions: actions)
+
+        XCTAssertEqual(sim.bands.count, 1)
+        XCTAssertTrue(sim.bands[0].active)
+
+        // Log initial particle positions
+        let midParticle = sim.bands[0].positions.count / 2
+        print("[RAIL TEST] Initial cart t=\(initialT), pos=\(sim.rails[0].position(at: initialT))")
+        print("[RAIL TEST] Rope midpoint=\(sim.bands[0].positions[midParticle])")
+
+        // Simulate 300 frames — gravity pulls rope down onto cart
+        for frame in 0..<300 {
+            sim.update(deltaTime: 1.0 / 60.0)
+            if frame % 60 == 0 {
+                let ct = sim.carts[0].t
+                let cv = sim.carts[0].velocity
+                print("[RAIL TEST] frame=\(frame) cart t=\(ct) vel=\(cv)")
+            }
+        }
+
+        let finalT = sim.carts[0].t
+        print("[RAIL TEST] Final cart t=\(finalT) (initial=\(initialT))")
+        print("[RAIL TEST] Cart velocity=\(sim.carts[0].velocity)")
+
+        // The diagonal rope should push cart to the right (positive t direction)
+        XCTAssertNotEqual(finalT, initialT, accuracy: 0.02,
+            "Cart should have moved. Diagonal rope from (0,0.4) to (0.3,-0.4) should push cart rightward")
+    }
+
+    /// Test with user's custom rail level JSON — verifies the level loads and cart exists
+    func testUserRailLevelLoads() {
+        let json = """
+        {"actions":[{"endIndex":0,"holeIndex":5,"ropeIndex":0,"type":"pin"},{"endIndex":1,"holeIndex":1,"ropeIndex":0,"type":"pin"}],"holeRadius":0.08,"holes":[{"x":-1.0371923,"y":0.21173078,"z":0},{"x":-0.4697885,"y":-0.10661539,"z":0},{"x":-0.4952308,"y":-0.6161539,"z":0},{"x":0.39550555,"y":0.19649427,"z":0},{"x":0.58667624,"y":-0.32826182,"z":0},{"x":0.14575253,"y":0.819013,"z":0},{"x":-1.0297476,"y":-0.16861093,"z":0},{"x":-0.992927,"y":0.69973934,"z":0}],"id":2001,"mode":"rail","particlesPerRope":32,"rails":[{"points":[{"x":-1.0588506,"y":0.2654046,"z":0},{"x":-0.5074766,"y":-0.13609938,"z":0},{"x":0.04883345,"y":-0.312348,"z":0},{"x":0.22069326,"y":0.8374461,"z":0},{"x":0.34850514,"y":0.19717823,"z":0}]}],"ropes":[{"color":{"b":0.05,"g":0.3,"r":0.95},"endHole":1,"radius":0.038,"startHole":5}]}
+        """
+        let data = json.data(using: .utf8)!
+        let level = try! JSONDecoder().decode(LevelDefinition.self, from: data)
+
+        XCTAssertEqual(level.mode, "rail")
+        XCTAssertTrue(level.isRailMode)
+        XCTAssertEqual(level.rails?.count, 1)
+        XCTAssertEqual(level.rails?[0].points.count, 5)
+        XCTAssertEqual(level.holes.count, 8)
+        XCTAssertEqual(level.ropes.count, 1)
+
+        // Note: this level has no carts/stations defined — user needs to add them in editor
+        // Cart and station are required for rail mode to be playable
+        XCTAssertNil(level.carts, "User level has no carts — need to add via editor")
+        XCTAssertNil(level.stations, "User level has no stations — need to add via editor")
+    }
 }

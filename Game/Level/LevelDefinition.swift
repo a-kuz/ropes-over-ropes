@@ -172,6 +172,45 @@ struct LevelDefinition: Codable {
         let holeIndex: Int
     }
 
+    struct WeightDef: Codable {
+        let x: Float
+        let y: Float
+        let mass: Float?
+        let radius: Float?
+
+        var position: SIMD2<Float> { SIMD2<Float>(x, y) }
+    }
+
+    struct TargetDef: Codable {
+        let x: Float
+        let y: Float
+        let radius: Float?
+        let weightIndex: Int
+
+        var position: SIMD2<Float> { SIMD2<Float>(x, y) }
+    }
+
+    struct RailDef: Codable {
+        let points: [Vec2]
+    }
+
+    struct CartDef: Codable {
+        let railIndex: Int
+        let startT: Float
+        let radius: Float?
+        let mass: Float?
+    }
+
+    struct StationDef: Codable {
+        let railIndex: Int
+        let t: Float
+        let radius: Float?
+        let cartIndex: Int
+    }
+
+    /// "untangle" (default), "tension", or "rail"
+    let mode: String?
+
     let id: Int
     let holeRadius: Float
     let particlesPerRope: Int
@@ -180,5 +219,13 @@ struct LevelDefinition: Codable {
     let hooks: [Hook]?
     let actions: [Action]?
     let boards: [Board]?
+    let weights: [WeightDef]?
+    let targets: [TargetDef]?
+    let rails: [RailDef]?
+    let carts: [CartDef]?
+    let stations: [StationDef]?
+
+    var isTensionMode: Bool { mode == "tension" }
+    var isRailMode: Bool { mode == "rail" }
 }
 

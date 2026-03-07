@@ -118,3 +118,18 @@ backend/.wrangler
 backend/node_modules
 android/.kotlin/errors/errors-1772664117575.log
 android/app/release-upload-key.jks
+
+# Android Gradle cache (machine-specific)
+android/.gradle/
+
+# Rust/wasm build artifacts (generated, do not commit)
+cross/web/uzls_bg.wasm
+cross/web/uzls.js
+cross/web/uzls.d.ts
+cross/web/uzls_bg.wasm.d.ts
+
+# Debug screenshots
+cross/drag-after-1.png
+cross/drag-after-2.png
+cross/drag-before.png
+cross/playwright-headed-after-fix.png

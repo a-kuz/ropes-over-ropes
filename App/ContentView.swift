@@ -1,5 +1,11 @@
 import SwiftUI
 
+enum GameMode: String, CaseIterable {
+    case untangle = "Untangle"
+    case tension = "Tension"
+    case rail = "Rail"
+}
+
 struct ContentView: View {
     @StateObject private var gameController = GameController()
     @State private var showControls = false
@@ -12,11 +18,44 @@ struct ContentView: View {
     @State private var shareURL: URL?
     @State private var usernameInput = ""
     @State private var loginAsInput = ""
+    @State private var gameMode: GameMode = .untangle
+    @State private var showEditor = false
+
+    @StateObject private var editorState = EditorState()
 
     var body: some View {
         ZStack {
-            GameView(controller: gameController)
+            if showEditor {
+                GeometryReader { geo in
+                    let isLandscape = geo.size.width > geo.size.height
+                    let editorFraction: CGFloat = isLandscape ? 0.4 : 0.45
+                    Group {
+                        if isLandscape {
+                            HStack(spacing: 0) {
+                                LevelEditorView(editor: editorState) { def in
+                                    gameController.loadLevelDefinition(def)
+                                }
+                                .frame(width: geo.size.width * editorFraction)
+
+                                gameFieldWithHUD
+                            }
+                        } else {
+                            VStack(spacing: 0) {
+                                LevelEditorView(editor: editorState) { def in
+                                    gameController.loadLevelDefinition(def)
+                                }
+                                .frame(height: geo.size.height * 0.5)
+
+                                gameFieldWithHUD
+                            }
+                        }
+                    }
+                }
                 .ignoresSafeArea()
+            } else {
+                GameView(controller: gameController)
+                    .ignoresSafeArea()
+            }
 
             if !gameController.showLevelComplete {
             VStack(spacing: 0) {
@@ -63,13 +102,39 @@ struct ContentView: View {
                         showLevelPicker = true
                     }) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("Level \(gameController.currentLevel)")
+                            Text("\(gameMode == .rail ? "R" : gameMode == .tension ? "T" : "L") \(gameController.currentLevel)")
                                 .font(.system(size: 18, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
                             Text("\(Int(gameController.fps)) fps")
                                 .font(.system(size: 11, design: .monospaced))
                                 .foregroundColor(.white.opacity(0.4))
                         }
+                    }
+
+                    Menu {
+                        ForEach(GameMode.allCases, id: \.self) { mode in
+                            Button(action: {
+                                gameMode = mode
+                                switch mode {
+                                case .tension: gameController.loadLevel(1001)
+                                case .rail: gameController.loadLevel(2001)
+                                case .untangle: gameController.loadLevel(1)
+                                }
+                            }) {
+                                Label(mode.rawValue, systemImage: mode == gameMode ? "checkmark.circle.fill" : "circle")
+                            }
+                        }
+                        Divider()
+                        Button(action: { showEditor = true }) {
+                            Label("Level Editor", systemImage: "pencil.and.ruler")
+                        }
+                    } label: {
+                        Image(systemName: gameMode == .rail ? "tram" : gameMode == .tension ? "arrow.up.and.down.and.sparkles" : "puzzlepiece")
+                            .font(.system(size: 16, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
                     }
 
                     Button(action: {
@@ -305,6 +370,53 @@ struct ContentView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    /// Game view + compact HUD for editor split mode
+    private var gameFieldWithHUD: some View {
+        ZStack {
+            GameView(controller: gameController)
+
+            VStack {
+                HStack(spacing: 6) {
+                    Button { gameController.restartLevel() } label: {
+                        Image(systemName: "arrow.counterclockwise")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    Button { gameController.resetCamera() } label: {
+                        Image(systemName: "scope")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(.white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    Button { gameController.undo() } label: {
+                        Image(systemName: "arrow.uturn.backward")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(gameController.canUndo ? .white : .white.opacity(0.3))
+                            .frame(width: 30, height: 30)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+                    .disabled(!gameController.canUndo)
+
+                    Spacer()
+
+                    Text("\(gameController.moveCount)")
+                        .font(.system(size: 13, weight: .medium, design: .monospaced))
+                        .foregroundColor(.white.opacity(0.5))
+                }
+                .padding(.horizontal, 8)
+                .padding(.top, 6)
+
+                Spacer()
+            }
         }
     }
 
@@ -746,18 +858,6 @@ private struct ParamRowInt: View {
     }
 }
 
-private struct ConfettiPiece: Identifiable {
-    let id: Int
-    let x: CGFloat
-    let color: Color
-    let width: CGFloat
-    let height: CGFloat
-    let rotation: Double
-    let delay: Double
-    let drift: CGFloat
-    let duration: Double
-}
-
 private struct VictoryOverlay: View {
     let level: Int
     var starCount: Int = 3
@@ -768,51 +868,13 @@ private struct VictoryOverlay: View {
     @State private var titleOpacity: Double = 0
     @State private var buttonOffset: CGFloat = 30
     @State private var buttonOpacity: Double = 0
-    @State private var confettiLaunched = false
-
-    private let confetti: [ConfettiPiece] = {
-        let colors: [Color] = [
-            .red, .orange, .yellow, .green, .blue, .purple, .pink,
-            Color(red: 1, green: 0.4, blue: 0.7),
-            Color(red: 0.3, green: 0.9, blue: 1),
-            Color(red: 1, green: 0.85, blue: 0.2),
-        ]
-        return (0..<40).map { i in
-            let sz = CGFloat.random(in: 4...10)
-            return ConfettiPiece(
-                id: i,
-                x: CGFloat.random(in: 0.05...0.95),
-                color: colors[i % colors.count],
-                width: sz,
-                height: sz * CGFloat.random(in: 0.5...1.5),
-                rotation: Double.random(in: 0...360),
-                delay: Double.random(in: 0...0.4),
-                drift: CGFloat.random(in: -30...30),
-                duration: Double.random(in: 1.8...3.0)
-            )
-        }
-    }()
+    private let fireworksVariant: Int = Int.random(in: 0...2)
 
     var body: some View {
         ZStack {
-            GeometryReader { geo in
-                ForEach(confetti) { piece in
-                    RoundedRectangle(cornerRadius: piece.width * 0.2)
-                        .fill(piece.color)
-                        .frame(width: piece.width, height: piece.height)
-                        .rotationEffect(.degrees(confettiLaunched ? piece.rotation + 720 : piece.rotation))
-                        .position(
-                            x: piece.x * geo.size.width + (confettiLaunched ? piece.drift : 0),
-                            y: confettiLaunched ? geo.size.height + 40 : -20
-                        )
-                        .opacity(confettiLaunched ? 0 : 1)
-                        .animation(
-                            .easeIn(duration: piece.duration).delay(piece.delay),
-                            value: confettiLaunched
-                        )
-                }
-            }
-            .allowsHitTesting(false)
+            // Fireworks background (random variant each time)
+            FireworksView(variant: fireworksVariant)
+                .allowsHitTesting(false)
 
             VStack(spacing: 20) {
                 Text("Level \(level)")
@@ -880,9 +942,6 @@ private struct VictoryOverlay: View {
             withAnimation(.easeOut(duration: 0.45).delay(0.2)) {
                 buttonOffset = 0
                 buttonOpacity = 1.0
-            }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                confettiLaunched = true
             }
         }
     }

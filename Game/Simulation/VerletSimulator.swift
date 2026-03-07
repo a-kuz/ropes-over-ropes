@@ -95,6 +95,131 @@ final class VerletSimulator {
         let elevation: Float
     }
 
+    // MARK: - Weight (tension mode)
+
+    struct Weight {
+        var position: SIMD2<Float>
+        var previousPosition: SIMD2<Float>
+        var mass: Float
+        var radius: Float
+        var targetPosition: SIMD2<Float>?
+        var targetRadius: Float
+        var settled: Bool = false
+        var attachedBandEnds: [(bandIndex: Int, endIndex: Int)] = []
+    }
+
+    var weights: [Weight] = []
+    var isTensionMode: Bool = false
+    var isRailMode: Bool = false
+
+    // Weight physics parameters
+    var weightStaticFriction: Float = 0.02
+    var weightKineticFriction: Float = 0.01
+    var weightDamping: Float = 0.95
+    var weightSettleThreshold: Float = 0.005
+
+    // MARK: - Rail mode
+
+    struct Rail {
+        let points: [SIMD2<Float>]
+        let segLengths: [Float]
+        let totalLength: Float
+
+        init(points: [SIMD2<Float>]) {
+            self.points = points
+            var lens: [Float] = []
+            var total: Float = 0
+            for i in 1..<points.count {
+                let l = simd_length(points[i] - points[i-1])
+                lens.append(l)
+                total += l
+            }
+            self.segLengths = lens
+            self.totalLength = total
+        }
+
+        func position(at t: Float) -> SIMD2<Float> {
+            guard points.count >= 2, totalLength > 0 else { return points.first ?? .zero }
+            let clamped = max(0, min(1, t))
+            let targetLen = clamped * totalLength
+            var accum: Float = 0
+            for i in 0..<segLengths.count {
+                if accum + segLengths[i] >= targetLen {
+                    let local = (targetLen - accum) / max(segLengths[i], 1e-6)
+                    return points[i] * (1 - local) + points[i+1] * local
+                }
+                accum += segLengths[i]
+            }
+            return points.last!
+        }
+
+        func tangent(at t: Float) -> SIMD2<Float> {
+            guard points.count >= 2, totalLength > 0 else { return SIMD2(1, 0) }
+            let clamped = max(0, min(1, t))
+            let targetLen = clamped * totalLength
+            var accum: Float = 0
+            for i in 0..<segLengths.count {
+                if accum + segLengths[i] >= targetLen {
+                    let dir = points[i+1] - points[i]
+                    let len = simd_length(dir)
+                    return len > 1e-6 ? dir / len : SIMD2(1, 0)
+                }
+                accum += segLengths[i]
+            }
+            let dir = points[points.count-1] - points[points.count-2]
+            let len = simd_length(dir)
+            return len > 1e-6 ? dir / len : SIMD2(1, 0)
+        }
+
+        func nearestT(to pos: SIMD2<Float>) -> Float {
+            guard points.count >= 2 else { return 0 }
+            var bestDist: Float = .greatestFiniteMagnitude
+            var bestArc: Float = 0
+            var accum: Float = 0
+            for i in 0..<segLengths.count {
+                let a = points[i]
+                let b = points[i+1]
+                let dir = b - a
+                let segLen = segLengths[i]
+                let proj = segLen > 1e-6 ? max(0, min(segLen, simd_dot(pos - a, dir / segLen))) : 0
+                let closest = a + (dir / max(segLen, 1e-6)) * proj
+                let dist = simd_length(pos - closest)
+                if dist < bestDist {
+                    bestDist = dist
+                    bestArc = accum + proj
+                }
+                accum += segLen
+            }
+            return totalLength > 0 ? bestArc / totalLength : 0
+        }
+    }
+
+    struct Cart {
+        var t: Float              // position on rail [0,1]
+        var velocity: Float = 0   // speed along rail (arc-length/s)
+        var railIndex: Int
+        var radius: Float
+        var mass: Float
+        var settled: Bool = false
+    }
+
+    struct Station {
+        let railIndex: Int
+        let t: Float
+        let radius: Float
+        let cartIndex: Int
+    }
+
+    var rails: [Rail] = []
+    var carts: [Cart] = []
+    var railStations: [Station] = []
+
+    // Rail physics
+    var cartFriction: Float = 0.5
+    var cartDamping: Float = 0.92
+    var cartMaxSpeed: Float = 3.0
+    var cartSettleThreshold: Float = 0.003
+
     var bands: [Band] = []
     let holePositions: [SIMD2<Float>]
     let holeElevations: [Float]
@@ -459,6 +584,11 @@ final class VerletSimulator {
         // Post-drag lower animation
         updateLowerAnimation(deltaTime: clampedDt)
 
+        // Weight physics (tension mode) — runs per-frame, not per-substep
+        if isTensionMode && !weights.isEmpty {
+            updateWeights(dt: clampedDt)
+        }
+
         // logCrossingState disabled — costs 8% CPU (O(n²) per band pair)
     }
 
@@ -510,6 +640,147 @@ final class VerletSimulator {
 
             lowerAnimations[key] = anim
         }
+    }
+
+    // MARK: - Weight physics
+
+    /// Returns 3D position for a pin index. Positive = hole, negative = weight (-(weightIndex+1)).
+    func pinPosition3D(_ pinIndex: Int) -> SIMD3<Float> {
+        if pinIndex >= 0 {
+            return holePosition3D(pinIndex)
+        } else {
+            let wi = -(pinIndex + 1)
+            guard weights.indices.contains(wi) else { return .zero }
+            return SIMD3<Float>(weights[wi].position.x, weights[wi].position.y, boardSurfaceZ(x: weights[wi].position.x, y: weights[wi].position.y))
+        }
+    }
+
+    /// Is pin index a weight?
+    static func isWeightPin(_ pinIndex: Int?) -> Bool {
+        guard let p = pinIndex else { return false }
+        return p < 0
+    }
+
+    /// Weight index from negative pin index
+    static func weightIndex(from pinIndex: Int) -> Int {
+        return -(pinIndex + 1)
+    }
+
+    /// Pin index from weight index
+    static func weightPinIndex(_ weightIndex: Int) -> Int {
+        return -(weightIndex + 1)
+    }
+
+    private func updateWeights(dt: Float) {
+        let weightStiffness: Float = 50.0
+
+        for wi in weights.indices {
+            // Compute total tension force from all attached band ends
+            var totalForce = SIMD2<Float>.zero
+
+            for (bi, endIdx) in weights[wi].attachedBandEnds {
+                guard bands.indices.contains(bi), bands[bi].active else { continue }
+                let n = bands[bi].positions.count
+
+                // Use adjacent particle (not far anchor) to get actual local tension direction.
+                // When a rope wraps around a weight, the real pull comes from the nearest segment,
+                // not from the far hole. This prevents erratic forces during entanglement.
+                let neighborIdx = endIdx == 0 ? 1 : (n - 2)
+                guard neighborIdx >= 0 && neighborIdx < n else { continue }
+                let neighborPos = bands[bi].positions[neighborIdx]
+
+                let segRestLen = bands[bi].segmentLength * currentTension
+
+                let wPos = SIMD2<Float>(weights[wi].position.x, weights[wi].position.y)
+                let neighborXY = SIMD2<Float>(neighborPos.x, neighborPos.y)
+                let diff = neighborXY - wPos
+                let dist = simd_length(diff)
+
+                // Force proportional to single-segment stretch
+                let stretch = max(0, dist - segRestLen)
+                if dist > 1e-6 && stretch > 0 {
+                    let forceDir = diff / dist
+                    totalForce += forceDir * stretch * weightStiffness
+                }
+            }
+
+            // Static friction threshold
+            let staticThreshold = weightStaticFriction * weights[wi].mass * abs(gravity)
+            let forceLen = simd_length(totalForce)
+            if forceLen < staticThreshold {
+                // Not enough force — damp velocity to zero
+                weights[wi].previousPosition = weights[wi].position
+                continue
+            }
+
+            // Subtract kinetic friction
+            let kineticFriction = weightKineticFriction * weights[wi].mass * abs(gravity)
+            if forceLen > kineticFriction {
+                totalForce -= simd_normalize(totalForce) * kineticFriction
+            }
+
+            // Simple Euler integration (more predictable than Verlet for this)
+            let accel = totalForce / weights[wi].mass
+            var vel = (weights[wi].position - weights[wi].previousPosition) / max(dt, 1e-6)
+            vel = vel * weightDamping + accel * dt
+            // Clamp velocity to prevent crazy movement
+            let maxSpeed: Float = 2.0
+            let speed = simd_length(vel)
+            if speed > maxSpeed { vel = vel * (maxSpeed / speed) }
+
+            weights[wi].previousPosition = weights[wi].position
+            weights[wi].position = weights[wi].position + vel * dt
+
+            // Update all band ends pinned to this weight
+            let wPos3D = SIMD3<Float>(weights[wi].position.x, weights[wi].position.y,
+                                      boardSurfaceZ(x: weights[wi].position.x, y: weights[wi].position.y))
+            let pinIdx = Self.weightPinIndex(wi)
+            for bi in bands.indices {
+                if bands[bi].pinStart == pinIdx {
+                    bands[bi].positions[0] = wPos3D
+                    bands[bi].previousPositions[0] = wPos3D
+                }
+                let lastIdx = bands[bi].positions.count - 1
+                if bands[bi].pinEnd == pinIdx {
+                    bands[bi].positions[lastIdx] = wPos3D
+                    bands[bi].previousPositions[lastIdx] = wPos3D
+                }
+            }
+
+            // Check if settled in target
+            if let target = weights[wi].targetPosition {
+                let distToTarget = simd_length(weights[wi].position - target)
+                weights[wi].settled = distToTarget < weights[wi].targetRadius && speed < weightSettleThreshold
+            }
+        }
+    }
+
+    var allWeightsSettled: Bool {
+        guard isTensionMode && !weights.isEmpty else { return false }
+        return weights.allSatisfy { $0.settled }
+    }
+
+    // MARK: - Rail mode initialization
+
+    func initializeRails(railDefs: [LevelDefinition.RailDef],
+                         cartDefs: [LevelDefinition.CartDef],
+                         stationDefs: [LevelDefinition.StationDef]) {
+        rails = railDefs.map { Rail(points: $0.points.map { $0.simd }) }
+        carts = cartDefs.map { def in
+            Cart(t: def.startT, railIndex: def.railIndex,
+                 radius: def.radius ?? 0.12, mass: def.mass ?? 0.5)
+        }
+        railStations = stationDefs.map { def in
+            Station(railIndex: def.railIndex, t: def.t,
+                    radius: def.radius ?? 0.15, cartIndex: def.cartIndex)
+        }
+    }
+
+    // MARK: - Cart physics
+
+    var allCartsSettled: Bool {
+        guard isRailMode && !carts.isEmpty else { return false }
+        return carts.allSatisfy { $0.settled }
     }
 
     /// Log min distances between band pairs and crossing Z info
@@ -681,13 +952,13 @@ final class VerletSimulator {
                 let hadCollision = resolveCollisionPairs(collisionPairs, injectVelocity: true)
                 for bi in active {
                     let n = bands[bi].positions.count
-                    if let startHole = bands[bi].pinStart {
-                        let hp = holePosition3D(startHole)
+                    if let startPin = bands[bi].pinStart {
+                        let hp = pinPosition3D(startPin)
                         bands[bi].positions[0] = hp
                         bands[bi].previousPositions[0] = hp
                     }
-                    if let endHole = bands[bi].pinEnd {
-                        let hp = holePosition3D(endHole)
+                    if let endPin = bands[bi].pinEnd {
+                        let hp = pinPosition3D(endPin)
                         bands[bi].positions[n - 1] = hp
                         bands[bi].previousPositions[n - 1] = hp
                     }
@@ -715,6 +986,74 @@ final class VerletSimulator {
                     }
                 }
                 if !hadCollision { break }
+            }
+        }
+
+        // Cart collision: push rope particles out of carts, accumulate force on cart
+        if isRailMode && !carts.isEmpty {
+            for ci in carts.indices {
+                guard rails.indices.contains(carts[ci].railIndex) else { continue }
+                let rail = rails[carts[ci].railIndex]
+                let cartPos = rail.position(at: carts[ci].t)
+                let cartTangent = rail.tangent(at: carts[ci].t)
+                let cartR = carts[ci].radius
+                let cartZ: Float = boardSurfaceZ(x: cartPos.x, y: cartPos.y)
+                let cartHeight: Float = cartR * 2.5  // collision cylinder height
+
+                var tangentImpulse: Float = 0
+
+                for bi in active {
+                    let n = bands[bi].positions.count
+                    let ropeR = bands[bi].radius
+                    let minDist = cartR + ropeR
+
+                    for i in 0..<n {
+                        let p = bands[bi].positions[i]
+                        // Only collide if particle is at cart height
+                        if p.z > cartZ + cartHeight + ropeR || p.z < cartZ - ropeR { continue }
+
+                        let dx = p.x - cartPos.x
+                        let dy = p.y - cartPos.y
+                        let dist2D = sqrtf(dx * dx + dy * dy)
+
+                        if dist2D < minDist && dist2D > 1e-6 {
+                            let overlap = minDist - dist2D
+                            let nx = dx / dist2D
+                            let ny = dy / dist2D
+
+                            // Push particle out
+                            let isPinned = (i == 0 && bands[bi].pinStart != nil) || (i == n - 1 && bands[bi].pinEnd != nil)
+                            if !isPinned {
+                                bands[bi].positions[i].x += nx * overlap
+                                bands[bi].positions[i].y += ny * overlap
+                            }
+
+                            // Accumulate force on cart along rail tangent
+                            // Force direction is opposite to push (cart gets pushed by rope)
+                            let forceOnCart = SIMD2<Float>(-nx, -ny) * overlap
+                            tangentImpulse += simd_dot(forceOnCart, cartTangent) * 40.0
+                        }
+                    }
+                }
+
+                // Apply accumulated impulse to cart velocity
+                let accel = tangentImpulse / carts[ci].mass
+                carts[ci].velocity += accel * dt
+                let speed = abs(carts[ci].velocity)
+                if speed > cartMaxSpeed { carts[ci].velocity *= cartMaxSpeed / speed }
+
+                // Move cart
+                carts[ci].velocity *= cartDamping
+                let tVel = carts[ci].velocity / max(rail.totalLength, 1e-6)
+                carts[ci].t = max(0, min(1, carts[ci].t + tVel * dt))
+
+                // Check settled
+                for station in railStations where station.cartIndex == ci {
+                    let stationPos = rails[station.railIndex].position(at: station.t)
+                    let currentPos = rail.position(at: carts[ci].t)
+                    let dist = simd_length(currentPos - stationPos)
+                    carts[ci].settled = dist < station.radius && abs(carts[ci].velocity) < cartSettleThreshold
+                }
             }
         }
 
@@ -824,8 +1163,8 @@ final class VerletSimulator {
         let bendCoupling = max(0, min(bendVelocityCoupling, 1))
         let pinS = bands[bi].pinStart
         let pinE = bands[bi].pinEnd
-        let holeS = pinS.map { holePosition3D($0) }
-        let holeE = pinE.map { holePosition3D($0) }
+        let holeS = pinS.map { pinPosition3D($0) }
+        let holeE = pinE.map { pinPosition3D($0) }
         let cs = bands[bi].crossSection
         let isRect = cs.isRectangular
         let R = bands[bi].radius

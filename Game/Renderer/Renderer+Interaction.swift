@@ -91,6 +91,19 @@ extension Renderer {
         }
     }
 
+    /// Resolve 2D position for a rope endpoint (hole or weight)
+    private func endpointPosition2D(holeIndex: Int) -> SIMD2<Float>? {
+        if holePositions.indices.contains(holeIndex) {
+            return holePositions[holeIndex]
+        }
+        // Weight: index >= holePositions.count
+        let wi = holeIndex - holePositions.count
+        if weightRenderInfos.indices.contains(wi) {
+            return weightRenderInfos[wi].position
+        }
+        return nil
+    }
+
     private func beginDrag(world: SIMD2<Float>) {
         let hitRadius = holeRadius * 1.65
         var best: DragCandidate?
@@ -99,30 +112,43 @@ extension Renderer {
             let endpoints = ropes[ropeIndex]
             let startHoleIndex = endpoints.startHole
             let endHoleIndex = endpoints.endHole
-            guard let startHolePosition = holePositions[safe: startHoleIndex],
-                  let endHolePosition = holePositions[safe: endHoleIndex] else { continue }
+            guard let startHolePosition = endpointPosition2D(holeIndex: startHoleIndex),
+                  let endHolePosition = endpointPosition2D(holeIndex: endHoleIndex) else { continue }
 
-            // Use z-coordinate from simulator to determine which endpoint is on top
+            // In tension mode, don't allow dragging weight-attached ends
+            if isTensionMode {
+                let startIsWeight = startHoleIndex >= holePositions.count
+                let endIsWeight = endHoleIndex >= holePositions.count
+                // Only allow dragging hole-pinned ends
+                if startIsWeight && endIsWeight { continue }
+            }
+
             let startZ = simulator?.endpointZ(bandIndex: ropeIndex, endIndex: 0) ?? 0
             let endZ = simulator?.endpointZ(bandIndex: ropeIndex, endIndex: 1) ?? 0
 
-            let startDistance = simd_length(world - startHolePosition)
-            let startTopAllowed = startZ >= endZ  // higher z = on top
-            let startScore = startDistance + (startTopAllowed ? 0 : hitRadius * 0.75)
-            if startDistance < hitRadius && (best == nil || startScore < best!.score) {
-                best = DragCandidate(ropeIndex: ropeIndex, endIndex: 0, holeIndex: startHoleIndex, score: startScore)
+            let startIsWeight = isTensionMode && startHoleIndex >= holePositions.count
+            if !startIsWeight {
+                let startDistance = simd_length(world - startHolePosition)
+                let startTopAllowed = startZ >= endZ
+                let startScore = startDistance + (startTopAllowed ? 0 : hitRadius * 0.75)
+                if startDistance < hitRadius && (best == nil || startScore < best!.score) {
+                    best = DragCandidate(ropeIndex: ropeIndex, endIndex: 0, holeIndex: startHoleIndex, score: startScore)
+                }
             }
 
-            let endDistance = simd_length(world - endHolePosition)
-            let endTopAllowed = endZ >= startZ
-            let endScore = endDistance + (endTopAllowed ? 0 : hitRadius * 0.75)
-            if endDistance < hitRadius && (best == nil || endScore < best!.score) {
-                best = DragCandidate(ropeIndex: ropeIndex, endIndex: 1, holeIndex: endHoleIndex, score: endScore)
+            let endIsWeight = isTensionMode && endHoleIndex >= holePositions.count
+            if !endIsWeight {
+                let endDistance = simd_length(world - endHolePosition)
+                let endTopAllowed = endZ >= startZ
+                let endScore = endDistance + (endTopAllowed ? 0 : hitRadius * 0.75)
+                if endDistance < hitRadius && (best == nil || endScore < best!.score) {
+                    best = DragCandidate(ropeIndex: ropeIndex, endIndex: 1, holeIndex: endHoleIndex, score: endScore)
+                }
             }
         }
 
         if let best {
-            guard let _ = holePositions[safe: best.holeIndex],
+            guard holePositions.indices.contains(best.holeIndex),
                   holeOccupied.indices.contains(best.holeIndex) else {
                 dragState = nil
                 return

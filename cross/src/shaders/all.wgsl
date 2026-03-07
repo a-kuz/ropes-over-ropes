@@ -864,6 +864,19 @@ fn shadowVisibility(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
     return shadowMapPCF(worldPos, worldN);
 }
 
+fn shadowCompareAt(uv: vec2<f32>, refD: f32) -> f32 {
+    let smDims = textureDimensions(shadow_map);
+    let sampleUV = clamp(uv, vec2<f32>(0.0), vec2<f32>(1.0));
+    let maxCoord = vec2<i32>(i32(smDims.x) - 1, i32(smDims.y) - 1);
+    let tc = clamp(
+        vec2<i32>(sampleUV * vec2<f32>(f32(smDims.x), f32(smDims.y))),
+        vec2<i32>(0),
+        maxCoord,
+    );
+    let sampleDepth = textureLoad(shadow_map, tc, 0);
+    return select(0.0, 1.0, refD <= sampleDepth);
+}
+
 fn shadowMapPCF(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
     if (frame.lightingParams.w < 0.5) { return 1.0; }
 
@@ -880,7 +893,7 @@ fn shadowMapPCF(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
     let shadowType = frame.orthoHalfSize_shadowBias.w;
 
     if (shadowType < 0.5) {
-        return textureSampleCompare(shadow_map, shadow_sampler, suv2, refD);
+        return shadowCompareAt(suv2, refD);
     }
 
     if (shadowType < 1.5) {
@@ -888,7 +901,7 @@ fn shadowMapPCF(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
         let radius = smInv * 4.0;
         for (var i = 0u; i < 32u; i = i + 1u) {
             let p = POISSON_DISK[i];
-            smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + p * radius, refD);
+            smVis += shadowCompareAt(suv2 + p * radius, refD);
         }
         return smoothstep(0.0, 1.0, smVis / 32.0);
     }
@@ -924,7 +937,7 @@ fn shadowMapPCF(worldPos: vec3<f32>, worldN: vec3<f32>) -> f32 {
     var smVis = 0.0;
     for (var i = 0u; i < 32u; i = i + 1u) {
         let p = POISSON_DISK[i];
-        smVis += textureSampleCompare(shadow_map, shadow_sampler, suv2 + p * filterRadius, refD);
+        smVis += shadowCompareAt(suv2 + p * filterRadius, refD);
     }
     let shadow = smoothstep(0.0, 1.0, smVis / 32.0);
     return pow(shadow, 1.2);
@@ -1345,7 +1358,7 @@ fn rope_vertex(
     let pinch = params.y;
 
     let w = sin(u * 3.14159265) * sin(u * 3.14159265);
-    let energy = 0.6;
+    let energy = frame.ropeMatParams4.y;
     let amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
     let wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
     let displaced = position + normalize(normal) * (wave * amp);
@@ -1452,7 +1465,7 @@ fn rope_shadow_vertex(
     let u = uv.x;
     let pinch = params.y;
     let w = sin(u * 3.14159265) * sin(u * 3.14159265);
-    let energy = 0.6;
+    let energy = frame.ropeMatParams4.y;
     let amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
     let wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
     let displaced = position + normalize(normal) * (wave * amp);

@@ -200,6 +200,8 @@ pub fn build_rect(
     rope_contact_points: &[Vec2],
     rope_contact_radius: f32,
     stretch_thinning: f32,
+    cap_scale: f32,
+    cap_smin_k: f32,
 ) -> RopeMesh {
     let point_count = points.len();
     if point_count < 2 {
@@ -494,18 +496,18 @@ pub fn build_rect(
     {
         let cap_seg = profile_count.max(8);
         let cap_rings_count = 6usize;
-        let smooth_k = 0.18;
+        let cap_r = r * cap_scale.max(0.1);
 
         let start_tan = (points[1] - points[0]).normalize();
         let start_hemi = build_hemisphere_smooth(
             points[0],
-            r,
+            cap_r,
             -start_tan,
             color,
             cap_seg,
             cap_rings_count,
             0.0,
-            smooth_k,
+            cap_smin_k,
         );
         let base = vertices.len() as u32;
         vertices.extend_from_slice(&start_hemi.vertices);
@@ -516,13 +518,13 @@ pub fn build_rect(
         let end_tan = (points[point_count - 1] - points[point_count - 2]).normalize();
         let end_hemi = build_hemisphere_smooth(
             points[point_count - 1],
-            r,
+            cap_r,
             end_tan,
             color,
             cap_seg,
             cap_rings_count,
             0.0,
-            smooth_k,
+            cap_smin_k,
         );
         let base = vertices.len() as u32;
         vertices.extend_from_slice(&end_hemi.vertices);
@@ -760,28 +762,35 @@ pub fn build_hemisphere_smooth(
         let t = ring as f32 / rng as f32;
         let blend = t * t;
         let ring_color = color * (1.0 - blend) + dark_color * blend;
-        // smooth union inflation: outward bulge at base, fades toward tip
-        let inflation = if smooth_k > 0.0 {
-            smooth_k * (-t * 4.0).exp()
+        // smin between cylinder (radius r, capped) and sphere (radius r):
+        // at each ring, compute how far the surface extends radially
+        // without smin: ring_r = r * cos(phi), ring_z = r * sin(phi)
+        // with smin: the base ring expands outward by smooth_k * r
+        let ring_z_raw = r * phi.sin();
+        let ring_r_raw = r * phi.cos();
+        // polynomial smin blend: expand base by k*r, fading by exp decay
+        let smin_inflation = if smooth_k > 0.0 {
+            let d = phi / (std::f32::consts::FRAC_PI_2);  // 0..1
+            smooth_k * r * (-d * d * 4.0).exp()
         } else {
             0.0
         };
-        let ring_r = r * (phi.cos() + inflation);
-        let ring_z = r * phi.sin();
+        let ring_r = ring_r_raw + smin_inflation;
+        let ring_z = ring_z_raw;
         for s in 0..seg {
             let theta = (s as f32 / seg as f32) * std::f32::consts::TAU;
             let local_x = theta.cos() * ring_r;
             let local_y = theta.sin() * ring_r;
             let pos = center + right * local_x + forward * local_y + facing * ring_z;
-            // For inflated rings, compute actual surface normal from the gradient of the smin surface
-            let n = if smooth_k > 0.0 && inflation > 1e-5 {
-                // Normal points radially outward with slight forward tilt proportional to phi
-                let radial = (right * theta.cos() + forward * theta.sin()).normalize();
+            // Normal: sphere normal but with slightly more radial weight at the inflated base
+            let n = if smooth_k > 0.0 && smin_inflation > 1e-5 {
+                // Gradient of the inflated surface: mix sphere normal and radial
                 let sphere_n = (right * (theta.cos() * phi.cos())
                     + forward * (theta.sin() * phi.cos())
                     + facing * phi.sin()).normalize();
-                // At base (t=0) use mostly radial; at tip use sphere normal
-                sphere_n.lerp(radial, inflation / (inflation + phi.cos() + 1e-5)).normalize()
+                let radial_n = (right * theta.cos() + forward * theta.sin()).normalize();
+                let w = smin_inflation / (smin_inflation + ring_r_raw + 1e-4);
+                sphere_n.lerp(radial_n, w).normalize()
             } else {
                 (right * (theta.cos() * phi.cos())
                     + forward * (theta.sin() * phi.cos())

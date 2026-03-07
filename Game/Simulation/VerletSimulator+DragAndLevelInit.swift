@@ -22,7 +22,12 @@ extension VerletSimulator {
 
         lowerAnimations.removeValue(forKey: lowerAnimationKey)
 
-        let elev = holeSurfaceZ(originalHole)
+        let elev: Float
+        if originalHole >= 0 {
+            elev = holeSurfaceZ(originalHole)
+        } else {
+            elev = boardSurfaceZ(x: worldPosition.x, y: worldPosition.y)
+        }
         let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
         let liftPos = SIMD3<Float>(worldPosition.x, worldPosition.y, elev + liftHeight)
         bands[bandIndex].positions[idx] = liftPos
@@ -86,6 +91,45 @@ extension VerletSimulator {
         let holeIndex: Int
     }
 
+    struct WeightConfig {
+        let position: SIMD2<Float>
+        let mass: Float
+        let radius: Float
+        let targetPosition: SIMD2<Float>?
+        let targetRadius: Float
+    }
+
+    func initializeWeights(_ configs: [WeightConfig]) {
+        weights = configs.map { config in
+            Weight(
+                position: config.position,
+                previousPosition: config.position,
+                mass: config.mass,
+                radius: config.radius,
+                targetPosition: config.targetPosition,
+                targetRadius: config.targetRadius
+            )
+        }
+    }
+
+    /// Attach a band end to a weight (uses negative pin index convention)
+    func attachBandEndToWeight(bandIndex: Int, endIndex: Int, weightIndex: Int) {
+        let pinIdx = Self.weightPinIndex(weightIndex)
+        if endIndex == 0 {
+            bands[bandIndex].pinStart = pinIdx
+        } else {
+            bands[bandIndex].pinEnd = pinIdx
+        }
+        weights[weightIndex].attachedBandEnds.append((bandIndex: bandIndex, endIndex: endIndex))
+
+        // Position the band end at the weight
+        let wPos = SIMD3<Float>(weights[weightIndex].position.x, weights[weightIndex].position.y,
+                                boardSurfaceZ(x: weights[weightIndex].position.x, y: weights[weightIndex].position.y))
+        let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
+        bands[bandIndex].positions[idx] = wPos
+        bands[bandIndex].previousPositions[idx] = wPos
+    }
+
     func initializeLevel(ropeConfigs: [RopeConfig], actions: [LevelAction]) {
         bands.removeAll()
         currentTension = ropeTension
@@ -101,7 +145,7 @@ extension VerletSimulator {
             return
         }
 
-        Self.logger.info("Replaying \(actions.count) actions")
+        Self.logger.info("Replaying \(actions.count) actions, bands.count=\(self.bands.count), weights.count=\(self.weights.count), holePositions.count=\(self.holePositions.count), isTensionMode=\(self.isTensionMode)")
 
         let initStart = CACurrentMediaTime()
         var pinTime: Double = 0
@@ -113,10 +157,25 @@ extension VerletSimulator {
             let t0 = CACurrentMediaTime()
             switch action.type {
             case .pin:
-                if action.endIndex == 0 {
-                    bands[action.ropeIndex].pinStart = action.holeIndex
+                let resolvedIndex: Int
+                if isTensionMode && action.holeIndex >= holePositions.count {
+                    // Weight pin: convert to negative index
+                    let wi = action.holeIndex - holePositions.count
+                    resolvedIndex = Self.weightPinIndex(wi)
+                    if weights.indices.contains(wi) {
+                        weights[wi].attachedBandEnds.append((bandIndex: action.ropeIndex, endIndex: action.endIndex))
+                    }
                 } else {
-                    bands[action.ropeIndex].pinEnd = action.holeIndex
+                    resolvedIndex = action.holeIndex
+                }
+                guard bands.indices.contains(action.ropeIndex) else {
+                    Self.logger.error("[PIN] ropeIndex \(action.ropeIndex) out of range (bands.count=\(self.bands.count))")
+                    continue
+                }
+                if action.endIndex == 0 {
+                    bands[action.ropeIndex].pinStart = resolvedIndex
+                } else {
+                    bands[action.ropeIndex].pinEnd = resolvedIndex
                 }
                 if bands[action.ropeIndex].pinStart != nil && bands[action.ropeIndex].pinEnd != nil {
                     pinAndSettle(bandIndex: action.ropeIndex)
@@ -146,8 +205,8 @@ extension VerletSimulator {
         guard let startHole = bands[bandIndex].pinStart,
               let endHole = bands[bandIndex].pinEnd else { return }
 
-        let p0 = holePosition3D(startHole)
-        let p1 = holePosition3D(endHole)
+        let p0 = pinPosition3D(startHole)
+        let p1 = pinPosition3D(endHole)
         let n = bands[bandIndex].positions.count
 
         for i in 0..<n {

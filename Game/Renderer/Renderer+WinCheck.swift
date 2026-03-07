@@ -3,6 +3,7 @@ import Foundation
 
 extension Renderer {
     func removeUntangledRopes() {
+        if isTensionMode || isRailMode { return }  // No rope removal in tension/rail mode
         var removed = true
         while removed {
             removed = false
@@ -156,6 +157,24 @@ extension Renderer {
         let t = (d.x * d2.y - d.y * d2.x) / cross
         let u = (d.x * d1.y - d.y * d1.x) / cross
         return t > 0.01 && t < 0.99 && u > 0.01 && u < 0.99
+    }
+
+    func checkTensionModeComplete() {
+        guard isTensionMode, !tensionLevelCompleted else { return }
+        guard let sim = simulator, sim.allWeightsSettled else { return }
+        tensionLevelCompleted = true
+        Self.logger.info("[TENSION] All weights settled — level complete!")
+        Haptics.success()
+        onLevelComplete?()
+    }
+
+    func checkRailModeComplete() {
+        guard isRailMode, !railLevelCompleted else { return }
+        guard let sim = simulator, sim.allCartsSettled else { return }
+        railLevelCompleted = true
+        Self.logger.info("[RAIL] All carts at stations — level complete!")
+        Haptics.success()
+        onLevelComplete?()
     }
 
     private func winDiagOccupiedHoles() -> String {

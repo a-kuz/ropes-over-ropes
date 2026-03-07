@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, user-scalable=no">
     <title>UzlsFour</title>
     <style>
         html, body {
@@ -12,11 +12,16 @@
             height: 100%;
             overflow: hidden;
             background: #1a1a1a;
+            overscroll-behavior: none;
+            position: fixed;
+            inset: 0;
         }
         canvas {
             display: block;
-            width: 100% !important;
-            height: 100% !important;
+            position: fixed;
+            inset: 0;
+            width: 100vw !important;
+            height: 100dvh !important;
             touch-action: none;
             -webkit-touch-callout: none;
             -webkit-user-select: none;
@@ -49,6 +54,117 @@
             font: 14px/1 -apple-system, system-ui, sans-serif;
             letter-spacing: 0.02em;
         }
+        #top-overlay {
+            position: fixed;
+            top: 12px;
+            left: 12px;
+            right: 12px;
+            display: none;
+            align-items: flex-start;
+            justify-content: space-between;
+            z-index: 80;
+            pointer-events: none;
+            font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        }
+        #top-left-card {
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+            padding: 8px 12px;
+            border-radius: 12px;
+            background: rgba(0, 0, 0, 0.58);
+            color: #fff;
+            pointer-events: auto;
+        }
+        #hud-level {
+            font-size: 18px;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        #hud-fps, #hud-moves {
+            font-size: 11px;
+            line-height: 1.1;
+            color: rgba(255,255,255,0.72);
+        }
+        #top-right-actions {
+            display: flex;
+            gap: 6px;
+            pointer-events: auto;
+        }
+        .hud-btn {
+            width: 44px;
+            height: 44px;
+            border: 0;
+            border-radius: 22px;
+            background: rgba(0, 0, 0, 0.58);
+            color: #fff;
+            font-size: 16px;
+            font-weight: 700;
+            -webkit-appearance: none;
+            appearance: none;
+        }
+        #victory-overlay {
+            position: fixed;
+            inset: 0;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            background: rgba(0, 0, 0, 0.38);
+            z-index: 90;
+            padding: 24px;
+            box-sizing: border-box;
+            pointer-events: auto;
+        }
+        #victory-card {
+            min-width: min(320px, calc(100vw - 48px));
+            max-width: 420px;
+            border-radius: 20px;
+            padding: 24px 28px;
+            box-sizing: border-box;
+            background: rgba(18, 18, 22, 0.78);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            color: #fff;
+            text-align: center;
+            font-family: -apple-system, BlinkMacSystemFont, system-ui, sans-serif;
+        }
+        #victory-title {
+            font-size: 34px;
+            font-weight: 700;
+            line-height: 1.1;
+        }
+        #victory-subtitle {
+            margin-top: 4px;
+            font-size: 18px;
+            color: rgba(255,255,255,0.72);
+        }
+        #victory-stars {
+            margin-top: 14px;
+            font-size: 34px;
+            line-height: 1;
+            letter-spacing: 0.06em;
+            color: rgb(255, 210, 50);
+        }
+        #victory-percentile {
+            display: none;
+            margin-top: 10px;
+            font-size: 15px;
+            color: rgba(200,220,255,0.9);
+        }
+        #victory-next {
+            margin-top: 16px;
+            width: 100%;
+            min-height: 46px;
+            border: 0;
+            border-radius: 22px;
+            background: rgb(100, 160, 255);
+            color: #fff;
+            font-size: 20px;
+            font-weight: 700;
+            font-family: inherit;
+            -webkit-appearance: none;
+            appearance: none;
+        }
     </style>
 </head>
 <body>
@@ -56,11 +172,42 @@
         <div class="spinner"></div>
         <span>Loading…</span>
     </div>
+    <div id="top-overlay">
+        <div id="top-left-card">
+            <div id="hud-level">Level 1</div>
+            <div id="hud-fps">60 fps</div>
+            <div id="hud-moves">Moves: 0</div>
+        </div>
+        <div id="top-right-actions">
+            <button class="hud-btn" id="hud-prev" type="button">◀</button>
+            <button class="hud-btn" id="hud-restart" type="button">↻</button>
+            <button class="hud-btn" id="hud-next" type="button">▶</button>
+        </div>
+    </div>
+    <div id="victory-overlay">
+        <div id="victory-card">
+            <div id="victory-title">Level 1</div>
+            <div id="victory-subtitle">Complete</div>
+            <div id="victory-stars">★ ★ ★</div>
+            <div id="victory-percentile"></div>
+            <button id="victory-next" type="button">Level 2 ▶</button>
+        </div>
+    </div>
     <script type="module">
         import init from './uzls.js';
         document.addEventListener('contextmenu', e => e.preventDefault());
         document.addEventListener('gesturestart', e => e.preventDefault());
         document.addEventListener('gesturechange', e => e.preventDefault());
+        window.__uzlsAction = null;
+        document.getElementById('hud-prev').addEventListener('click', () => { window.__uzlsAction = 'prev'; });
+        document.getElementById('hud-restart').addEventListener('click', () => { window.__uzlsAction = 'restart'; });
+        document.getElementById('hud-next').addEventListener('click', () => { window.__uzlsAction = 'next'; });
+        document.getElementById('victory-next').addEventListener('click', () => {
+            const current = Number.parseInt(localStorage.getItem('uzls_level') || '1', 10);
+            localStorage.setItem('uzls_level', String(Math.max(1, current + 1)));
+            document.getElementById('victory-overlay').style.display = 'none';
+            location.reload();
+        });
         init().then(() => {
             const loader = document.getElementById('loader');
             loader.classList.add('hidden');

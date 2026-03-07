@@ -122,6 +122,7 @@ pub struct VisualSettings {
     pub cartoon_mode: f32,
     pub cartoon_levels: f32,
     pub square_cross_section: bool,
+    pub wave_energy: f32,
 }
 
 impl Default for VisualSettings {
@@ -136,6 +137,7 @@ impl Default for VisualSettings {
             cartoon_mode: 0.0,
             cartoon_levels: 4.0,
             square_cross_section: false,
+            wave_energy: 0.0,
         }
     }
 }
@@ -190,15 +192,17 @@ pub struct CapSettings {
     pub segments: usize,
     pub rings: usize,
     pub darken: f32,
+    pub smin_k: f32,
 }
 
 impl Default for CapSettings {
     fn default() -> Self {
         Self {
-            radius_scale: 0.8660302,
+            radius_scale: 1.0,
             segments: 25,
-            rings: 3,
-            darken: 0.81330067,
+            rings: 6,
+            darken: 0.0,
+            smin_k: 0.3,
         }
     }
 }

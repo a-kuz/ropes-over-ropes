@@ -154,7 +154,7 @@ pub fn build_frame_uniforms(
         worm_params2: worm.params2,
         worm_params3: worm.params3,
         worm_params4: worm.params4,
-        rope_mat_params4: [rope_mat.env_reflect, 0.0, 0.0, 0.0],
+        rope_mat_params4: [rope_mat.env_reflect, visual.wave_energy, 0.0, 0.0],
     }
 }
 

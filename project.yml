@@ -17,47 +17,6 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
       SWIFT_COMPILATION_MODE: wholemodule
 targets:
-  UzlsFour:
-    type: application
-    platform: [iOS, macOS]
-    deploymentTarget:
-      iOS: "17.0"
-      macOS: "14.0"
-    sources:
-      - path: App
-      - path: Game
-      - path: Shaders
-    settings:
-      base:
-        DEVELOPMENT_TEAM: NW2CSMF97Y
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: ""
-        PRODUCT_BUNDLE_IDENTIFIER: com.uzls.four
-        MARKETING_VERSION: 1.0.0
-        CURRENT_PROJECT_VERSION: 1
-        SWIFT_VERSION: 6.0
-        GENERATE_INFOPLIST_FILE: YES
-        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
-        "INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphoneos*]": YES
-        "INFOPLIST_KEY_UILaunchScreen_Generation[sdk=iphonesimulator*]": YES
-        "INFOPLIST_KEY_UIStatusBarHidden[sdk=iphoneos*]": YES
-        "INFOPLIST_KEY_UIStatusBarHidden[sdk=iphonesimulator*]": YES
-        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphoneos*]": NO
-        "INFOPLIST_KEY_UIRequiresFullScreen[sdk=iphonesimulator*]": NO
-        "INFOPLIST_KEY_UIInterfaceOrientation[sdk=iphoneos*]": UIInterfaceOrientationPortrait
-        "INFOPLIST_KEY_UIInterfaceOrientation[sdk=iphonesimulator*]": UIInterfaceOrientationPortrait
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphoneos*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations[sdk=iphonesimulator*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=iphoneos*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        "INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad[sdk=iphonesimulator*]": "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
-        "INFOPLIST_KEY_CADisableMinimumFrameDuration[sdk=iphoneos*]": YES
-        "INFOPLIST_KEY_CADisableMinimumFrameDuration[sdk=iphonesimulator*]": YES
-        "INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone[sdk=iphoneos*]": YES
-        "INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone[sdk=iphonesimulator*]": YES
-        "TARGETED_DEVICE_FAMILY[sdk=iphoneos*]": "1,2"
-        "TARGETED_DEVICE_FAMILY[sdk=iphonesimulator*]": "1,2"
-        UIFileSharingEnabled: YES
-        LSSupportsOpeningDocumentsInPlace: YES
   UzlsFour26:
     type: application
     platform: iOS
@@ -98,49 +57,22 @@ targets:
     sources:
       - path: Tests
     dependencies:
-      - target: UzlsFour_${platform}
+      - target: UzlsFour26
     settings:
       base:
         SWIFT_VERSION: 6.0
         GENERATE_INFOPLIST_FILE: YES
 schemes:
-  UzlsFour_iOS:
-    build:
-      targets:
-        UzlsFour_iOS: all
-    run:
-      config: Debug
-    test:
-      config: Debug
-      targets:
-        - UzlsFourTests_iOS
-    profile:
-      config: Release
-    analyze:
-      config: Debug
-    archive:
-      config: Release
   UzlsFour26:
     build:
       targets:
         UzlsFour26: all
     run:
       config: Debug
-    profile:
-      config: Release
-    analyze:
-      config: Debug
-    archive:
-      config: Release
-  UzlsFour_macOS:
-    build:
-      targets:
-        UzlsFour_macOS: all
-    run:
-      config: Debug
     test:
       config: Debug
       targets:
+        - UzlsFourTests_iOS
         - UzlsFourTests_macOS
     profile:
       config: Release
