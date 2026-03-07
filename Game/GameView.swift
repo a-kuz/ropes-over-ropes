@@ -51,6 +51,9 @@ class GameController: ObservableObject {
     @Published var bendVelocityCoupling: Float = Defaults.bendVelocityCoupling {
         didSet { renderer?.physicsBendVelocityCoupling = bendVelocityCoupling; persist("p.bvc", bendVelocityCoupling) }
     }
+    @Published var broadphaseRebuildInterval: Float = 3 {
+        didSet { renderer?.physicsBroadphaseInterval = Int(broadphaseRebuildInterval); persist("p.bph", broadphaseRebuildInterval) }
+    }
 
     // Drag
     @Published var dragHeight: Float = Defaults.dragHeight {
@@ -134,6 +137,12 @@ class GameController: ObservableObject {
     @Published var shadowsEnabled: Bool = true {
         didSet { renderer?.shadowsEnabled = shadowsEnabled; persist("v.sen", shadowsEnabled ? 1 : 0) }
     }
+    @Published var shadowMapSize: Int = 1024 {
+        didSet { renderer?.shadowMapSize = shadowMapSize; persist("v.sms", Float(shadowMapSize)) }
+    }
+    @Published var bloomEnabled: Bool = true {
+        didSet { renderer?.bloomEnabled = bloomEnabled; persist("v.blen", bloomEnabled ? 1 : 0) }
+    }
 
     private func updateLightDir() {
         var d = SIMD3<Float>(lightDirX, lightDirY, lightDirZ)
@@ -166,6 +175,12 @@ class GameController: ObservableObject {
     }
     @Published var cartoonEdgeSmooth: Float = 0.5 {
         didSet { renderer?.cartoonEdgeSmooth = cartoonEdgeSmooth; persist("v.ces", cartoonEdgeSmooth) }
+    }
+    @Published var ropeFlatNormals: Bool = false {
+        didSet { renderer?.ropeFlatNormals = ropeFlatNormals; persist("v.rfn", ropeFlatNormals ? 1 : 0) }
+    }
+    @Published var pcssPenumbraScale: Float = 80.0 {
+        didSet { renderer?.pcssPenumbraScale = pcssPenumbraScale; persist("v.pps", pcssPenumbraScale) }
     }
     enum TableStyle: Int, CaseIterable {
         case wood = 0
@@ -359,6 +374,12 @@ class GameController: ObservableObject {
     }
     @Published var profilerSummary: String = ""
 
+    struct BraidTargetEntry {
+        var strandColor: SIMD3<Float>
+        var targetSlot: Int  // 0-based bottom slot index
+    }
+    @Published var braidTargetEntries: [BraidTargetEntry] = []
+
     private var fpsTimer: Timer?
 
     private func persist(_ key: String, _ v: Float) { UserDefaults.standard.set(v, forKey: key) }
@@ -395,6 +416,7 @@ class GameController: ObservableObject {
         if let v = f("p.stl") { settleSteps = v }
         if let v = f("p.bcp") { bendCompliance = v }
         if let v = f("p.bvc") { bendVelocityCoupling = v }
+        if let v = f("p.bph") { broadphaseRebuildInterval = v }
         if let v = f("p.drg") { dragHeight = v }
         if let v = f("p.lft") { liftHeight = v }
         if let v = f("p.rtn") { ropeTension = v }
@@ -423,6 +445,8 @@ class GameController: ObservableObject {
         if let v = f("v.sd") { shadowDarkness = v }
         if let v = f("v.lsz") { lightSize = v }
         if let v = f("v.sen") { shadowsEnabled = v > 0.5 }
+        if let v = f("v.sms"), v > 0 { shadowMapSize = Int(v) }
+        if let v = f("v.blen") { bloomEnabled = v > 0.5 }
         if let v = f("v.blm") { bloomStrength = v }
         if let v = f("v.crt") { cartoonShaderEnabled = v > 0.5 }
         if let v = f("v.cex") { cartoonExposure = v }
@@ -432,6 +456,8 @@ class GameController: ObservableObject {
         if let v = f("v.csb") { cartoonShadowBright = v }
         if let v = f("v.cwp") { cartoonWrap = v }
         if let v = f("v.ces") { cartoonEdgeSmooth = v }
+        if let v = f("v.rfn") { ropeFlatNormals = v > 0.5 }
+        if let v = f("v.pps") { pcssPenumbraScale = v }
         if let v = f("v.tst") { tableStyle = TableStyle(rawValue: Int(v)) ?? .wood }
         if let v = f("v.tc1r") { tableColor1R = v }
         if let v = f("v.tc1g") { tableColor1G = v }
@@ -486,9 +512,9 @@ class GameController: ObservableObject {
     }
 
     private static let allKeys = [
-        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.bcp", "p.bvc", "p.drg", "p.lft", "p.rtn", "p.bel", "p.snd", "p.zoom", "p.lvl",
+        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.bcp", "p.bvc", "p.bph", "p.drg", "p.lft", "p.rtn", "p.bel", "p.snd", "p.zoom", "p.lvl",
         "v.prf", "v.hrs", "v.htr", "v.htg", "v.htb", "v.hta", "v.hsg", "v.rrs", "v.stn", "v.exp", "v.lit", "v.ldx", "v.ldy", "v.ldz",
-        "v.stp", "v.amb", "v.sb", "v.sd", "v.lsz", "v.sen", "v.blm", "v.crt", "v.cex", "v.cbl", "v.ced", "v.clv", "v.csb", "v.cwp", "v.ces",
+        "v.stp", "v.amb", "v.sb", "v.sd", "v.lsz", "v.sen", "v.sms", "v.blen", "v.blm", "v.crt", "v.cex", "v.cbl", "v.ced", "v.clv", "v.csb", "v.cwp", "v.ces",
         "v.tst", "v.tc1r", "v.tc1g", "v.tc1b", "v.tc2r", "v.tc2g", "v.tc2b",
         "v.wsd", "v.wbr", "v.wps", "v.crs", "v.csg", "v.crg", "v.cdk",
         "v.rmat", "v.rgls", "v.rdwp", "v.rsss", "v.redg", "v.rsat",
@@ -644,6 +670,20 @@ class GameController: ObservableObject {
         renderer.loadLevel(levelId: renderer.currentLevelId)
         levelStartTime = Date()
         percentile = nil
+        updateBraidTargets()
+    }
+
+    private func updateBraidTargets() {
+        guard let renderer = renderer, renderer.isBraidMode else {
+            braidTargetEntries = []
+            return
+        }
+        braidTargetEntries = renderer.ropes.indices.compactMap { i in
+            guard i < renderer.braidTargets.count else { return nil }
+            let targetHole = renderer.braidTargets[i]
+            let slot = targetHole - renderer.braidBottomHoleStart
+            return BraidTargetEntry(strandColor: renderer.ropes[i].color, targetSlot: slot)
+        }
     }
 
     func loadLevel(_ id: Int) {
@@ -652,6 +692,7 @@ class GameController: ObservableObject {
         currentLevel = id
         levelStartTime = Date()
         percentile = nil
+        updateBraidTargets()
     }
 
     func loadLevelDefinition(_ def: LevelDefinition) {
@@ -660,6 +701,7 @@ class GameController: ObservableObject {
         currentLevel = def.id
         levelStartTime = Date()
         percentile = nil
+        updateBraidTargets()
     }
 
     func dumpSettingsToClipboard() -> Bool {
@@ -922,6 +964,74 @@ class GameController: ObservableObject {
         try? data.write(to: url)
         return url
     }
+
+    // MARK: - Drag Recording
+
+    @Published var isRecording: Bool = false
+
+    func toggleRecording() {
+        guard let renderer = renderer else { return }
+        if isRecording {
+            // Stop recording, export to clipboard
+            isRecording = false
+            renderer.isRecording = false
+            exportRecordedActions()
+        } else {
+            // Start recording
+            renderer.recordedActions.removeAll()
+            renderer.isRecording = true
+            isRecording = true
+        }
+    }
+
+    private func exportRecordedActions() {
+        guard let renderer = renderer else { return }
+        let actions = renderer.recordedActions
+        guard !actions.isEmpty else { return }
+
+        var lines = [String]()
+        lines.append("// Recorded \(actions.count) drags on level \(renderer.currentLevelId)")
+        lines.append("// Holes: \(renderer.holePositions.count)")
+
+        // Print hole positions for reference
+        for (i, h) in renderer.holePositions.enumerated() {
+            lines.append("// hole\(i) = (\(String(format:"%.3f",h.x)), \(String(format:"%.3f",h.y)))")
+        }
+
+        // Print ropes
+        for (i, r) in renderer.ropes.enumerated() {
+            lines.append("// rope\(i): \(r.startHole) → \(r.endHole)")
+        }
+
+        lines.append("")
+        lines.append("let dragSequence: [(rope: Int, end: Int, hole: Int)] = [")
+        for a in actions {
+            lines.append("    (\(a.ropeIndex), \(a.endIndex), \(a.toHole)),  // from hole \(a.fromHole)")
+        }
+        lines.append("]")
+
+        // Also dump particle positions for the braid shape
+        if let sim = renderer.simulator {
+            lines.append("")
+            lines.append("// Particle positions after braid:")
+            for (bi, band) in sim.bands.enumerated() where band.active {
+                let n = band.positions.count
+                lines.append("// band\(bi): \(n) particles")
+                for pi in stride(from: 0, to: n, by: max(1, n/10)) {
+                    let p = band.positions[pi]
+                    lines.append("//   [\(pi)] (\(String(format:"%.3f",p.x)), \(String(format:"%.3f",p.y)), \(String(format:"%.4f",p.z)))")
+                }
+            }
+        }
+
+        let text = lines.joined(separator: "\n")
+        #if os(iOS)
+        UIPasteboard.general.string = text
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+        #endif
+    }
 }
 
 @MainActor
@@ -956,6 +1066,7 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.physicsGravity = controller.gravity
     renderer.physicsDamping = controller.damping
     renderer.physicsConstraintIterations = Int(controller.constraintIterations)
+    renderer.physicsBroadphaseInterval = Int(controller.broadphaseRebuildInterval)
     renderer.physicsSettleSteps = Int(controller.settleSteps)
     renderer.physicsBendCompliance = controller.bendCompliance
     renderer.physicsBendVelocityCoupling = controller.bendVelocityCoupling
@@ -981,6 +1092,8 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.shadowDarkness = controller.shadowDarkness
     renderer.lightSize = controller.lightSize
     renderer.shadowsEnabled = controller.shadowsEnabled
+    renderer.shadowMapSize = controller.shadowMapSize
+    renderer.bloomEnabled = controller.bloomEnabled
     renderer.bloomStrength = controller.bloomStrength
     renderer.cartoonShaderEnabled = controller.cartoonShaderEnabled
     renderer.cartoonExposure = controller.cartoonExposure
@@ -990,6 +1103,8 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.cartoonShadowBright = controller.cartoonShadowBright
     renderer.cartoonWrap = controller.cartoonWrap
     renderer.cartoonEdgeSmooth = controller.cartoonEdgeSmooth
+    renderer.ropeFlatNormals = controller.ropeFlatNormals
+    renderer.pcssPenumbraScale = controller.pcssPenumbraScale
     renderer.tableStyle = controller.tableStyle.rawValue
     renderer.tableColor1 = SIMD3<Float>(controller.tableColor1R, controller.tableColor1G, controller.tableColor1B)
     renderer.tableColor2 = SIMD3<Float>(controller.tableColor2R, controller.tableColor2G, controller.tableColor2B)

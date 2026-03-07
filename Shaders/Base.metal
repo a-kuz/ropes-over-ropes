@@ -775,7 +775,13 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float lightI = frame.lightDir_intensity.w;
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
-    float3 n = normalize(in.normal);
+    float3 n;
+    if (frame.cartoonParams.w > 0.5) {
+        float3 gn = normalize(cross(dfdx(in.worldPos), dfdy(in.worldPos)));
+        n = dot(gn, v) > 0.0 ? gn : -gn;
+    } else {
+        n = normalize(in.normal);
+    }
     float taut = saturate(in.params.x);
     float pinch = saturate(in.params.y);
     float repel = in.params.z < 0.0 ? 0.0 : saturate(in.params.z);
@@ -1184,10 +1190,7 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
     }
 
     float lightSize = max(0.001, frame.lightingParams.z);
-    float nearPlane = 0.01;
-    float blockerSearchRadius = lightSize * (depthRef - nearPlane) / depthRef;
-    blockerSearchRadius *= 0.65;
-    blockerSearchRadius = clamp(blockerSearchRadius, invSize.x * 1.5, invSize.x * 10.0);
+    float blockerSearchRadius = clamp(lightSize * 0.5, invSize.x * 2.0, invSize.x * 12.0);
 
     float avgBlockerDepth = findBlocker(shadowMap, uv, depthRef, blockerSearchRadius);
 
@@ -1195,11 +1198,13 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
         return 1.0;
     }
 
-    float penumbraRadius = lightSize * (depthRef - avgBlockerDepth) / avgBlockerDepth;
-    penumbraRadius = max(0.0001, penumbraRadius);
+    // Orthographic light: penumbra = lightSize * receiverDistance (no perspective divide).
+    // Use raw ndc.z (no bias) so bias does not shrink the penumbra radius.
+    float receiverDist = max(0.0, ndc.z - avgBlockerDepth);
+    float penumbraScale = max(1.0, frame.cartoonParams.z);
+    float penumbraRadius = lightSize * receiverDist * penumbraScale;
 
-    float filterRadius = penumbraRadius * 1.4;
-    filterRadius = clamp(filterRadius, invSize.x * 3.0, invSize.x * 20.0);
+    float filterRadius = clamp(penumbraRadius, invSize.x * 1.0, invSize.x * 32.0);
 
     float shadow = pcssFilter(shadowMap, uv, depthRef, filterRadius);
 

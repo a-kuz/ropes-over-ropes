@@ -4,7 +4,7 @@ import MetalKit
 // MARK: - FireworksView
 
 struct FireworksView: View {
-    let variant: Int   // 0, 1, or 2
+    let variant: Int   // 0, 1, 2, or 3
 
     var body: some View {
         _FireworksRepresentable(variant: variant)
@@ -45,6 +45,9 @@ private func _setupMTKView(_ view: MTKView, coordinator: FireworksCoordinator) {
     view.enableSetNeedsDisplay = false
     view.preferredFramesPerSecond = 60
     view.clearColor = MTLClearColorMake(0, 0, 0, 1)
+#if canImport(UIKit)
+    view.contentScaleFactor = 0.5
+#endif
     coordinator.setup(view: view)
 }
 
@@ -70,6 +73,7 @@ final class FireworksCoordinator: NSObject, MTKViewDelegate, @unchecked Sendable
         switch variant {
         case 1:  fragName = "fireworks2_fragment"
         case 2:  fragName = "fireworks3_fragment"
+        case 3:  fragName = "fireworks4_fragment"
         default: fragName = "fireworks_fragment"
         }
 

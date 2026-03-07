@@ -70,6 +70,42 @@ extension VerletSimulator {
         dragTargetPos = nil
     }
 
+    /// Programmatically move a band end to a different hole with animation (used for braid swap)
+    func swapEndToHole(bandIndex: Int, endIndex: Int, holeIndex: Int) {
+        guard bands.indices.contains(bandIndex) else { return }
+        wakeUp()
+
+        let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
+        let currentPos = bands[bandIndex].positions[idx]
+        let holeXY = holePositions[holeIndex]
+        let holeElev = holeSurfaceZ(holeIndex)
+        let aboveHole = SIMD3<Float>(holeXY.x, holeXY.y, holeElev + liftHeight)
+        let dist = simd_length(currentPos - aboveHole)
+        let returnDuration = min(max(dist * 0.9, 0.25), 0.8)
+
+        // Remove current pin
+        if endIndex == 0 {
+            bands[bandIndex].pinStart = nil
+        } else {
+            bands[bandIndex].pinEnd = nil
+        }
+
+        // Lift slightly to clear other strands
+        let liftPos = SIMD3<Float>(currentPos.x, currentPos.y, currentPos.z + liftHeight * 0.5)
+        bands[bandIndex].positions[idx] = liftPos
+        bands[bandIndex].previousPositions[idx] = liftPos
+
+        let key = LowerAnimationKey(bandIndex: bandIndex, endIndex: endIndex)
+        lowerAnimations[key] = LowerAnimation(
+            bandIndex: bandIndex,
+            endIndex: endIndex,
+            targetHole: holeIndex,
+            startPos: liftPos,
+            returnPos: aboveHole,
+            returnDuration: returnDuration
+        )
+    }
+
     func endpointZ(bandIndex: Int, endIndex: Int) -> Float {
         guard bands.indices.contains(bandIndex) else { return 0 }
         let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
@@ -237,7 +273,7 @@ extension VerletSimulator {
         Self.logger.warning("[PIN-SETTLE-AFTER] band=\(bandIndex) actualLen=\(String(format:"%.4f",actualLen)) vs restLen=\(String(format:"%.4f",totalLen))")
     }
 
-    private func simulateDrag(bandIndex: Int, endIndex: Int, toHole: Int) {
+    func simulateDrag(bandIndex: Int, endIndex: Int, toHole: Int) {
         let idx = endIndex == 0 ? 0 : bands[bandIndex].positions.count - 1
         let fromPos = bands[bandIndex].positions[idx]
         let toPos = holePosition3D(toHole)

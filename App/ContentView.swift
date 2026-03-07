@@ -1,9 +1,85 @@
 import SwiftUI
 
+struct BraidDebugOverlay: View {
+    let debug: LevelGenerator.BraidDebugGeometry
+
+    var body: some View {
+        GeometryReader { geo in
+            let w = geo.size.width
+            let h = geo.size.height
+            let scale = min(w, h) / 2.2 // world ≈ [-1.1, 1.1]
+            let cx = w / 2
+            let cy = h / 2
+
+            Canvas { ctx, size in
+                func toScreen(_ p: SIMD2<Float>) -> CGPoint {
+                    CGPoint(x: cx + CGFloat(p.x) * scale, y: cy - CGFloat(p.y) * scale)
+                }
+
+                // Sigma axis (yellow line)
+                let axisStart = toScreen(debug.mid - debug.sigma * debug.sigmaLen * 0.6)
+                let axisEnd = toScreen(debug.mid + debug.sigma * debug.sigmaLen * 0.6)
+                var axisPath = Path()
+                axisPath.move(to: axisStart)
+                axisPath.addLine(to: axisEnd)
+                ctx.stroke(axisPath, with: .color(.yellow.opacity(0.6)), lineWidth: 2)
+
+                // Mid point (white dot)
+                let midPt = toScreen(debug.mid)
+                ctx.fill(Path(ellipseIn: CGRect(x: midPt.x-4, y: midPt.y-4, width: 8, height: 8)),
+                         with: .color(.white))
+
+                // Centers (red dots)
+                for c in debug.centers {
+                    let p = toScreen(c)
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x-5, y: p.y-5, width: 10, height: 10)),
+                             with: .color(.red.opacity(0.8)))
+                }
+
+                // Contact points A (green) and B (cyan)
+                for c in debug.contactsA {
+                    let p = toScreen(c)
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x-4, y: p.y-4, width: 8, height: 8)),
+                             with: .color(.green.opacity(0.8)))
+                }
+                for c in debug.contactsB {
+                    let p = toScreen(c)
+                    ctx.fill(Path(ellipseIn: CGRect(x: p.x-4, y: p.y-4, width: 8, height: 8)),
+                             with: .color(.cyan.opacity(0.8)))
+                }
+
+                // Drag paths (arrows)
+                for (di, dt) in debug.dragTargets.enumerated() {
+                    let from = toScreen(dt.from)
+                    let to = toScreen(dt.to)
+                    var dragPath = Path()
+                    dragPath.move(to: from)
+                    dragPath.addLine(to: to)
+                    let color: Color = dt.ropeIndex == 0 ? .orange : .purple
+                    ctx.stroke(dragPath, with: .color(color.opacity(0.7)), lineWidth: 2)
+                    ctx.fill(Path(ellipseIn: CGRect(x: to.x-3, y: to.y-3, width: 6, height: 6)),
+                             with: .color(color))
+                    // Drag index label
+                    ctx.draw(Text("\(di)").font(.system(size: 10, weight: .bold)).foregroundColor(color),
+                             at: CGPoint(x: (from.x + to.x) / 2, y: (from.y + to.y) / 2 - 8))
+                }
+
+                // Hole numbers
+                for (i, h) in debug.holes.enumerated() {
+                    let p = toScreen(h)
+                    ctx.draw(Text("\(i)").font(.system(size: 11, weight: .bold)).foregroundColor(.white),
+                             at: CGPoint(x: p.x, y: p.y - 12))
+                }
+            }
+        }
+    }
+}
+
 enum GameMode: String, CaseIterable {
     case untangle = "Untangle"
     case tension = "Tension"
     case rail = "Rail"
+    case braid = "Braid"
 }
 
 struct ContentView: View {
@@ -57,6 +133,12 @@ struct ContentView: View {
                     .ignoresSafeArea()
             }
 
+            // Braid debug overlay
+            if let debug = LevelGenerator.lastBraidDebug {
+                BraidDebugOverlay(debug: debug)
+                    .allowsHitTesting(false)
+            }
+
             if !gameController.showLevelComplete {
             VStack(spacing: 0) {
                 HStack(spacing: 8) {
@@ -83,6 +165,15 @@ struct ContentView: View {
                             .clipShape(Circle())
                     }
 
+                    Button(action: { gameController.toggleRecording() }) {
+                        Image(systemName: gameController.isRecording ? "stop.circle.fill" : "record.circle")
+                            .font(.system(size: 18, weight: .semibold))
+                            .foregroundColor(gameController.isRecording ? .red : .white)
+                            .frame(width: 36, height: 36)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
+
                     Button(action: {
                         if gameController.currentLevel > 1 {
                             gameController.loadLevel(gameController.currentLevel - 1)
@@ -102,7 +193,7 @@ struct ContentView: View {
                         showLevelPicker = true
                     }) {
                         VStack(alignment: .leading, spacing: 2) {
-                            Text("\(gameMode == .rail ? "R" : gameMode == .tension ? "T" : "L") \(gameController.currentLevel)")
+                            Text("\(gameMode == .braid ? "B" : gameMode == .rail ? "R" : gameMode == .tension ? "T" : "L") \(gameController.currentLevel)")
                                 .font(.system(size: 18, weight: .bold, design: .rounded))
                                 .foregroundColor(.white)
                             Text("\(Int(gameController.fps)) fps")
@@ -118,6 +209,7 @@ struct ContentView: View {
                                 switch mode {
                                 case .tension: gameController.loadLevel(1001)
                                 case .rail: gameController.loadLevel(2001)
+                                case .braid: gameController.loadLevel(3001)
                                 case .untangle: gameController.loadLevel(1)
                                 }
                             }) {
@@ -129,7 +221,7 @@ struct ContentView: View {
                             Label("Level Editor", systemImage: "pencil.and.ruler")
                         }
                     } label: {
-                        Image(systemName: gameMode == .rail ? "tram" : gameMode == .tension ? "arrow.up.and.down.and.sparkles" : "puzzlepiece")
+                        Image(systemName: gameMode == .braid ? "wind" : gameMode == .rail ? "tram" : gameMode == .tension ? "arrow.up.and.down.and.sparkles" : "puzzlepiece")
                             .font(.system(size: 16, weight: .semibold))
                             .foregroundColor(.white)
                             .frame(width: 36, height: 36)
@@ -178,6 +270,35 @@ struct ContentView: View {
                     .padding(.trailing, 16)
                 }
                 .padding(.top, 8)
+
+                // Braid mode target indicator
+                if !gameController.braidTargetEntries.isEmpty {
+                    HStack(spacing: 6) {
+                        Text("Target:")
+                            .font(.system(size: 12, weight: .semibold))
+                            .foregroundColor(.white.opacity(0.7))
+                        ForEach(0..<gameController.braidTargetEntries.count, id: \.self) { i in
+                            let entry = gameController.braidTargetEntries[i]
+                            HStack(spacing: 2) {
+                                Circle()
+                                    .fill(Color(
+                                        red: Double(entry.strandColor.x),
+                                        green: Double(entry.strandColor.y),
+                                        blue: Double(entry.strandColor.z)
+                                    ))
+                                    .frame(width: 10, height: 10)
+                                Text("\(entry.targetSlot + 1)")
+                                    .font(.system(size: 11, weight: .bold, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.8))
+                            }
+                        }
+                    }
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 4)
+                    .background(Color.black.opacity(0.4))
+                    .cornerRadius(8)
+                    .padding(.top, 4)
+                }
 
                 if showControls {
                     VStack(spacing: 0) {
@@ -396,6 +517,14 @@ struct ContentView: View {
                             .background(Color.black.opacity(0.5))
                             .clipShape(Circle())
                     }
+                    Button { gameController.toggleRecording() } label: {
+                        Image(systemName: gameController.isRecording ? "stop.circle.fill" : "record.circle")
+                            .font(.system(size: 14, weight: .semibold))
+                            .foregroundColor(gameController.isRecording ? .red : .white)
+                            .frame(width: 30, height: 30)
+                            .background(Color.black.opacity(0.5))
+                            .clipShape(Circle())
+                    }
                     Button { gameController.undo() } label: {
                         Image(systemName: "arrow.uturn.backward")
                             .font(.system(size: 14, weight: .semibold))
@@ -433,6 +562,7 @@ struct ContentView: View {
         VStack(spacing: 3) {
             ParamRowInt(label: "Constr Iter", value: $gameController.constraintIterations, range: 1...60, defaultValue: 8)
             ParamRowInt(label: "Settle Steps", value: $gameController.settleSteps, range: 1...100, defaultValue: 5)
+            ParamRowInt(label: "Broadphase Interval", value: $gameController.broadphaseRebuildInterval, range: 0...10, defaultValue: 3)
             ParamRow(label: "Bend Comp", value: $gameController.bendCompliance, range: 0.0...0.01, format: "%.4f", defaultValue: 0.0015)
             ParamRow(label: "Bend Damp", value: $gameController.bendVelocityCoupling, range: 0.0...1.0, format: "%.2f", defaultValue: 0.45)
         }
@@ -468,7 +598,18 @@ struct ContentView: View {
                 ParamRow(label: "Hole B", value: $gameController.holeTintB, range: 0...1, format: "%.2f", defaultValue: 1.0)
                 ParamRow(label: "Tint Amt", value: $gameController.holeTintAmount, range: 0...1, format: "%.2f", defaultValue: 0)
                 ParamRow(label: "Exposure", value: $gameController.exposure, range: 0.5...2.5, format: "%.2f", defaultValue: 1.05)
-                ParamRow(label: "Bloom", value: $gameController.bloomStrength, range: 0...2.0, format: "%.2f", defaultValue: 0.35)
+                HStack(spacing: 6) {
+                    Text("Bloom")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.bloomEnabled)
+                        .labelsHidden()
+                    ResetButton { gameController.bloomEnabled = true }
+                }
+                if gameController.bloomEnabled {
+                    ParamRow(label: "Bloom Str", value: $gameController.bloomStrength, range: 0...2.0, format: "%.2f", defaultValue: 0.35)
+                }
                 ParamRow(label: "Render Scale", value: $gameController.renderScale, range: 0.25...2.0, format: "%.2f", defaultValue: 1.0)
             }
         }
@@ -525,6 +666,22 @@ struct ContentView: View {
                         .labelsHidden()
                     ResetButton { gameController.shadowsEnabled = true }
                 }
+                HStack(spacing: 6) {
+                    Text("Shadow Map")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Picker("", selection: $gameController.shadowMapSize) {
+                        Text("256").tag(256)
+                        Text("512").tag(512)
+                        Text("1K").tag(1024)
+                        Text("2K").tag(2048)
+                        Text("4K").tag(4096)
+                    }
+                    .pickerStyle(.segmented)
+                    .font(.caption2)
+                    ResetButton { gameController.shadowMapSize = 1024 }
+                }
                 ParamRow(label: "Intensity", value: $gameController.lightIntensity, range: 0.1...3.0, format: "%.2f", defaultValue: 1.0)
                 ParamRow(label: "Light X", value: $gameController.lightDirX, range: -1...1, format: "%.2f", defaultValue: -0.65)
                 ParamRow(label: "Light Y", value: $gameController.lightDirY, range: -1...1, format: "%.2f", defaultValue: -0.35)
@@ -540,6 +697,7 @@ struct ContentView: View {
                 }.pickerStyle(.menu).font(.caption2)
                 ParamRow(label: "Shadow Dark", value: $gameController.shadowDarkness, range: 0...0.5, format: "%.2f", defaultValue: 0.12)
                 ParamRow(label: "Light Size", value: $gameController.lightSize, range: 0.002...0.08, format: "%.3f", defaultValue: 0.012)
+                ParamRow(label: "PCSS Scale", value: $gameController.pcssPenumbraScale, range: 1...500, format: "%.0f", defaultValue: 80)
             }
         }
         .frame(maxHeight: 260)
@@ -583,6 +741,15 @@ struct ContentView: View {
     private var matteTab: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 3) {
+                HStack(spacing: 6) {
+                    Text("Flat Normals")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.ropeFlatNormals)
+                        .labelsHidden()
+                    ResetButton { gameController.ropeFlatNormals = false }
+                }
                 ParamRow(label: "Matte", value: $gameController.ropeMatte, range: 0...1, format: "%.2f", defaultValue: 0.6)
                 ParamRow(label: "Gloss", value: $gameController.ropeGloss, range: 0...2, format: "%.2f", defaultValue: 0.5)
                 ParamRow(label: "Diff Wrap", value: $gameController.ropeDiffuseWrap, range: 0...1, format: "%.2f", defaultValue: 0.3)
@@ -868,7 +1035,7 @@ private struct VictoryOverlay: View {
     @State private var titleOpacity: Double = 0
     @State private var buttonOffset: CGFloat = 30
     @State private var buttonOpacity: Double = 0
-    private let fireworksVariant: Int = Int.random(in: 0...2)
+    private let fireworksVariant: Int = Int.random(in: 0...3)
 
     var body: some View {
         ZStack {

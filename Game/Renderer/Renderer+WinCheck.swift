@@ -3,7 +3,7 @@ import Foundation
 
 extension Renderer {
     func removeUntangledRopes() {
-        if isTensionMode || isRailMode { return }  // No rope removal in tension/rail mode
+        if isTensionMode || isRailMode || isBraidMode { return }  // No rope removal in tension/rail/braid mode
         var removed = true
         while removed {
             removed = false
@@ -175,6 +175,73 @@ extension Renderer {
         Self.logger.info("[RAIL] All carts at stations — level complete!")
         Haptics.success()
         onLevelComplete?()
+    }
+
+    func checkBraidModeComplete() {
+        guard isBraidMode, !braidLevelCompleted else { return }
+        guard !braidTargets.isEmpty else { return }
+
+        // Check 1: each strand's bottom end is at its target hole
+        for ropeIndex in ropes.indices {
+            guard ropeIndex < braidTargets.count else { return }
+            let targetHole = braidTargets[ropeIndex]
+            let currentHole = ropes[ropeIndex].endHole
+            if currentHole != targetHole {
+                return // Not yet — strand not in target position
+            }
+        }
+
+        // Check 2: minimum crossing count (prevents trivial direct placement)
+        if braidMinCrossings > 0 {
+            let crossingCount = countTotalCrossings()
+            if crossingCount < braidMinCrossings {
+                Self.logger.info("[BRAID] Arrangement correct but only \(crossingCount)/\(self.braidMinCrossings) crossings")
+                return
+            }
+        }
+
+        braidLevelCompleted = true
+        Self.logger.info("[BRAID] Braid complete!")
+        Haptics.success()
+        onLevelComplete?()
+    }
+
+    /// Count total 2D crossings between all active rope pairs (for braid mode validation)
+    private func countTotalCrossings() -> Int {
+        guard let sim = simulator else { return 0 }
+        var total = 0
+        let skip = 3
+
+        for i in 0..<sim.bands.count {
+            guard sim.bands[i].active else { continue }
+            let nA = sim.bands[i].positions.count
+            let startA = skip
+            let endA = max(startA, nA - 1 - skip)
+
+            for j in (i+1)..<sim.bands.count {
+                guard sim.bands[j].active else { continue }
+                let nB = sim.bands[j].positions.count
+                let startB = skip
+                let endB = max(startB, nB - 1 - skip)
+                var pairCrossings = 0
+
+                for si in startA..<endA {
+                    let a0 = SIMD2<Float>(sim.bands[i].positions[si].x, sim.bands[i].positions[si].y)
+                    let a1 = SIMD2<Float>(sim.bands[i].positions[si + 1].x, sim.bands[i].positions[si + 1].y)
+
+                    for sj in startB..<endB {
+                        let b0 = SIMD2<Float>(sim.bands[j].positions[sj].x, sim.bands[j].positions[sj].y)
+                        let b1 = SIMD2<Float>(sim.bands[j].positions[sj + 1].x, sim.bands[j].positions[sj + 1].y)
+
+                        if segmentsCross2D(a0, a1, b0, b1) {
+                            pairCrossings += 1
+                        }
+                    }
+                }
+                if pairCrossings > 0 { total += 1 }
+            }
+        }
+        return total
     }
 
     private func winDiagOccupiedHoles() -> String {

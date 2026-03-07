@@ -1,6 +1,5 @@
 import XCTest
 import simd
-@testable import UzlsFour
 
 final class LevelGeneratorTests: XCTestCase {
 
@@ -459,6 +458,71 @@ final class LevelGeneratorTests: XCTestCase {
         // The diagonal rope should push cart to the right (positive t direction)
         XCTAssertNotEqual(finalT, initialT, accuracy: 0.02,
             "Cart should have moved. Diagonal rope from (0,0.4) to (0.3,-0.4) should push cart rightward")
+    }
+
+    // MARK: - Braid Mode
+
+    func testBraidLevelGeneration() {
+        for localId in 1...10 {
+            let levelId = 3000 + localId
+            let level = LevelGenerator.generateBraidLevel(levelId: levelId)
+
+            XCTAssertEqual(level.mode, "braid", "Level \(levelId) should be braid mode")
+            XCTAssertTrue(level.isBraidMode)
+
+            let strandCount = level.ropes.count
+            XCTAssertGreaterThanOrEqual(strandCount, 3, "Level \(levelId): at least 3 strands")
+            XCTAssertEqual(level.holes.count, strandCount * 2, "Level \(levelId): holes = 2 * strands")
+
+            // Top holes: 0..<N, bottom holes: N..<2N
+            for i in 0..<strandCount {
+                XCTAssertEqual(level.ropes[i].startHole, i, "Level \(levelId): rope \(i) start = top hole \(i)")
+                XCTAssertEqual(level.ropes[i].endHole, strandCount + i, "Level \(levelId): rope \(i) end = bottom hole")
+            }
+
+            // Braid targets
+            XCTAssertNotNil(level.braidTargets)
+            XCTAssertEqual(level.braidTargets?.count, strandCount)
+
+            // Each target must be a valid bottom hole
+            if let targets = level.braidTargets {
+                for (i, t) in targets.enumerated() {
+                    XCTAssertGreaterThanOrEqual(t, strandCount, "Level \(levelId): target[\(i)]=\(t) should be >= N")
+                    XCTAssertLessThan(t, strandCount * 2, "Level \(levelId): target[\(i)]=\(t) should be < 2N")
+                }
+                // Targets should be a permutation of bottom holes
+                let targetSet = Set(targets)
+                XCTAssertEqual(targetSet.count, strandCount, "Level \(levelId): targets should be a permutation")
+            }
+
+            // Min crossings
+            XCTAssertNotNil(level.braidMinCrossings)
+            XCTAssertGreaterThanOrEqual(level.braidMinCrossings ?? 0, 1)
+
+            // Pin actions exist for all ropes
+            let pinActions = level.actions?.filter { $0.type == "pin" } ?? []
+            XCTAssertEqual(pinActions.count, strandCount * 2, "Level \(levelId): 2 pin actions per rope")
+        }
+    }
+
+    func testBraidLevelDeterministic() {
+        for localId in 1...5 {
+            let levelId = 3000 + localId
+            let a = LevelGenerator.generateBraidLevel(levelId: levelId)
+            let b = LevelGenerator.generateBraidLevel(levelId: levelId)
+            XCTAssertEqual(a.ropes.count, b.ropes.count)
+            XCTAssertEqual(a.braidTargets, b.braidTargets)
+            XCTAssertEqual(a.braidMinCrossings, b.braidMinCrossings)
+        }
+    }
+
+    func testBraidTargetIsNontrivial() {
+        // For levels with enough swaps, the target should NOT be identity
+        let level = LevelGenerator.generateBraidLevel(levelId: 3002) // 3 strands, 4 swaps
+        let n = level.ropes.count
+        let targets = level.braidTargets!
+        let isIdentity = (0..<n).allSatisfy { targets[$0] == n + $0 }
+        XCTAssertFalse(isIdentity, "Braid target should not be identity after 4 swaps")
     }
 
     /// Test with user's custom rail level JSON — verifies the level loads and cart exists

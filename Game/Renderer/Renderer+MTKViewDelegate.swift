@@ -47,7 +47,9 @@ extension Renderer {
             encodeEnvBlit(commandBuffer: commandBuffer, src: hdrTex, dst: envTex)
             encodeRopeReflectionPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth, envTexture: envTex)
         }
-        encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
+        if bloomEnabled {
+            encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
+        }
         encodeCompositePass(commandBuffer: commandBuffer, view: view, hdrTexture: hdrTex, bloomTextureA: bloomA, depthTexture: sceneDepth)
 
         commandBuffer.present(drawable)
@@ -158,9 +160,21 @@ extension Renderer {
         encoder.endEncoding()
     }
 
+    func resizeShadowTexture() {
+        let shadowDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float,
+            width: shadowMapSize,
+            height: shadowMapSize,
+            mipmapped: false
+        )
+        shadowDesc.usage = [.renderTarget, .shaderRead]
+        shadowDesc.storageMode = .private
+        shadowDepthTex = device.makeTexture(descriptor: shadowDesc)
+    }
+
     private func encodeShadowPass(commandBuffer: MTLCommandBuffer) {
         if shadowDepthTex == nil {
-            resizeTextures(size: CGSize(width: 1, height: 1))
+            resizeShadowTexture()
         }
         guard let shadowDepthTex else { return }
 
@@ -268,15 +282,7 @@ extension Renderer {
         bloomA = device.makeTexture(descriptor: bloomDesc)
         bloomB = device.makeTexture(descriptor: bloomDesc)
 
-        let shadowDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .depth32Float,
-            width: shadowMapSize,
-            height: shadowMapSize,
-            mipmapped: false
-        )
-        shadowDesc.usage = [.renderTarget, .shaderRead]
-        shadowDesc.storageMode = .private
-        shadowDepthTex = device.makeTexture(descriptor: shadowDesc)
+        resizeShadowTexture()
     }
 
     private func updateFrameUniforms(view: MTKView) {
@@ -312,7 +318,7 @@ extension Renderer {
             ropeMatParams: SIMD4<Float>(ropeMatte, ropeGloss, ropeDiffuseWrap, ropeSubsurface),
             ropeMatParams2: SIMD4<Float>(ropeEdgeLight, ropeSaturation, ropeMicroBump, ropeContactAO),
             ropeMatParams3: SIMD4<Float>(ropeLiftGlow, ropeBumpScale, ropeStretchGloss, ropeStretchSpec),
-            cartoonParams: SIMD4<Float>(cartoonShadowBright, cartoonWrap, cartoonEdgeSmooth, 0),
+            cartoonParams: SIMD4<Float>(cartoonShadowBright, cartoonWrap, pcssPenumbraScale, ropeFlatNormals ? 1 : 0),
             wormParams1: SIMD4<Float>(wormGrooveDepth, wormBellyBright, wormBackDark, wormSkinNoise),
             wormParams2: SIMD4<Float>(wormSSS, wormRoughness, wormSpecular, wormRimStrength),
             wormParams3: SIMD4<Float>(wormEyeSize, wormPulseSpeed, wormPulseAmp, wormSegFreq),
@@ -323,7 +329,7 @@ extension Renderer {
 
         let useCartoon = cartoonShaderEnabled
         let effExposure = useCartoon ? cartoonExposure : exposure
-        let effBloom = useCartoon ? cartoonBloom : bloomStrength
+        let effBloom = bloomEnabled ? (useCartoon ? cartoonBloom : bloomStrength) : 0
         let postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: cartoonEdgeSmooth)
         postParamsBuffer?.contents().copyMemory(from: [postParams], byteCount: MemoryLayout<PostParams>.stride)
     }

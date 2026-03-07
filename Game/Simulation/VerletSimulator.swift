@@ -221,6 +221,7 @@ final class VerletSimulator {
     var cartSettleThreshold: Float = 0.003
 
     var bands: [Band] = []
+    private var _cachedActiveIndices: [Int] = []
     let holePositions: [SIMD2<Float>]
     let holeElevations: [Float]
     let holeRadius: Float
@@ -233,6 +234,7 @@ final class VerletSimulator {
     var constraintIterations: Int = 2 {
         didSet { constraintIterations = max(constraintIterations, 2) }
     }
+    var broadphaseRebuildInterval: Int = 3
     var settleSteps: Int = 5
     var liftHeight: Float = 0.30000001192092896
     /// Rope tension: multiplier on rest length. < 1 = taut (shorter rope), 1 = natural length.
@@ -562,6 +564,8 @@ final class VerletSimulator {
                 bands=\(self.bands.filter { $0.active }.count) constIter=\(self.constraintIterations)
                 """)
         }
+
+        _cachedActiveIndices = bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 })
 
         if let drag = dragInfo, let target = dragTargetPos {
             let idx = drag.endIndex == 0 ? 0 : bands[drag.bandIndex].positions.count - 1
@@ -904,7 +908,7 @@ final class VerletSimulator {
         profiler.end(.verletIntegration)
 
         // 2. Constraint + collision iterations (interleaved for robust PBD)
-        let active = collide ? bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 }) : []
+        let active = collide ? _cachedActiveIndices : []
 
         // Scale iterations inversely with tension — stronger tension needs more solver work
         let effectiveIters = max(constraintIterations, Int(Float(constraintIterations) / max(currentTension, 0.3)))
@@ -937,7 +941,7 @@ final class VerletSimulator {
                 bandConstraints(bi, dt: dt)
             }
             if collide {
-                if iter > 0 && iter % 3 == 0 {
+                if broadphaseRebuildInterval > 0 && iter > 0 && iter % broadphaseRebuildInterval == 0 {
                     collisionPairs = profiler.measure(.broadphase) { buildCollisionPairs(active) }
                 }
                 resolveCollisionPairs(collisionPairs)

@@ -1,0 +1,829 @@
+import simd
+import os.log
+import QuartzCore
+
+enum TopologySampler {
+    private static let logger = Logger(subsystem: "com.uzls.four", category: "TopologySampler")
+    
+    nonisolated(unsafe) static var hookStepMultiplier: Float = 0.0900
+    nonisolated(unsafe) static var hookRadiusMultiplier: Float = 0.920
+    nonisolated(unsafe) static var hookStepLimitMultiplier: Float = 2.5000
+    nonisolated(unsafe) static var debugSegmentColors: Bool = true
+    nonisolated(unsafe) static var smoothSubdivisions: Int = 4
+    nonisolated(unsafe) static var smoothIterations: Int = 0
+    nonisolated(unsafe) static var smoothStrength: Float = 0.00
+    nonisolated(unsafe) static var smoothZone: Float = 0.001
+    
+    static func sampleRope(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        count: Int,
+        lift: Float,
+        dragLift: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float,
+        holeRadius: Float
+    ) -> [SIMD3<Float>] {
+        let result = buildPoly(
+            engine: engine,
+            ropeIndex: ropeIndex,
+            lift: lift,
+            dragLift: dragLift,
+            ropeRadius: ropeRadius,
+            ropeRadiusForIndex: ropeRadiusForIndex,
+            holeRadius: holeRadius
+        )
+        return resample(poly: result.points, count: count)
+    }
+    
+    struct RopeRenderResult {
+        let points: [SIMD3<Float>]
+        let segmentStarts: [Int]
+    }
+    
+    static func sampleRopeRender(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        lift: Float,
+        dragLift: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float,
+        holeRadius: Float
+    ) -> RopeRenderResult {
+        return buildPoly(
+            engine: engine,
+            ropeIndex: ropeIndex,
+            lift: lift,
+            dragLift: dragLift,
+            ropeRadius: ropeRadius,
+            ropeRadiusForIndex: ropeRadiusForIndex,
+            holeRadius: holeRadius
+        )
+    }
+    
+    static func ropePathLength(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float,
+        holeRadius: Float
+    ) -> Float {
+        let result = buildPoly(
+            engine: engine,
+            ropeIndex: ropeIndex,
+            lift: ropeRadius,
+            dragLift: 0,
+            ropeRadius: ropeRadius,
+            ropeRadiusForIndex: ropeRadiusForIndex,
+            holeRadius: holeRadius
+        )
+        let lengths = cumulativeLengths(poly: result.points)
+        return lengths.last ?? 0
+    }
+    
+    static func hookCenters(engine: TopologyEngine, ropeRadiusForIndex: (Int) -> Float) -> [SIMD2<Float>] {
+        var centers: [SIMD2<Float>] = []
+        for (_, hook) in engine.hooks {
+            let A1 = engine.ropeStart(hook.ropeA)
+            let A2 = engine.ropeEnd(hook.ropeA)
+            let (B1, B2) = engine.resolvedBEndpoints(hook: hook)
+            let R = max(ropeRadiusForIndex(hook.ropeA), ropeRadiusForIndex(hook.ropeB))
+
+            if let geom = HookGeometryCalculator.calculateHookSequenceGeometry(
+                A1: A1, A2: A2, B1: B1, B2: B2, R: R, crossingCount: hook.N,
+                stepMultiplier: hookStepMultiplier, radiusMultiplier: hookRadiusMultiplier,
+                stepLimitMultiplier: hookStepLimitMultiplier
+            ) {
+                centers.append(contentsOf: geom.centers)
+            }
+        }
+        return centers
+    }
+    
+    private static func buildPoly(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        lift: Float,
+        dragLift: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float,
+        holeRadius: Float
+    ) -> RopeRenderResult {
+        guard engine.ropes.indices.contains(ropeIndex) else { return RopeRenderResult(points: [], segmentStarts: []) }
+        let rope = engine.ropes[ropeIndex]
+        guard rope.active else { return RopeRenderResult(points: [], segmentStarts: []) }
+        
+        let holeInnerRadius = holeRadius * 0.76
+        let holeDepth = holeRadius * 1.25
+        let baseZ = ropeRadius
+        
+        let rawStart = engine.ropeStart(ropeIndex)
+        let rawEnd = engine.ropeEnd(ropeIndex)
+        
+        let startIsFloating = rope.floatingEnd == 0
+        let endIsFloating = rope.floatingEnd == 1
+        
+        let orderedHooks = engine.orderedHooks(forRope: ropeIndex)
+        
+        var waypoints: [SIMD2<Float>] = []
+        for hookId in orderedHooks {
+            if let center = engine.hookCenter(hookId) {
+                waypoints.append(center)
+            }
+        }
+        
+        let firstTarget = waypoints.first ?? rawEnd
+        let lastTarget = waypoints.last ?? rawStart
+        
+        let startAnchor: SIMD2<Float>
+        let startZ: Float
+        if startIsFloating {
+            startAnchor = rawStart
+            startZ = dragLift
+        } else {
+            let dir = firstTarget - rawStart
+                let dirLen = simd_length(dir)
+                if dirLen > 1e-6 {
+                startAnchor = rawStart + (dir / dirLen) * holeInnerRadius
+                } else {
+                startAnchor = rawStart
+            }
+            startZ = -holeDepth
+        }
+        
+        let endAnchor: SIMD2<Float>
+        let endZ: Float
+        if endIsFloating {
+            endAnchor = rawEnd
+            endZ = dragLift
+        } else {
+            let dir = lastTarget - rawEnd
+                let dirLen = simd_length(dir)
+                if dirLen > 1e-6 {
+                endAnchor = rawEnd + (dir / dirLen) * holeInnerRadius
+                } else {
+                endAnchor = rawEnd
+            }
+            endZ = -holeDepth
+        }
+        
+        if orderedHooks.isEmpty {
+            let simplePoly = buildSimplePoly(
+                startAnchor: startAnchor,
+                endAnchor: endAnchor,
+                startZ: startZ,
+                endZ: endZ,
+                baseZ: baseZ
+            )
+            return RopeRenderResult(points: simplePoly, segmentStarts: [0])
+        }
+        
+        if orderedHooks.count == 1, let hookId = orderedHooks.first, let hook = engine.hooks[hookId] {
+            return buildHookPoly(
+                engine: engine,
+                ropeIndex: ropeIndex,
+                hook: hook,
+                prevNeighborCenter: nil,
+                nextNeighborCenter: nil,
+                startAnchor: startAnchor,
+                endAnchor: endAnchor,
+                startZ: startZ,
+                endZ: endZ,
+                baseZ: baseZ,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: ropeRadiusForIndex
+            )
+        }
+        
+        return buildMultiHookPoly(
+            engine: engine,
+            ropeIndex: ropeIndex,
+            orderedHooks: orderedHooks,
+            startAnchor: startAnchor,
+            endAnchor: endAnchor,
+            startZ: startZ,
+            endZ: endZ,
+            baseZ: baseZ,
+            ropeRadius: ropeRadius,
+            ropeRadiusForIndex: ropeRadiusForIndex
+        )
+    }
+    
+    private static func buildMultiHookPoly(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        orderedHooks: [Int],
+        startAnchor: SIMD2<Float>,
+        endAnchor: SIMD2<Float>,
+        startZ: Float,
+        endZ: Float,
+        baseZ: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float
+    ) -> RopeRenderResult {
+        var allPoints: [SIMD3<Float>] = []
+        var allSegmentStarts: [Int] = []
+        var lastSegmentEnd: SIMD2<Float>? = nil
+        var lastSegmentEndZ: Float = startZ
+
+        for (idx, hookId) in orderedHooks.enumerated() {
+            guard let hook = engine.hooks[hookId] else { continue }
+
+            let prevCenter: SIMD2<Float>?
+            let nextCenter: SIMD2<Float>?
+
+            if idx > 0 {
+                prevCenter = engine.hookCenter(orderedHooks[idx - 1])
+            } else {
+                prevCenter = nil
+            }
+
+            if idx < orderedHooks.count - 1 {
+                nextCenter = engine.hookCenter(orderedHooks[idx + 1])
+            } else {
+                nextCenter = nil
+            }
+
+            let isFirstHook = (idx == 0)
+            let isLastHook = (idx == orderedHooks.count - 1)
+
+            let segmentStart = lastSegmentEnd ?? startAnchor
+            let segmentEnd = isLastHook ? endAnchor : (nextCenter ?? endAnchor)
+            let segmentStartZ = isFirstHook ? startZ : lastSegmentEndZ
+            let segmentEndZ = isLastHook ? endZ : baseZ
+
+            let segmentResult = buildHookPoly(
+                engine: engine,
+                ropeIndex: ropeIndex,
+                hook: hook,
+                prevNeighborCenter: prevCenter,
+                nextNeighborCenter: nextCenter,
+                startAnchor: segmentStart,
+                endAnchor: segmentEnd,
+                startZ: segmentStartZ,
+                endZ: segmentEndZ,
+                baseZ: baseZ,
+                ropeRadius: ropeRadius,
+                ropeRadiusForIndex: ropeRadiusForIndex
+            )
+
+            if isFirstHook {
+                let baseIdx = allPoints.count
+                for segStart in segmentResult.segmentStarts {
+                    allSegmentStarts.append(baseIdx + segStart)
+                }
+                allPoints.append(contentsOf: segmentResult.points)
+            } else {
+                var skipCount = 0
+                let overlapThreshold: Float = 0.1
+                if let lastPt = allPoints.last {
+                    for (i, pt) in segmentResult.points.enumerated() {
+                        let dist = simd_length(SIMD2<Float>(pt.x, pt.y) - SIMD2<Float>(lastPt.x, lastPt.y))
+                        if dist < overlapThreshold {
+                            skipCount = i + 1
+                        } else {
+                            break
+                        }
+                    }
+                }
+                let remainingPoints = Array(segmentResult.points.dropFirst(skipCount))
+                if let lastPt = allPoints.last, let firstPt = remainingPoints.first {
+                    let gap = simd_length(SIMD2<Float>(firstPt.x, firstPt.y) - SIMD2<Float>(lastPt.x, lastPt.y))
+                    if gap > overlapThreshold {
+                        let interpCount = max(2, Int(gap / 0.05))
+                        for i in 1..<interpCount {
+                            let t = Float(i) / Float(interpCount)
+                            let x = lastPt.x + (firstPt.x - lastPt.x) * t
+                            let y = lastPt.y + (firstPt.y - lastPt.y) * t
+                            let z = lastPt.z + (firstPt.z - lastPt.z) * t
+                            allPoints.append(SIMD3<Float>(x, y, z))
+                        }
+                    }
+                }
+                let baseIdx = allPoints.count
+                var addedSegmentStart = false
+                for segStart in segmentResult.segmentStarts {
+                    let adjustedIdx = segStart - skipCount
+                    if adjustedIdx >= 0 {
+                        allSegmentStarts.append(baseIdx + adjustedIdx)
+                        addedSegmentStart = true
+                    }
+                }
+                if !addedSegmentStart && !remainingPoints.isEmpty {
+                    allSegmentStarts.append(baseIdx)
+                }
+                allPoints.append(contentsOf: remainingPoints)
+            }
+
+            // Update lastSegmentEnd from the actual last point added to allPoints
+            if let lastPt = allPoints.last {
+                lastSegmentEnd = SIMD2<Float>(lastPt.x, lastPt.y)
+                lastSegmentEndZ = lastPt.z
+            }
+        }
+
+        if allSegmentStarts.isEmpty {
+            allSegmentStarts = [0]
+        }
+
+        return RopeRenderResult(points: allPoints, segmentStarts: allSegmentStarts)
+    }
+    
+    private static func findHookNeighborsOnRope(
+        engine: TopologyEngine,
+        hookId: Int,
+        ropeIndex: Int
+    ) -> (prev: SIMD2<Float>, next: SIMD2<Float>) {
+        let orderedHooks = engine.orderedHooks(forRope: ropeIndex)
+        
+        guard let idx = orderedHooks.firstIndex(of: hookId) else {
+            return (engine.ropeStart(ropeIndex), engine.ropeEnd(ropeIndex))
+        }
+        
+        let prev: SIMD2<Float>
+        if idx == 0 {
+            prev = engine.ropeStart(ropeIndex)
+        } else {
+            prev = engine.hookCenter(orderedHooks[idx - 1]) ?? engine.ropeStart(ropeIndex)
+        }
+        
+        let next: SIMD2<Float>
+        if idx == orderedHooks.count - 1 {
+            next = engine.ropeEnd(ropeIndex)
+        } else {
+            next = engine.hookCenter(orderedHooks[idx + 1]) ?? engine.ropeEnd(ropeIndex)
+        }
+        
+        return (prev, next)
+    }
+    
+    private static func buildSimplePoly(
+        startAnchor: SIMD2<Float>,
+        endAnchor: SIMD2<Float>,
+        startZ: Float,
+        endZ: Float,
+        baseZ: Float
+    ) -> [SIMD3<Float>] {
+        var poly: [SIMD3<Float>] = []
+        let segmentCount = 64
+        let dir = endAnchor - startAnchor
+        
+        for i in 0...segmentCount {
+            let t = Float(i) / Float(segmentCount)
+            let xy = startAnchor + dir * t
+            let z: Float
+            if startZ < 0 && endZ < 0 {
+                let midT: Float = 0.5
+                if t < midT {
+                    let localT = t / midT
+                    z = startZ + (baseZ - startZ) * smoothstep(localT)
+                } else {
+                    let localT = (t - midT) / (1 - midT)
+                    z = baseZ + (endZ - baseZ) * smoothstep(localT)
+                }
+            } else if startZ < 0 && endZ >= 0 {
+                // start in hole, end floating above
+                let riseT = min(1, t * 4)
+                let baseRise = startZ + (baseZ - startZ) * smoothstep(riseT)
+                let liftBlend = smoothstep(t)
+                z = baseRise + (endZ - baseZ) * liftBlend
+            } else if startZ >= 0 && endZ < 0 {
+                // start floating above, end in hole
+                let dropT = max(0, (t - 0.75) * 4)
+                let baseDrop = baseZ + (endZ - baseZ) * smoothstep(dropT)
+                let liftBlend = smoothstep(1 - t)
+                z = baseDrop + (startZ - baseZ) * liftBlend
+            } else {
+                z = baseZ
+            }
+            poly.append(SIMD3<Float>(xy.x, xy.y, z))
+        }
+        return poly
+    }
+    
+    private static func buildHookPoly(
+        engine: TopologyEngine,
+        ropeIndex: Int,
+        hook: HookSequence,
+        prevNeighborCenter: SIMD2<Float>?,
+        nextNeighborCenter: SIMD2<Float>?,
+        startAnchor: SIMD2<Float>,
+        endAnchor: SIMD2<Float>,
+        startZ: Float,
+        endZ: Float,
+        baseZ: Float,
+        ropeRadius: Float,
+        ropeRadiusForIndex: (Int) -> Float
+    ) -> RopeRenderResult {
+        let isRopeA = (ropeIndex == hook.ropeA)
+        let otherRopeIndex = isRopeA ? hook.ropeB : hook.ropeA
+        let otherRadius = ropeRadiusForIndex(otherRopeIndex)
+        let currentRadius = ropeRadius
+        
+        let otherNeighbors = findHookNeighborsOnRope(engine: engine, hookId: hook.id, ropeIndex: otherRopeIndex)
+        
+        let A1: SIMD2<Float>
+        let A2: SIMD2<Float>
+        let B1: SIMD2<Float>
+        let B2: SIMD2<Float>
+
+        if isRopeA {
+            A1 = prevNeighborCenter ?? engine.ropeStart(hook.ropeA)
+            A2 = nextNeighborCenter ?? engine.ropeEnd(hook.ropeA)
+            // Resolve B endpoints based on ropeBSide1End
+            if hook.ropeBSide1End == 0 {
+                B1 = otherNeighbors.prev
+                B2 = otherNeighbors.next
+            } else {
+                B1 = otherNeighbors.next
+                B2 = otherNeighbors.prev
+            }
+        } else {
+            A1 = otherNeighbors.prev
+            A2 = otherNeighbors.next
+            // Resolve B endpoints based on ropeBSide1End
+            if hook.ropeBSide1End == 0 {
+                B1 = prevNeighborCenter ?? engine.ropeStart(hook.ropeB)
+                B2 = nextNeighborCenter ?? engine.ropeEnd(hook.ropeB)
+            } else {
+                B1 = nextNeighborCenter ?? engine.ropeEnd(hook.ropeB)
+                B2 = prevNeighborCenter ?? engine.ropeStart(hook.ropeB)
+            }
+        }
+        
+        let R = max(ropeRadius, otherRadius)
+        
+        guard let geom = HookGeometryCalculator.calculateHookSequenceGeometry(
+            A1: A1, A2: A2, B1: B1, B2: B2, R: R, crossingCount: hook.N,
+            stepMultiplier: hookStepMultiplier, radiusMultiplier: hookRadiusMultiplier,
+            stepLimitMultiplier: hookStepLimitMultiplier
+        ) else {
+            let simplePoly = buildSimplePoly(
+                startAnchor: startAnchor,
+                endAnchor: endAnchor,
+                startZ: startZ,
+                endZ: endZ,
+                baseZ: baseZ
+            )
+            return RopeRenderResult(points: simplePoly, segmentStarts: [0])
+        }
+        
+        var rawPath = isRopeA ? geom.pathA : geom.pathB
+
+        // For ropeB with side1End == 1, the path goes end→start — reverse it
+        if !isRopeA && hook.ropeBSide1End == 1 {
+            rawPath.reverse()
+        }
+        
+        let pathA = geom.pathA
+        let pathB = geom.pathB
+        
+        let zLogKey = ZLogKey(ropeIndex: ropeIndex, hookId: hook.id)
+        let zEps: Float = 0.001
+        let zNow = CACurrentMediaTime()
+        let zTimeSinceLastLog = zNow - lastZLogTime
+        let zShouldLog: Bool
+        if let last = lastZLogParams[zLogKey] {
+            let pathChanged = pathA.count != last.pathA.count ||
+                             pathB.count != last.pathB.count ||
+                             zip(pathA, last.pathA).contains(where: { simd_length_squared($0 - $1) > zEps * zEps }) ||
+                             zip(pathB, last.pathB).contains(where: { simd_length_squared($0 - $1) > zEps * zEps })
+            let dataChanged = hook.N != last.N || pathChanged
+            zShouldLog = dataChanged && zTimeSinceLastLog >= minZLogInterval
+            if zShouldLog {
+                lastZLogParams[zLogKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
+                lastZLogTime = zNow
+            }
+        } else {
+            zShouldLog = zTimeSinceLastLog >= minZLogInterval
+            if zShouldLog {
+                lastZLogParams[zLogKey] = ZLogValue(N: hook.N, pathA: pathA, pathB: pathB)
+                lastZLogTime = zNow
+            }
+        }
+        
+        var fullPath2D: [SIMD2<Float>] = [startAnchor]
+
+        let dupThreshold: Float = 0.05
+        var trimmedPath = rawPath
+        if let first = trimmedPath.first, simd_length(first - startAnchor) < dupThreshold {
+            trimmedPath.removeFirst()
+        }
+        if endZ < 0 {
+            // Pinned end: trim geometry endpoint, replace with endAnchor (offset into hole)
+            if let last = trimmedPath.last, simd_length(last - endAnchor) < dupThreshold {
+                trimmedPath.removeLast()
+            }
+        }
+        // Floating end: don't trim — rawPath already ends at the drag position
+
+        fullPath2D.append(contentsOf: trimmedPath)
+
+        let endAnchorDist = fullPath2D.last.map { simd_length($0 - endAnchor) } ?? Float.greatestFiniteMagnitude
+        if endZ < 0 {
+            if endAnchorDist > 1e-6 {
+                fullPath2D.append(endAnchor)
+            }
+        } else {
+            if endAnchorDist > dupThreshold {
+                fullPath2D.append(endAnchor)
+            }
+        }
+        
+        let smoothResult = smoothPath2D(fullPath2D, ropeRadius: currentRadius)
+        let smoothedPoints = smoothResult.points
+        let segmentStarts = smoothResult.segmentStarts
+        
+        let firstIsOver: Bool
+        if isRopeA {
+            firstIsOver = hook.ropeAStartIsOver
+        } else {
+            firstIsOver = !hook.ropeAStartIsOver
+        }
+        
+        let underZ: Float = 0
+        let overZ = otherRadius * 2 + currentRadius
+        
+        var crossingPoints: [SIMD2<Float>] = []
+        for i in 0..<(pathA.count - 1) {
+            for j in 0..<(pathB.count - 1) {
+                if let p = segIntersection(pathA[i], pathA[i + 1], pathB[j], pathB[j + 1]) {
+                    crossingPoints.append(p)
+                }
+            }
+        }
+        
+        func isOverAtCrossing(_ idx: Int) -> Bool {
+            (idx % 2 == 0) ? firstIsOver : !firstIsOver
+        }
+        
+        var smoothedDistances: [Float] = [0]
+        for i in 1..<smoothedPoints.count {
+            let d = simd_length(smoothedPoints[i] - smoothedPoints[i - 1])
+            smoothedDistances.append(smoothedDistances[i - 1] + d)
+        }
+        let totalSmoothedDist = smoothedDistances.last ?? 1.0
+        
+        var crossingDists: [(dist: Float, isOver: Bool)] = []
+        
+        for (crossingIdx, crossingPt) in crossingPoints.enumerated() {
+            var closestDist: Float = 0
+            var minDist = Float.greatestFiniteMagnitude
+            
+            for i in 0..<smoothedPoints.count {
+                let d = simd_length(smoothedPoints[i] - crossingPt)
+                if d < minDist {
+                    minDist = d
+                    closestDist = smoothedDistances[i]
+                }
+            }
+            let isOver = isOverAtCrossing(crossingIdx)
+            crossingDists.append((dist: closestDist, isOver: isOver))
+        }
+        
+        crossingDists.sort { $0.dist < $1.dist }
+        
+        func zForCrossing(_ isOver: Bool) -> Float {
+            isOver ? overZ : underZ
+        }
+        
+        var poly: [SIMD3<Float>] = []
+        
+        for (i, xy) in smoothedPoints.enumerated() {
+            let dist = smoothedDistances[i]
+            var z: Float = baseZ
+            
+            if crossingDists.isEmpty {
+                z = baseZ
+            } else {
+                let firstCrossingDist = crossingDists[0].dist
+                let lastCrossingDist = crossingDists[crossingDists.count - 1].dist
+                
+                if dist <= firstCrossingDist {
+                    let firstZ = zForCrossing(crossingDists[0].isOver)
+                    let t = dist / max(0.001, firstCrossingDist)
+                    z = baseZ + (firstZ - baseZ) * smoothstep(t)
+                } else if dist >= lastCrossingDist {
+                    let lastZ = zForCrossing(crossingDists[crossingDists.count - 1].isOver)
+                    let t = (dist - lastCrossingDist) / max(0.001, totalSmoothedDist - lastCrossingDist)
+                    z = lastZ + (baseZ - lastZ) * smoothstep(t)
+                } else {
+                    for j in 0..<(crossingDists.count - 1) {
+                        let c0 = crossingDists[j]
+                        let c1 = crossingDists[j + 1]
+                        if dist >= c0.dist && dist <= c1.dist {
+                            let z0 = zForCrossing(c0.isOver)
+                            let z1 = zForCrossing(c1.isOver)
+                            let t = (dist - c0.dist) / max(0.001, c1.dist - c0.dist)
+                            z = z0 + (z1 - z0) * smoothstep(t)
+                            break
+                        }
+                    }
+                }
+            }
+            
+            let startBlendDist = totalSmoothedDist * 0.15
+            let endBlendDist = totalSmoothedDist * 0.15
+            
+            if dist < startBlendDist {
+                let t = dist / startBlendDist
+                z = startZ + (z - startZ) * smoothstep(t)
+            }
+            
+            let distFromEnd = totalSmoothedDist - dist
+            if distFromEnd < endBlendDist {
+                let t = distFromEnd / endBlendDist
+                z = endZ + (z - endZ) * smoothstep(t)
+            }
+            
+            z = max(0, z)
+            poly.append(SIMD3<Float>(xy.x, xy.y, z))
+        }
+        
+        return RopeRenderResult(points: poly, segmentStarts: segmentStarts)
+    }
+    
+    private static func smoothstep(_ t: Float) -> Float {
+        let x = max(0, min(1, t))
+        return x * x * (3 - 2 * x)
+    }
+    
+    private static func segIntersection(_ a: SIMD2<Float>, _ b: SIMD2<Float>, _ c: SIMD2<Float>, _ d: SIMD2<Float>) -> SIMD2<Float>? {
+        let x1 = a.x, y1 = a.y
+        let x2 = b.x, y2 = b.y
+        let x3 = c.x, y3 = c.y
+        let x4 = d.x, y4 = d.y
+        
+        let den = (x1 - x2) * (y3 - y4) - (y1 - y2) * (x3 - x4)
+        if abs(den) < 1e-9 { return nil }
+        
+        let px = ((x1 * y2 - y1 * x2) * (x3 - x4) - (x1 - x2) * (x3 * y4 - y3 * x4)) / den
+        let py = ((x1 * y2 - y1 * x2) * (y3 - y4) - (y1 - y2) * (x3 * y4 - y3 * x4)) / den
+        
+        let eps: Float = 1e-6
+        
+        func onSeg(_ p: Float, _ s1: Float, _ s2: Float) -> Bool {
+            min(s1, s2) - eps <= p && p <= max(s1, s2) + eps
+        }
+        
+        if onSeg(px, x1, x2) && onSeg(py, y1, y2) && onSeg(px, x3, x4) && onSeg(py, y3, y4) {
+            return SIMD2<Float>(px, py)
+        }
+        return nil
+    }
+    
+    private static func subdividePath(_ path: [SIMD2<Float>], n: Int) -> [SIMD2<Float>] {
+        if path.count < 2 || n < 1 { return path }
+        var out: [SIMD2<Float>] = []
+        out.reserveCapacity((path.count - 1) * n + 1)
+        
+        for i in 0..<(path.count - 1) {
+            let a = path[i]
+            let b = path[i + 1]
+            out.append(a)
+            for j in 1..<n {
+                let t = Float(j) / Float(n)
+                out.append(a * (1 - t) + b * t)
+            }
+        }
+        out.append(path[path.count - 1])
+        return out
+    }
+    
+    private static func relaxPath(_ pts: inout [SIMD2<Float>], fixed: Set<Int>, iterations: Int, k: Float) {
+        for _ in 0..<iterations {
+            for i in 1..<(pts.count - 1) {
+                if fixed.contains(i) { continue }
+                let mid = (pts[i - 1] + pts[i + 1]) * 0.5
+                pts[i] = pts[i] + (mid - pts[i]) * k
+            }
+        }
+    }
+    
+    private static func catmullToBezier(_ p0: SIMD2<Float>, _ p1: SIMD2<Float>, _ p2: SIMD2<Float>, _ p3: SIMD2<Float>, tension: Float = 0.5) -> (SIMD2<Float>, SIMD2<Float>, SIMD2<Float>, SIMD2<Float>) {
+        let d1 = (p2 - p0) * (tension / 6.0)
+        let d2 = (p3 - p1) * (tension / 6.0)
+        return (p1, p1 + d1, p2 - d2, p2)
+    }
+    
+    private static func evalBezier(_ b0: SIMD2<Float>, _ b1: SIMD2<Float>, _ b2: SIMD2<Float>, _ b3: SIMD2<Float>, t: Float) -> SIMD2<Float> {
+        let mt = 1 - t
+        return b0 * (mt * mt * mt) + b1 * (3 * mt * mt * t) + b2 * (3 * mt * t * t) + b3 * (t * t * t)
+    }
+    
+    private struct ZLogKey: Hashable {
+        let ropeIndex: Int
+        let hookId: Int
+    }
+    private struct ZLogValue {
+        let N: Int
+        let pathA: [SIMD2<Float>]
+        let pathB: [SIMD2<Float>]
+    }
+    nonisolated(unsafe) private static var lastZLogParams: [ZLogKey: ZLogValue] = [:]
+    nonisolated(unsafe) private static var lastZLogTime: Double = 0
+    private static let minZLogInterval: Double = 2.0
+    
+    struct SmoothResult {
+        let points: [SIMD2<Float>]
+        let segmentStarts: [Int]
+    }
+    
+    private static func smoothPath2D(_ path: [SIMD2<Float>], ropeRadius: Float) -> SmoothResult {
+        let n = max(1, smoothSubdivisions)
+        let iterations = smoothIterations
+        let k = smoothStrength
+        
+        if path.count < 2 {
+            return SmoothResult(points: path, segmentStarts: [0])
+        }
+        
+        var dense = subdividePath(path, n: n)
+        
+        var fixed = Set<Int>()
+        for i in 0..<path.count {
+            fixed.insert(i * n)
+        }
+        
+        if iterations > 0 {
+            relaxPath(&dense, fixed: fixed, iterations: iterations, k: k)
+        }
+        
+        if dense.count < 4 {
+            var segStarts: [Int] = []
+            for i in 0..<path.count {
+                segStarts.append(i * n)
+            }
+            return SmoothResult(points: dense, segmentStarts: segStarts)
+        }
+        
+        let P = [dense[0]] + dense + [dense[dense.count - 1]]
+        var curve: [SIMD2<Float>] = []
+        var segmentStarts: [Int] = []
+        let bezierSteps = 8
+        
+        for i in 0..<(dense.count - 1) {
+            if i % n == 0 {
+                segmentStarts.append(curve.count)
+            }
+            let (b0, b1, b2, b3) = catmullToBezier(P[i], P[i + 1], P[i + 2], P[i + 3])
+            for j in 0..<bezierSteps {
+                let t = Float(j) / Float(bezierSteps)
+                curve.append(evalBezier(b0, b1, b2, b3, t: t))
+            }
+        }
+        curve.append(dense[dense.count - 1])
+        
+        return SmoothResult(points: curve, segmentStarts: segmentStarts)
+    }
+
+    private static func cumulativeLengths(poly: [SIMD3<Float>]) -> [Float] {
+        if poly.count < 2 { return [0] }
+        var cum: [Float] = [0]
+        cum.reserveCapacity(poly.count)
+        for i in 1..<poly.count {
+            cum.append(cum[i - 1] + simd_length(poly[i] - poly[i - 1]))
+        }
+        return cum
+    }
+
+    private static func sample(poly: [SIMD3<Float>], cum: [Float], dist: Float) -> SIMD3<Float> {
+        if poly.count <= 1 { return poly.first ?? .zero }
+        var lo = 0
+        var hi = cum.count - 1
+        while lo + 1 < hi {
+            let mid = (lo + hi) / 2
+            if cum[mid] <= dist {
+                lo = mid
+            } else {
+                hi = mid
+            }
+        }
+        let a = poly[lo]
+        let b = poly[min(lo + 1, poly.count - 1)]
+        let segStart = cum[lo]
+        let segEnd = cum[min(lo + 1, cum.count - 1)]
+        let span = max(1e-6, segEnd - segStart)
+        let t = (dist - segStart) / span
+        return a + (b - a) * t
+    }
+
+    private static func resample(poly: [SIMD3<Float>], count: Int) -> [SIMD3<Float>] {
+        let n = max(0, count)
+        if n == 0 { return [] }
+        if poly.isEmpty { return Array(repeating: .zero, count: n) }
+        if poly.count == 1 { return Array(repeating: poly[0], count: n) }
+
+        let lengths = cumulativeLengths(poly: poly)
+        let total = lengths.last ?? 0
+        if total <= 1e-6 { return Array(repeating: poly[0], count: n) }
+
+        var out: [SIMD3<Float>] = []
+        out.reserveCapacity(n)
+        for i in 0..<n {
+            let t = Float(i) / Float(max(1, n - 1))
+            out.append(sample(poly: poly, cum: lengths, dist: total * t))
+        }
+        return out
+    }
+}

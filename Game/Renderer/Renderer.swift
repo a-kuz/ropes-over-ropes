@@ -26,7 +26,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var depthStateShadow: MTLDepthStencilState
 
     var shadowDepthTex: MTLTexture?
-    let shadowMapSize: Int = 2048
+    var shadowMapSize: Int = 2048 {
+        didSet { if oldValue != shadowMapSize { resizeShadowTexture() } }
+    }
 
     var camera = Camera()
     var cameraZoomScale: Float = 0.95764452219009399
@@ -85,6 +87,8 @@ final class Renderer: NSObject, MTKViewDelegate {
     var cartoonShadowBright: Float = 0.38
     var cartoonWrap: Float = 0.15
     var cartoonEdgeSmooth: Float = 0.5
+    var ropeFlatNormals: Bool = false
+    var pcssPenumbraScale: Float = 80.0
     var tableStyle: Int = 0
     var tableColor1: SIMD3<Float> = SIMD3<Float>(0.079999998211860657, 0.090000003576278687, 0.12999999523162842)
     var tableColor2: SIMD3<Float> = SIMD3<Float>(0.11999999731779099, 0.12999999523162842, 0.20000000298023224)
@@ -200,6 +204,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var currentLevelId: Int = 1
     var moveCount: Int = 0
+
+    // Recording: captures drag actions for braid development
+    var isRecording: Bool = false
+    var recordedActions: [(ropeIndex: Int, endIndex: Int, fromHole: Int, toHole: Int)] = []
     var isTensionMode: Bool = false
     var tensionLevelCompleted: Bool = false
 
@@ -223,6 +231,35 @@ final class Renderer: NSObject, MTKViewDelegate {
     var targetVB: MTLBuffer?
     var targetIB: MTLBuffer?
     var targetIndexCount: Int = 0
+
+    // Braid mode
+    var isBraidMode: Bool = false
+    var braidLevelCompleted: Bool = false
+    var braidTargets: [Int] = []        // braidTargets[ropeIndex] = target bottom hole index
+    var braidMinCrossings: Int = 0
+    var braidBottomHoleStart: Int = 0   // index of first bottom hole
+    var braidStrandCount: Int = 0
+
+    // Slow braid replay: execute drag actions one at a time so the user can watch
+    var pendingBraidDrags: [VerletSimulator.LevelAction] = []
+    var braidDragTimer: Float = 0
+    let braidDragInterval: Float = 0.3  // seconds pause between drags
+
+    // Animated drag state machine
+    enum BraidDragPhase { case idle, lift, traverse, lower, settle }
+    var braidDragPhase: BraidDragPhase = .idle
+    var braidDragStep: Int = 0
+    var braidDragAction: VerletSimulator.LevelAction?
+    var braidDragFromPos: SIMD3<Float> = .zero
+    var braidDragLiftFrom: SIMD3<Float> = .zero
+    var braidDragLiftTo: SIMD3<Float> = .zero
+    var braidDragToPos: SIMD3<Float> = .zero
+    var braidDragIdx: Int = 0 // particle index (0 or last)
+
+    // Runtime braid computation: computes drag targets from actual particle positions
+    var braidRemainingCrossings: Int = 0
+    // isLower[ropeIndex][endIndex] — true = this end is under the other rope
+    var braidIsLower: [[Bool]] = [[false, false], [true, true]]
 
     // Rail mode rendering
     var isRailMode: Bool = false
@@ -308,6 +345,10 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsConstraintIterations: Int = 8 {
         didSet { simulator?.constraintIterations = physicsConstraintIterations }
     }
+    var physicsBroadphaseInterval: Int = 3 {
+        didSet { simulator?.broadphaseRebuildInterval = physicsBroadphaseInterval }
+    }
+    var bloomEnabled: Bool = true
     var physicsParticleCount: Int = 60 {
         didSet { simulator?.particleCount = physicsParticleCount }
     }
@@ -375,6 +416,8 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragState = nil
         dragWorld = .zero
         simulator = nil
+        pendingBraidDrags = []
+        braidDragTimer = 0
         undoStore.clear()
         levelFlow.clearAll()
         moveCount = 0
@@ -389,6 +432,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         } else if let jsonLevel = LevelLoader.load(levelId: levelId) {
             Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
             level = jsonLevel
+        } else if levelId >= 3001 {
+            Self.logger.info("Level \(levelId) generated as braid mode")
+            level = LevelGenerator.generateBraidLevel(levelId: levelId)
         } else if levelId >= 2001 {
             Self.logger.info("Level \(levelId) generated as rail mode")
             level = LevelGenerator.generateRailLevel(levelId: levelId)
@@ -451,6 +497,7 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.gravity = physicsGravity
         sim.damping = physicsDamping
         sim.constraintIterations = physicsConstraintIterations
+        sim.broadphaseRebuildInterval = physicsBroadphaseInterval
         sim.particleCount = physicsParticleCount
         sim.settleSteps = physicsSettleSteps
         sim.liftHeight = physicsLiftHeight
@@ -501,6 +548,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             targetRenderInfos = []
         }
 
+        // Braid mode setup
+        isBraidMode = level.isBraidMode
+        braidLevelCompleted = false
+        if isBraidMode, let targets = level.braidTargets {
+            braidTargets = targets
+            braidMinCrossings = level.braidMinCrossings ?? 1
+            braidStrandCount = level.ropes.count
+            braidBottomHoleStart = braidStrandCount // bottom holes start after top holes
+        } else {
+            braidTargets = []
+            braidMinCrossings = 0
+            braidStrandCount = 0
+            braidBottomHoleStart = 0
+        }
+
         // Rail mode setup
         isRailMode = level.isRailMode
         railLevelCompleted = false
@@ -528,7 +590,22 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         t0 = CACurrentMediaTime()
-        sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
+        let hasDragActions = simActions.contains(where: { $0.type == .drag })
+        if hasDragActions {
+            // Slow braid replay: only pin, then compute drags LIVE from actual particle positions
+            let pinActions = simActions.filter { $0.type == .pin }
+            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: pinActions)
+            let dragCount = simActions.filter({ $0.type == .drag }).count
+            braidRemainingCrossings = dragCount
+            braidIsLower = [[false, false], [true, true]] // rope0=upper(first pin), rope1=lower
+            pendingBraidDrags = []
+            braidDragTimer = 0
+            braidDragPhase = .idle
+        } else {
+            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
+            pendingBraidDrags = []
+            braidRemainingCrossings = 0
+        }
 
         let tPhysics = CACurrentMediaTime()
         self.simulator = sim

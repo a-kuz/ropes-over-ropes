@@ -208,7 +208,7 @@ struct LevelDefinition: Codable {
         let cartIndex: Int
     }
 
-    /// "untangle" (default), "tension", or "rail"
+    /// "untangle" (default), "tension", "rail", or "braid"
     let mode: String?
 
     let id: Int
@@ -225,7 +225,36 @@ struct LevelDefinition: Codable {
     let carts: [CartDef]?
     let stations: [StationDef]?
 
+    /// Braid mode: target bottom hole index for each rope (rope i should end at braidTargets[i])
+    let braidTargets: [Int]?
+    /// Braid mode: minimum total 2D crossing count for a valid braid
+    let braidMinCrossings: Int?
+
     var isTensionMode: Bool { mode == "tension" }
     var isRailMode: Bool { mode == "rail" }
+    var isBraidMode: Bool { mode == "braid" }
+
+    init(mode: String?, id: Int, holeRadius: Float, particlesPerRope: Int,
+         holes: [Vec2], ropes: [Rope], hooks: [Hook]?, actions: [Action]?,
+         boards: [Board]?, weights: [WeightDef]?, targets: [TargetDef]?,
+         rails: [RailDef]?, carts: [CartDef]?, stations: [StationDef]?,
+         braidTargets: [Int]? = nil, braidMinCrossings: Int? = nil) {
+        self.mode = mode
+        self.id = id
+        self.holeRadius = holeRadius
+        self.particlesPerRope = particlesPerRope
+        self.holes = holes
+        self.ropes = ropes
+        self.hooks = hooks
+        self.actions = actions
+        self.boards = boards
+        self.weights = weights
+        self.targets = targets
+        self.rails = rails
+        self.carts = carts
+        self.stations = stations
+        self.braidTargets = braidTargets
+        self.braidMinCrossings = braidMinCrossings
+    }
 }
 

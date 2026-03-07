@@ -126,8 +126,11 @@ extension Renderer {
             let startZ = simulator?.endpointZ(bandIndex: ropeIndex, endIndex: 0) ?? 0
             let endZ = simulator?.endpointZ(bandIndex: ropeIndex, endIndex: 1) ?? 0
 
+            // In braid mode, only allow dragging bottom ends (top holes are anchors)
+            let startIsAnchor = isBraidMode && startHoleIndex < braidBottomHoleStart
+
             let startIsWeight = isTensionMode && startHoleIndex >= holePositions.count
-            if !startIsWeight {
+            if !startIsWeight && !startIsAnchor {
                 let startDistance = simd_length(world - startHolePosition)
                 let startTopAllowed = startZ >= endZ
                 let startScore = startDistance + (startTopAllowed ? 0 : hitRadius * 0.75)
@@ -179,7 +182,13 @@ extension Renderer {
         var bestDistance: Float = .greatestFiniteMagnitude
         for holeIndex in holePositions.indices {
             guard holeOccupied.indices.contains(holeIndex) else { continue }
-            if holeOccupied[holeIndex] { continue }
+            // In braid mode: allow snapping to occupied bottom holes (swap), skip top holes
+            if isBraidMode {
+                if holeIndex < braidBottomHoleStart { continue } // skip top holes
+                // Allow occupied holes for swap
+            } else {
+                if holeOccupied[holeIndex] { continue }
+            }
             let distance = simd_length(holePositions[holeIndex] - world)
             if distance < snapRadius && distance < bestDistance {
                 bestIndex = holeIndex
@@ -205,13 +214,25 @@ extension Renderer {
         var bestIndex: Int?
         var bestDistance: Float = .greatestFiniteMagnitude
 
-        for holeIndex in holePositions.indices {
-            guard holeOccupied.indices.contains(holeIndex) else { continue }
-            if holeOccupied[holeIndex] { continue }
-            let distance = simd_length(holePositions[holeIndex] - world)
-            if distance < snapRadius && distance < bestDistance {
-                bestIndex = holeIndex
-                bestDistance = distance
+        if isBraidMode {
+            // Braid mode: snap to nearest bottom hole (occupied or not), skip top holes
+            for holeIndex in holePositions.indices {
+                if holeIndex < braidBottomHoleStart { continue } // skip top holes
+                let distance = simd_length(holePositions[holeIndex] - world)
+                if distance < snapRadius && distance < bestDistance {
+                    bestIndex = holeIndex
+                    bestDistance = distance
+                }
+            }
+        } else {
+            for holeIndex in holePositions.indices {
+                guard holeOccupied.indices.contains(holeIndex) else { continue }
+                if holeOccupied[holeIndex] { continue }
+                let distance = simd_length(holePositions[holeIndex] - world)
+                if distance < snapRadius && distance < bestDistance {
+                    bestIndex = holeIndex
+                    bestDistance = distance
+                }
             }
         }
 
@@ -226,12 +247,52 @@ extension Renderer {
             return
         }
 
+        // Braid mode: handle swap when target hole is occupied
+        if isBraidMode, snappedHoleIndex != dragState.originalHoleIndex,
+           holeOccupied.indices.contains(snappedHoleIndex), holeOccupied[snappedHoleIndex] {
+            // Find which rope occupies the target hole
+            if let otherRopeIndex = ropes.indices.first(where: { ri in
+                ri != dragState.ropeIndex &&
+                ((dragState.endIndex == 0 && ropes[ri].startHole == snappedHoleIndex) ||
+                 (dragState.endIndex == 1 && ropes[ri].endHole == snappedHoleIndex) ||
+                 ropes[ri].startHole == snappedHoleIndex || ropes[ri].endHole == snappedHoleIndex)
+            }) {
+                // Determine which end of the other rope is at the target hole
+                let otherEndIndex: Int
+                if ropes[otherRopeIndex].endHole == snappedHoleIndex {
+                    otherEndIndex = 1
+                } else {
+                    otherEndIndex = 0
+                }
+
+                // Move the other rope's end to the original hole of the dragged strand
+                sim.swapEndToHole(bandIndex: otherRopeIndex, endIndex: otherEndIndex, holeIndex: dragState.originalHoleIndex)
+                if otherEndIndex == 0 {
+                    ropes[otherRopeIndex].startHole = dragState.originalHoleIndex
+                } else {
+                    ropes[otherRopeIndex].endHole = dragState.originalHoleIndex
+                }
+                // The original hole is now occupied by the swapped rope
+                if holeOccupied.indices.contains(dragState.originalHoleIndex) {
+                    holeOccupied[dragState.originalHoleIndex] = true
+                }
+                Self.logger.info("[BRAID] Swap: rope \(dragState.ropeIndex) end=\(dragState.endIndex) to hole \(snappedHoleIndex), rope \(otherRopeIndex) end=\(otherEndIndex) to hole \(dragState.originalHoleIndex)")
+            }
+        }
+
         sim.endDrag(targetHoleIndex: snappedHoleIndex)
         Haptics.medium()
 
         if snappedHoleIndex != dragState.originalHoleIndex {
             moveCount += 1
             onMoveCountChanged?(moveCount)
+
+            // Record the action if recording is active
+            if isRecording {
+                recordedActions.append((ropeIndex: dragState.ropeIndex, endIndex: dragState.endIndex,
+                                        fromHole: dragState.originalHoleIndex, toHole: snappedHoleIndex))
+                Self.logger.info("[REC] drag rope=\(dragState.ropeIndex) end=\(dragState.endIndex) \(dragState.originalHoleIndex)→\(snappedHoleIndex)")
+            }
         }
 
         // Update rope endpoints
