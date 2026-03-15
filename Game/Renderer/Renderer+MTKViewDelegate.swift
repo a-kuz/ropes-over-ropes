@@ -4,7 +4,7 @@ import simd
 extension Renderer {
     func mtkView(_ view: MTKView, drawableSizeWillChange size: CGSize) {
         lastViewSize = size
-        let offscreen = scaledOffscreenSize(from: size, view: view)
+        let offscreen = scaledOffscreenSize(from: size)
         resizeTextures(size: offscreen)
         let aspect = Float(size.width / max(1, size.height))
         let maxElev = holeElevations.max() ?? 0
@@ -34,7 +34,7 @@ extension Renderer {
 
         lastViewSize = view.drawableSize
         if hdrTex == nil {
-            let offscreen = scaledOffscreenSize(from: view.drawableSize, view: view)
+            let offscreen = scaledOffscreenSize(from: view.drawableSize)
             resizeTextures(size: offscreen)
         }
 

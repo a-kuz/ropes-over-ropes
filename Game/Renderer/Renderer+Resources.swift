@@ -209,48 +209,11 @@ extension Renderer {
         hdrTex = nil
     }
 
-    func scaledOffscreenSize(from drawableSize: CGSize, view: MTKView? = nil) -> CGSize {
+    func scaledOffscreenSize(from drawableSize: CGSize) -> CGSize {
         let s = CGFloat(renderScale)
-        var scale: CGFloat = 1.0
-        
-        #if os(macOS)
-        if let view = view {
-            if let window = view.window, let screen = window.screen {
-                let backingScale = screen.backingScaleFactor
-                let viewSizeInPixels = CGSize(
-                    width: view.bounds.width * backingScale,
-                    height: view.bounds.height * backingScale
-                )
-                if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
-                    scale = backingScale
-                }
-            } else if let layer = view.layer {
-                let layerScale = layer.contentsScale
-                let viewSizeInPixels = CGSize(
-                    width: view.bounds.width * layerScale,
-                    height: view.bounds.height * layerScale
-                )
-                if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
-                    scale = layerScale
-                }
-            }
-        }
-        #elseif os(iOS)
-        if let view = view {
-            let contentScale = view.contentScaleFactor
-            let viewSizeInPixels = CGSize(
-                width: view.bounds.width * contentScale,
-                height: view.bounds.height * contentScale
-            )
-            if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
-                scale = contentScale
-            }
-        }
-        #endif
-        
         return CGSize(
-            width: max(1, (drawableSize.width * s * scale).rounded()),
-            height: max(1, (drawableSize.height * s * scale).rounded())
+            width: max(1, (drawableSize.width * s).rounded()),
+            height: max(1, (drawableSize.height * s).rounded())
         )
     }
 }
