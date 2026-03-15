@@ -41,6 +41,8 @@ web-sys = { version = "0.3", features = [
     "AudioContext", "AudioContextState", "AudioBuffer", "AudioBufferSourceNode",
     "AudioDestinationNode", "GainNode", "GainOptions",
     "Request", "RequestInit", "RequestMode", "Response", "Headers",
+    "Clipboard", "Navigator",
+    "HtmlElement", "HtmlTextAreaElement", "HtmlBodyElement",
 ] }
 js-sys = "0.3"
 console_log = "1"

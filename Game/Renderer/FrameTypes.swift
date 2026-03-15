@@ -80,3 +80,8 @@ struct BoardVertex {
     var worldXY: SIMD2<Float>
 }
 
+struct Debug2DVertexData {
+    var position: SIMD2<Float>
+    var color: SIMD4<Float>
+}
+

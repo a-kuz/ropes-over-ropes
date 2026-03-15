@@ -2,6 +2,23 @@ import MetalKit
 import simd
 
 extension Renderer {
+    private func updateWoodBakeBounds() -> Bool {
+        guard !holePositions.isEmpty else { return false }
+        var minP = SIMD2<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
+        var maxP = SIMD2<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
+        for h in holePositions {
+            minP = min(minP, h)
+            maxP = max(maxP, h)
+        }
+        let boardSize = max(maxP.x - minP.x, maxP.y - minP.y)
+        let padding = max(boardSize * 3.0, 10.0)
+        let center = (minP + maxP) * 0.5
+        let half = (maxP - minP) * 0.5 + SIMD2<Float>(padding, padding)
+        woodBoundsMin = center - half
+        woodBoundsMax = center + half
+        return true
+    }
+
     func rebuildHoleInstances() {
         guard !holePositions.isEmpty else { return }
         let visualRadius = holeRadius * holeRadiusScale
@@ -65,21 +82,9 @@ extension Renderer {
     }
 
     func bakeWoodTexture() {
-        guard !holePositions.isEmpty else { return }
-        var minP = SIMD2<Float>(Float.greatestFiniteMagnitude, Float.greatestFiniteMagnitude)
-        var maxP = SIMD2<Float>(-Float.greatestFiniteMagnitude, -Float.greatestFiniteMagnitude)
-        for h in holePositions {
-            minP = min(minP, h)
-            maxP = max(maxP, h)
-        }
-        let boardSize = max(maxP.x - minP.x, maxP.y - minP.y)
-        let padding = max(boardSize * 3.0, 10.0)
-        let center = (minP + maxP) * 0.5
-        let half = (maxP - minP) * 0.5 + SIMD2<Float>(padding, padding)
-        let minBake = center - half
-        let maxBake = center + half
-        woodBoundsMin = minBake
-        woodBoundsMax = maxBake
+        guard updateWoodBakeBounds() else { return }
+        let minBake = woodBoundsMin
+        let maxBake = woodBoundsMax
 
         let texSize = 8192
         let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: texSize, height: texSize, mipmapped: false)
@@ -104,6 +109,53 @@ extension Renderer {
         encoder.endEncoding()
         cmdBuf.commit()
         cmdBuf.waitUntilCompleted()
+    }
+
+    func bakeHoleMaskTexture() {
+        guard updateWoodBakeBounds() else {
+            bakedHoleMaskTex = nil
+            return
+        }
+
+        let texSize = 2048
+        let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: texSize, height: texSize, mipmapped: false)
+        desc.usage = .shaderRead
+        guard let tex = device.makeTexture(descriptor: desc) else { return }
+        bakedHoleMaskTex = tex
+
+        let visualRadius = holeRadius * holeRadiusScale
+        let radiusSq = visualRadius * visualRadius
+        let minBake = woodBoundsMin
+        let maxBake = woodBoundsMax
+        let span = maxBake - minBake
+        let useSquareHoles = squareCrossSection
+        var pixels = [UInt8](repeating: 0, count: texSize * texSize)
+
+        for y in 0..<texSize {
+            let v = (Float(y) + 0.5) / Float(texSize)
+            let worldY = minBake.y + span.y * v
+            for x in 0..<texSize {
+                let u = (Float(x) + 0.5) / Float(texSize)
+                let worldX = minBake.x + span.x * u
+                var isHole: UInt8 = 0
+                for i in holePositions.indices {
+                    if holeElevations.indices.contains(i), holeElevations[i] > 0.01 { continue }
+                    let delta = SIMD2<Float>(worldX, worldY) - holePositions[i]
+                    if useSquareHoles {
+                        if max(abs(delta.x), abs(delta.y)) < visualRadius {
+                            isHole = 255
+                            break
+                        }
+                    } else if simd_length_squared(delta) < radiusSq {
+                        isHole = 255
+                        break
+                    }
+                }
+                pixels[y * texSize + x] = isHole
+            }
+        }
+
+        tex.replace(region: MTLRegionMake2D(0, 0, texSize, texSize), mipmapLevel: 0, withBytes: pixels, bytesPerRow: texSize)
     }
 
     func bakeBoardWoodVolumeTexture() {
@@ -157,11 +209,48 @@ extension Renderer {
         hdrTex = nil
     }
 
-    func scaledOffscreenSize(from drawableSize: CGSize) -> CGSize {
+    func scaledOffscreenSize(from drawableSize: CGSize, view: MTKView? = nil) -> CGSize {
         let s = CGFloat(renderScale)
+        var scale: CGFloat = 1.0
+        
+        #if os(macOS)
+        if let view = view {
+            if let window = view.window, let screen = window.screen {
+                let backingScale = screen.backingScaleFactor
+                let viewSizeInPixels = CGSize(
+                    width: view.bounds.width * backingScale,
+                    height: view.bounds.height * backingScale
+                )
+                if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
+                    scale = backingScale
+                }
+            } else if let layer = view.layer {
+                let layerScale = layer.contentsScale
+                let viewSizeInPixels = CGSize(
+                    width: view.bounds.width * layerScale,
+                    height: view.bounds.height * layerScale
+                )
+                if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
+                    scale = layerScale
+                }
+            }
+        }
+        #elseif os(iOS)
+        if let view = view {
+            let contentScale = view.contentScaleFactor
+            let viewSizeInPixels = CGSize(
+                width: view.bounds.width * contentScale,
+                height: view.bounds.height * contentScale
+            )
+            if drawableSize.width < viewSizeInPixels.width * 0.9 || drawableSize.height < viewSizeInPixels.height * 0.9 {
+                scale = contentScale
+            }
+        }
+        #endif
+        
         return CGSize(
-            width: max(1, (drawableSize.width * s).rounded()),
-            height: max(1, (drawableSize.height * s).rounded())
+            width: max(1, (drawableSize.width * s * scale).rounded()),
+            height: max(1, (drawableSize.height * s * scale).rounded())
         )
     }
 }

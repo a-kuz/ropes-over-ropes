@@ -13,20 +13,6 @@ enum CrossSection {
         }
     }
 
-    var halfWidth: Float {
-        switch self {
-        case .circular(let r): return r
-        case .rectangular(let w, _): return w * 0.5
-        }
-    }
-
-    var halfHeight: Float {
-        switch self {
-        case .circular(let r): return r
-        case .rectangular(_, let h): return h * 0.5
-        }
-    }
-
     var isRectangular: Bool {
         if case .rectangular = self { return true }
         return false
@@ -45,7 +31,6 @@ enum CrossSection {
 }
 
 struct MaterialFrame {
-    var tangent: SIMD3<Float>
     var d1: SIMD3<Float>
     var d2: SIMD3<Float>
 }
@@ -215,13 +200,24 @@ final class VerletSimulator {
     var railStations: [Station] = []
 
     // Rail physics
-    var cartFriction: Float = 0.5
     var cartDamping: Float = 0.92
     var cartMaxSpeed: Float = 3.0
     var cartSettleThreshold: Float = 0.003
 
     var bands: [Band] = []
-    private var _cachedActiveIndices: [Int] = []
+
+    /// 2D crossing pairs from previous step with Z ordering and side info for CCD
+    struct CrossingRecord {
+        let bandA: UInt16
+        let segA: UInt16
+        let bandB: UInt16
+        let segB: UInt16
+        let aAboveB: Bool   // sign of (zA - zB) at crossing point
+        let sideOfB: Float  // sign of 2D cross product — which side of A is B's crossing point on
+        let paramT: Float   // parameter on A at crossing
+        let paramU: Float   // parameter on B at crossing
+    }
+    private var _prevCrossingRecords: [CrossingRecord] = []
     let holePositions: [SIMD2<Float>]
     let holeElevations: [Float]
     let holeRadius: Float
@@ -235,15 +231,14 @@ final class VerletSimulator {
         didSet { constraintIterations = max(constraintIterations, 2) }
     }
     var broadphaseRebuildInterval: Int = 3
+    /// Minimum physics substeps per frame during drag (prevents tunneling under high tension).
+    var dragMinSubsteps: Int = 3
+    var dragPickupDuration: Float = 0.12
     var settleSteps: Int = 5
     var liftHeight: Float = 0.30000001192092896
-    /// Rope tension: multiplier on rest length. < 1 = taut (shorter rope), 1 = natural length.
-    /// 0.95 = rope is 5% shorter than span → pulled tight. Don't go below ~0.85.
     var ropeTension: Float = 0.98000001907348633
     var currentTension: Float = 1.0
-    private let tensionSpeed: Float = 0.5  // per second — slow tightening after drag
-    /// Rubber friction coefficient for rope-rope collisions (Coulomb model).
-    /// Real rubber μ ≈ 1.0–2.0; we use a moderate value to keep PBD stable.
+    private let tensionSpeed: Float = 0.5
     var frictionCoefficient: Float = 0.8
     var particleCount: Int = 6
     var bendCompliance: Float = 0
@@ -256,10 +251,9 @@ final class VerletSimulator {
 
     private let dt: Float = 1.0 / 120.0  // fixed dt, supports ProMotion 120fps
     private var accumulator: Float = 0
-    private var resampleCounter: Int = 0
-    private let resampleInterval: Int = 30  // resample every N substeps to avoid fighting solver
     var dragTargetPos: SIMD3<Float>?
     var dragStartPos: SIMD3<Float>?
+    var dragPickupElapsed: Float = .greatestFiniteMagnitude
     var logTimer: Float = 0
     var logEvery: Float = 1.0  // log every N seconds
 
@@ -276,12 +270,6 @@ final class VerletSimulator {
     }
 
     // MARK: - Friction sound feedback
-
-    struct FrictionEvent {
-        var intensity: Float
-        var relativeSpeed: Float
-        var position: SIMD3<Float>
-    }
 
     var frictionAccumulator: Float = 0
     var frictionSpeedAccumulator: Float = 0
@@ -565,20 +553,42 @@ final class VerletSimulator {
                 """)
         }
 
-        _cachedActiveIndices = bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 })
-
         if let drag = dragInfo, let target = dragTargetPos {
+            let dragFrameStart = CACurrentMediaTime()
             let idx = drag.endIndex == 0 ? 0 : bands[drag.bandIndex].positions.count - 1
             let startPos = dragStartPos ?? bands[drag.bandIndex].positions[idx]
+            let resolvedTarget: SIMD3<Float>
+            if dragPickupElapsed < dragPickupDuration {
+                let pickupT = dragPickupDuration > 0 ? min(dragPickupElapsed / dragPickupDuration, 1.0) : 1.0
+                let maxSpeed = 8.0 + (26.0 - 8.0) * pickupT
+                let maxDistance = maxSpeed * dt * Float(max(n, dragMinSubsteps))
+                let delta = target - startPos
+                let distance = simd_length(delta)
+                if distance > maxDistance && distance > 1e-6 {
+                    resolvedTarget = startPos + delta * (maxDistance / distance)
+                } else {
+                    resolvedTarget = target
+                }
+                dragPickupElapsed = min(dragPickupElapsed + dt * Float(n), dragPickupDuration)
+            } else {
+                resolvedTarget = target
+            }
 
-            for s in 1...n {
-                let t = Float(s) / Float(n)
-                let interpPos = startPos + (target - startPos) * t
+            // Run at least dragMinSubsteps during drag to prevent tunneling.
+            // The endpoint is interpolated across substeps so each substep moves it less,
+            // giving collision resolution enough iterations to maintain separation.
+            let substeps = max(n, dragMinSubsteps)
+            let subDt = dt * Float(n) / Float(substeps)
+            profiler.setCounter("dragSub", substeps)
+            for s in 1...substeps {
+                let t = Float(s) / Float(substeps)
+                let interpPos = startPos + (resolvedTarget - startPos) * t
                 bands[drag.bandIndex].positions[idx] = interpPos
                 bands[drag.bandIndex].previousPositions[idx] = interpPos
-                verletStep(collide: true, dt: dt)
+                verletStep(collide: true, dt: subDt, updateCrossingState: s == substeps)
             }
-            dragStartPos = target
+            profiler.record(.dragFrame, microseconds: (CACurrentMediaTime() - dragFrameStart) * 1e6)
+            dragStartPos = resolvedTarget
         } else {
             for _ in 0..<n {
                 verletStep(collide: true, dt: dt)
@@ -657,12 +667,6 @@ final class VerletSimulator {
             guard weights.indices.contains(wi) else { return .zero }
             return SIMD3<Float>(weights[wi].position.x, weights[wi].position.y, boardSurfaceZ(x: weights[wi].position.x, y: weights[wi].position.y))
         }
-    }
-
-    /// Is pin index a weight?
-    static func isWeightPin(_ pinIndex: Int?) -> Bool {
-        guard let p = pinIndex else { return false }
-        return p < 0
     }
 
     /// Weight index from negative pin index
@@ -787,82 +791,6 @@ final class VerletSimulator {
         return carts.allSatisfy { $0.settled }
     }
 
-    /// Log min distances between band pairs and crossing Z info
-    private func logCrossingState() {
-        let activeBands = bands.indices.filter { bands[$0].active }
-        for i in 0..<activeBands.count {
-            let bi = activeBands[i]
-            let bandI = bands[bi]
-            // Log segment lengths vs rest length
-            var maxStretch: Float = 0
-            var avgStretch: Float = 0
-            let n = bandI.positions.count
-            for k in 0..<(n - 1) {
-                let d = simd_length(bandI.positions[k + 1] - bandI.positions[k])
-                let ratio = d / max(bandI.segmentLength, 1e-6)
-                maxStretch = max(maxStretch, ratio)
-                avgStretch += ratio
-            }
-            avgStretch /= Float(max(1, n - 1))
-            Self.logger.info("""
-                [BAND \(bi)] segs=\(n - 1) segLen=\(bandI.segmentLength, format: .fixed(precision: 4)) \
-                radius=\(bandI.radius, format: .fixed(precision: 4)) \
-                stretch avg=\(avgStretch, format: .fixed(precision: 2)) max=\(maxStretch, format: .fixed(precision: 2)) \
-                zRange=[\(bandI.positions.map(\.z).min() ?? 0, format: .fixed(precision: 3))...\(bandI.positions.map(\.z).max() ?? 0, format: .fixed(precision: 3))]
-                """)
-
-            for j in (i + 1)..<activeBands.count {
-                let bj = activeBands[j]
-                let bandJ = bands[bj]
-                // Find min distance between any two segments
-                var minDist: Float = .greatestFiniteMagnitude
-                var minI = 0, minJ = 0
-                var crossings = 0
-                let segsI = bandI.positions.count - 1
-                let segsJ = bandJ.positions.count - 1
-                let threshold = bandI.radius + bandJ.radius
-
-                for si in 0..<segsI {
-                    let a0 = SIMD2<Float>(bandI.positions[si].x, bandI.positions[si].y)
-                    let a1 = SIMD2<Float>(bandI.positions[si + 1].x, bandI.positions[si + 1].y)
-                    for sj in 0..<segsJ {
-                        let b0 = SIMD2<Float>(bandJ.positions[sj].x, bandJ.positions[sj].y)
-                        let b1 = SIMD2<Float>(bandJ.positions[sj + 1].x, bandJ.positions[sj + 1].y)
-                        // 2D segment intersection check
-                        let d1 = a1 - a0
-                        let d2 = b1 - b0
-                        let cross = d1.x * d2.y - d1.y * d2.x
-                        if abs(cross) > 1e-9 {
-                            let d = b0 - a0
-                            let tA = (d.x * d2.y - d.y * d2.x) / cross
-                            let tB = (d.x * d1.y - d.y * d1.x) / cross
-                            if tA > 0.01 && tA < 0.99 && tB > 0.01 && tB < 0.99 {
-                                let zA = bandI.positions[si].z * (1 - tA) + bandI.positions[si + 1].z * tA
-                                let zB = bandJ.positions[sj].z * (1 - tB) + bandJ.positions[sj + 1].z * tB
-                                crossings += 1
-                                Self.logger.info("""
-                                    [CROSS] band\(bi)seg\(si) x band\(bj)seg\(sj): \
-                                    zA=\(zA, format: .fixed(precision: 4)) zB=\(zB, format: .fixed(precision: 4)) \
-                                    diff=\(zA - zB, format: .fixed(precision: 4)) \
-                                    (\(zA > zB ? "A over" : "B over"))
-                                    """)
-                            }
-                        }
-                        // 3D distance
-                        let diff3 = bandI.positions[si] - bandJ.positions[sj]
-                        let d3 = simd_length(diff3)
-                        if d3 < minDist { minDist = d3; minI = si; minJ = sj }
-                    }
-                }
-                Self.logger.info("""
-                    [PAIR \(bi)-\(bj)] minDist=\(minDist, format: .fixed(precision: 4)) \
-                    threshold=\(threshold, format: .fixed(precision: 4)) \
-                    at seg(\(minI),\(minJ)) crossings=\(crossings)
-                    """)
-            }
-        }
-    }
-
     private let initDt: Float = 1.0 / 60.0
 
     func doSteps(_ n: Int, collide: Bool) {
@@ -873,7 +801,7 @@ final class VerletSimulator {
 
     let profiler = PhysicsProfiler.shared
 
-    private func verletStep(collide: Bool, dt: Float) {
+    private func verletStep(collide: Bool, dt: Float, updateCrossingState: Bool = true) {
         let dt2 = dt * dt
         profiler.begin()
 
@@ -908,7 +836,7 @@ final class VerletSimulator {
         profiler.end(.verletIntegration)
 
         // 2. Constraint + collision iterations (interleaved for robust PBD)
-        let active = collide ? _cachedActiveIndices : []
+        let active: [Int] = collide ? bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 }) : []
 
         // Scale iterations inversely with tension — stronger tension needs more solver work
         let effectiveIters = max(constraintIterations, Int(Float(constraintIterations) / max(currentTension, 0.3)))
@@ -945,6 +873,7 @@ final class VerletSimulator {
                     collisionPairs = profiler.measure(.broadphase) { buildCollisionPairs(active) }
                 }
                 resolveCollisionPairs(collisionPairs)
+                profiler.measure(.crossingSolve) { resolve2DCrossingCollisions(active) }
             }
         }
         profiler.end(.constraints)
@@ -1084,6 +1013,15 @@ final class VerletSimulator {
             }
         }
 
+        // CCD: fix tunneling by restoring Z order for pairs that were crossing last step
+        if collide && updateCrossingState {
+            profiler.measure(.crossingTunnel) { resolveTunneledCrossings() }
+        }
+
+        if collide && updateCrossingState {
+            profiler.measure(.crossingRecords) { updateCrossingRecords(active) }
+        }
+
         profiler.end(.postCollision)
 
         profiler.setCounter("pairs", collisionPairs.count)
@@ -1094,71 +1032,6 @@ final class VerletSimulator {
     }
 
 
-
-    /// Redistribute particles by curvature: dense at bends, sparse on straight segments.
-    /// Uses curvature-weighted arc-length so particles concentrate where the rope curves.
-    private func resampleBand(_ bi: Int) {
-        let n = bands[bi].positions.count
-        guard n >= 4 else { return }
-
-        let pos = bands[bi].positions
-        let prev = bands[bi].previousPositions
-        let twist = bands[bi].twistAngles
-        let prevTwist = bands[bi].previousTwistAngles
-
-        var curvature = [Float](repeating: 0, count: n)
-        for i in 1..<(n - 1) {
-            let d0 = pos[i] - pos[i - 1]
-            let d1 = pos[i + 1] - pos[i]
-            let len0 = simd_length(d0)
-            let len1 = simd_length(d1)
-            if len0 > 1e-9 && len1 > 1e-9 {
-                let cosA = simd_dot(d0, d1) / (len0 * len1)
-                curvature[i] = max(1.0 - cosA, 0)
-            }
-        }
-
-        let curvatureScale: Float = 8.0
-        var wArcLen = [Float](repeating: 0, count: n)
-        for i in 1..<n {
-            let segLen = simd_length(pos[i] - pos[i - 1])
-            let avgCurv = (curvature[i - 1] + curvature[i]) * 0.5
-            let weight = 1.0 + curvatureScale * avgCurv
-            wArcLen[i] = wArcLen[i - 1] + segLen * weight
-        }
-        let totalW = wArcLen[n - 1]
-        guard totalW > 1e-6 else { return }
-
-        var arcLen = [Float](repeating: 0, count: n)
-        for i in 1..<n {
-            arcLen[i] = arcLen[i - 1] + simd_length(pos[i] - pos[i - 1])
-        }
-
-        var maxSeg: Float = 0, minSeg: Float = Float.greatestFiniteMagnitude
-        for i in 0..<(n - 1) {
-            let s = arcLen[i + 1] - arcLen[i]
-            maxSeg = max(maxSeg, s)
-            if s > 1e-9 { minSeg = min(minSeg, s) }
-        }
-        guard minSeg < 1e-9 || maxSeg / max(minSeg, 1e-9) > 1.5 else { return }
-
-        let idealW = totalW / Float(n - 1)
-        var seg = 0
-        for i in 1..<(n - 1) {
-            let targetW = idealW * Float(i)
-            while seg < n - 2 && wArcLen[seg + 1] < targetW {
-                seg += 1
-            }
-            let wStart = wArcLen[seg]
-            let wLen = wArcLen[seg + 1] - wStart
-            let t = wLen > 1e-9 ? (targetW - wStart) / wLen : 0
-
-            bands[bi].positions[i] = pos[seg] + (pos[seg + 1] - pos[seg]) * t
-            bands[bi].previousPositions[i] = prev[seg] + (prev[seg + 1] - prev[seg]) * t
-            bands[bi].twistAngles[i] = twist[seg] + (twist[seg + 1] - twist[seg]) * t
-            bands[bi].previousTwistAngles[i] = prevTwist[seg] + (prevTwist[seg + 1] - prevTwist[seg]) * t
-        }
-    }
 
     private func bandConstraints(_ bi: Int, dt: Float) {
         let n = bands[bi].positions.count
@@ -1264,6 +1137,179 @@ final class VerletSimulator {
     }
 
     // MARK: - Collision
+
+    /// For pairs that cross in 2D, check Z separation at the exact 2D crossing point.
+    /// This catches cases where the normal 3D closest-point collision misses due to long segments.
+    private func resolve2DCrossingCollisions(_ activeBands: [Int]) {
+        for ii in 0..<activeBands.count {
+            let bi = activeBands[ii]
+            let nA = bands[bi].positions.count
+            for jj in (ii+1)..<activeBands.count {
+                let bj = activeBands[jj]
+                let nB = bands[bj].positions.count
+                let minDist = bands[bi].crossSection.collisionRadius + bands[bj].crossSection.collisionRadius
+
+                for si in 0..<(nA-1) {
+                    let a0 = bands[bi].positions[si]
+                    let a1 = bands[bi].positions[si+1]
+                    let a02 = SIMD2<Float>(a0.x, a0.y)
+                    let a12 = SIMD2<Float>(a1.x, a1.y)
+
+                    for sj in 0..<(nB-1) {
+                        let b0 = bands[bj].positions[sj]
+                        let b1 = bands[bj].positions[sj+1]
+                        let b02 = SIMD2<Float>(b0.x, b0.y)
+                        let b12 = SIMD2<Float>(b1.x, b1.y)
+
+                        // Check 2D crossing
+                        let d1 = a12 - a02, d2 = b12 - b02
+                        let cross2 = d1.x * d2.y - d1.y * d2.x
+                        guard abs(cross2) > 1e-9 else { continue }
+                        let dv = b02 - a02
+                        let t2 = (dv.x * d2.y - dv.y * d2.x) / cross2
+                        let u2 = (dv.x * d1.y - dv.y * d1.x) / cross2
+                        guard t2 > 1e-6 && t2 < (1-1e-6) && u2 > 1e-6 && u2 < (1-1e-6) else { continue }
+
+                        // 2D crossing confirmed — check Z separation at crossing point
+                        let zA = a0.z + (a1.z - a0.z) * t2
+                        let zB = b0.z + (b1.z - b0.z) * u2
+                        let zDiff = zA - zB
+                        let skin: Float = minDist * 0.5  // proactive margin
+                        guard abs(zDiff) < minDist + skin else { continue }
+
+                        // Enforce Z separation, maintaining current ordering
+                        let sign: Float = zDiff >= 0 ? 1 : -1
+                        let correction = (minDist - abs(zDiff)) * 0.5 + 0.001
+
+                        let aPinned0 = bands[bi].pinStart != nil && si == 0
+                        let aPinned1 = bands[bi].pinEnd != nil && si == nA-2
+                        let bPinned0 = bands[bj].pinStart != nil && sj == 0
+                        let bPinned1 = bands[bj].pinEnd != nil && sj == nB-2
+
+                        if !aPinned0 { bands[bi].positions[si].z += sign * correction * (1 - t2) }
+                        if !aPinned1 { bands[bi].positions[si+1].z += sign * correction * t2 }
+                        if !bPinned0 { bands[bj].positions[sj].z -= sign * correction * (1 - u2) }
+                        if !bPinned1 { bands[bj].positions[sj+1].z -= sign * correction * u2 }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Update the list of 2D crossing pairs with their Z ordering for the current step.
+    private func updateCrossingRecords(_ activeBands: [Int]) {
+        _prevCrossingRecords.removeAll(keepingCapacity: true)
+        for ii in 0..<activeBands.count {
+            let bi = activeBands[ii]
+            let nA = bands[bi].positions.count
+            for jj in (ii+1)..<activeBands.count {
+                let bj = activeBands[jj]
+                let nB = bands[bj].positions.count
+                for si in 0..<(nA-1) {
+                    let a0 = bands[bi].positions[si]
+                    let a1 = bands[bi].positions[si+1]
+                    let a02 = SIMD2<Float>(a0.x, a0.y)
+                    let a12 = SIMD2<Float>(a1.x, a1.y)
+                    for sj in 0..<(nB-1) {
+                        let b0 = bands[bj].positions[sj]
+                        let b1 = bands[bj].positions[sj+1]
+                        let b02 = SIMD2<Float>(b0.x, b0.y)
+                        let b12 = SIMD2<Float>(b1.x, b1.y)
+                        let d1 = a12 - a02, d2 = b12 - b02
+                        let cross2 = d1.x * d2.y - d1.y * d2.x
+                        guard abs(cross2) > 1e-9 else { continue }
+                        let d = b02 - a02
+                        let t2 = (d.x * d2.y - d.y * d2.x) / cross2
+                        let u2 = (d.x * d1.y - d.y * d1.x) / cross2
+                        guard t2 > 1e-6 && t2 < (1-1e-6) && u2 > 1e-6 && u2 < (1-1e-6) else { continue }
+                        // 2D crossing found — record Z ordering and which side B's midpoint is on relative to A
+                        let zA = a0.z + (a1.z - a0.z) * t2
+                        let zB = b0.z + (b1.z - b0.z) * u2
+                        // B's crossing point on A's line (to determine side)
+                        let crossPtB = b02 + (b12 - b02) * u2
+                        let d1v = a12 - a02
+                        let dB = crossPtB - a02
+                        let side = d1v.x * dB.y - d1v.y * dB.x
+                        _prevCrossingRecords.append(CrossingRecord(
+                            bandA: UInt16(bi), segA: UInt16(si),
+                            bandB: UInt16(bj), segB: UInt16(sj),
+                            aAboveB: zA >= zB,
+                            sideOfB: side,
+                            paramT: t2,
+                            paramU: u2
+                        ))
+                    }
+                }
+            }
+        }
+    }
+
+    /// For crossing pairs from the previous step, check if Z ordering changed (tunneling).
+    /// If so, restore Z separation to maintain the original ordering.
+    private func resolveTunneledCrossings() {
+        for rec in _prevCrossingRecords {
+            let bi = Int(rec.bandA), si = Int(rec.segA)
+            let bj = Int(rec.bandB), sj = Int(rec.segB)
+            guard bands[bi].active && bands[bj].active else { continue }
+            let nA = bands[bi].positions.count
+            let nB = bands[bj].positions.count
+            guard si < nA-1 && sj < nB-1 else { continue }
+
+            let a0 = bands[bi].positions[si], a1 = bands[bi].positions[si+1]
+            let b0 = bands[bj].positions[sj], b1 = bands[bj].positions[sj+1]
+            let a02 = SIMD2<Float>(a0.x, a0.y), a12 = SIMD2<Float>(a1.x, a1.y)
+            let b02 = SIMD2<Float>(b0.x, b0.y), b12 = SIMD2<Float>(b1.x, b1.y)
+            let d1 = a12 - a02, d2 = b12 - b02
+            let cross2 = d1.x * d2.y - d1.y * d2.x
+            guard abs(cross2) > 1e-9 else { continue }
+            let d = b02 - a02
+            let t2 = (d.x * d2.y - d.y * d2.x) / cross2
+            let u2 = (d.x * d1.y - d.y * d1.x) / cross2
+            guard t2 > 1e-6 && t2 < (1-1e-6) && u2 > 1e-6 && u2 < (1-1e-6) else { continue }
+
+            let minDist = bands[bi].crossSection.collisionRadius + bands[bj].crossSection.collisionRadius
+            let aPinned0 = bands[bi].pinStart != nil && si == 0
+            let aPinned1 = bands[bi].pinEnd != nil && si == nA-2
+            let bPinned0 = bands[bj].pinStart != nil && sj == 0
+            let bPinned1 = bands[bj].pinEnd != nil && sj == nB-2
+
+            if t2 > 1e-6 && t2 < (1-1e-6) && u2 > 1e-6 && u2 < (1-1e-6) {
+                // Still crossing in 2D — check if Z ordering flipped
+                let zA = a0.z + (a1.z - a0.z) * t2
+                let zB = b0.z + (b1.z - b0.z) * u2
+                let aAboveNow = zA >= zB
+                guard aAboveNow != rec.aAboveB else { continue }
+                let zDiff = zA - zB
+                let needed = rec.aAboveB ? minDist : -minDist
+                let correction = (needed - zDiff) * 0.5
+                if !aPinned0 { bands[bi].positions[si].z += correction * (1 - t2) }
+                if !aPinned1 { bands[bi].positions[si+1].z += correction * t2 }
+                if !bPinned0 { bands[bj].positions[sj].z -= correction * (1 - u2) }
+                if !bPinned1 { bands[bj].positions[sj+1].z -= correction * u2 }
+            } else {
+                // No longer crossing in 2D — check if B's midpoint crossed to the other side of A
+                // Sample B at the parameter where crossing WAS, check which side of A it's on now
+                let curPtB = SIMD2<Float>(b0.x + (b1.x-b0.x)*rec.paramU, b0.y + (b1.y-b0.y)*rec.paramU)
+                let curPtA = SIMD2<Float>(a0.x + (a1.x-a0.x)*rec.paramT, a0.y + (a1.y-a0.y)*rec.paramT)
+                let d1v = SIMD2<Float>(a1.x-a0.x, a1.y-a0.y)
+                let dB = curPtB - curPtA
+                let curSide = d1v.x * dB.y - d1v.y * dB.x
+                guard rec.sideOfB * curSide < 0 else { continue }  // same side = no tunneling
+
+                // B crossed to other side of A — tunneling detected. Apply Z correction at midpoints.
+                let pT = rec.paramT, pU = rec.paramU
+                let zA = a0.z + (a1.z - a0.z) * pT
+                let zB = b0.z + (b1.z - b0.z) * pU
+                let zDiff = zA - zB
+                let needed = rec.aAboveB ? minDist : -minDist
+                let correction = (needed - zDiff) * 0.5
+                if !aPinned0 { bands[bi].positions[si].z += correction * (1 - pT) }
+                if !aPinned1 { bands[bi].positions[si+1].z += correction * pT }
+                if !bPinned0 { bands[bj].positions[sj].z -= correction * (1 - pU) }
+                if !bPinned1 { bands[bj].positions[sj+1].z -= correction * pU }
+            }
+        }
+    }
 
     struct CollisionPair {
         let bandA: UInt16
@@ -1476,26 +1522,6 @@ final class VerletSimulator {
         let d1 = simd_normalize(f0.d1 * (1 - s) + f1.d1 * s)
         let d2 = simd_normalize(f0.d2 * (1 - s) + f1.d2 * s)
         return cs.effectiveRadius(normal: normal, d1: d1, d2: d2)
-    }
-
-    @inline(__always)
-    private func latexThinningFactor(bandIndex bi: Int, segIndex si: Int, param s: Float) -> Float {
-        let band = bands[bi]
-        let n = band.positions.count
-        guard n >= 2 else { return 1.0 }
-
-        let segLen = band.segmentLength
-        guard segLen > 1e-6 else { return 1.0 }
-
-        let actualLen = simd_length(band.positions[si + 1] - band.positions[si])
-        let localStretch = max(0.0, actualLen / segLen - 1.0)
-
-        let particleT = (Float(si) + s) / Float(n - 1)
-        let center = sin(particleT * Float.pi)
-        let centerMask = center * center * center * center
-
-        let tension = localStretch * centerMask
-        return 1.0 / sqrt(max(1.0, 1.0 + tension * stretchThinning * 3.0))
     }
 
     var cachedFrames: [[MaterialFrame]] = []

@@ -14,17 +14,6 @@ extension VerletSimulator {
     }
 
     @inline(__always)
-    func isInsideAnyHole(x: Float, y: Float) -> Bool {
-        let r2 = holeRadius * holeRadius
-        for hp in holePositions {
-            let dx = x - hp.x
-            let dy = y - hp.y
-            if dx * dx + dy * dy < r2 { return true }
-        }
-        return false
-    }
-
-    @inline(__always)
     func boardSurfaceZ(x: Float, y: Float) -> Float {
         var maxZ: Float = 0
         for b in boards {

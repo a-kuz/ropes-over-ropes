@@ -6,8 +6,8 @@ settings:
   base:
     SDKROOT: auto
     SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
   configs:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
@@ -30,7 +30,6 @@ targets:
       base:
         DEVELOPMENT_TEAM: NW2CSMF97Y
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: ""
         PRODUCT_BUNDLE_IDENTIFIER: com.uzls.four
         MARKETING_VERSION: 1.0.0
         CURRENT_PROJECT_VERSION: 1

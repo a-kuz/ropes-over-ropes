@@ -3,95 +3,55 @@ import MetalKit
 #if os(iOS)
 import UIKit
 
-final class GameMTKView: MTKView, UIGestureRecognizerDelegate {
+final class GameMTKView: MTKView {
     var onTouch: ((InputPhase, CGPoint) -> Void)?
     var onCameraPan: ((SIMD2<Float>) -> Void)?
     var onCameraRotation: ((Float) -> Void)?
     var onCameraZoom: ((Float) -> Void)?
     var onCameraSpin: ((Float) -> Void)?
-    var onCameraDebugToggle: (() -> Void)?
 
-    private var tapCount = 0
-    private var lastTapTime: Date?
-    private var twoFingerActive = false
+    private var multiTouchActive = false
     private var singleTouchCancelled = false
-
-    private lazy var pinchGesture: UIPinchGestureRecognizer = {
-        let g = UIPinchGestureRecognizer(target: self, action: #selector(handlePinch(_:)))
-        g.delegate = self
-        return g
-    }()
-
-    private lazy var rotationGesture: UIRotationGestureRecognizer = {
-        let g = UIRotationGestureRecognizer(target: self, action: #selector(handleRotation(_:)))
-        g.delegate = self
-        return g
-    }()
+    private var threeFingerSpan: CGFloat = 0
 
     override func didMoveToSuperview() {
         super.didMoveToSuperview()
-        if pinchGesture.view == nil {
-            isMultipleTouchEnabled = true
-            addGestureRecognizer(pinchGesture)
-            addGestureRecognizer(rotationGesture)
-        }
+        isMultipleTouchEnabled = true
     }
 
-    @objc private func handlePinch(_ gesture: UIPinchGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            twoFingerActive = true
-            if !singleTouchCancelled {
-                singleTouchCancelled = true
-                onTouch?(.cancelled, .zero)
+    private func averageSpan(_ touches: [UITouch]) -> CGFloat {
+        guard touches.count >= 3 else { return 0 }
+        let pts = touches.map { $0.location(in: self) }
+        var maxDist: CGFloat = 0
+        for i in 0..<pts.count {
+            for j in (i+1)..<pts.count {
+                let dx = pts[i].x - pts[j].x
+                let dy = pts[i].y - pts[j].y
+                let d = sqrt(dx * dx + dy * dy)
+                if d > maxDist { maxDist = d }
             }
-        case .changed:
-            let scale = Float(gesture.scale)
-            let zoomScale = 1.0 / scale
-            onCameraZoom?(zoomScale)
-            gesture.scale = 1.0
-        case .ended, .cancelled, .failed:
-            twoFingerActive = false
-            singleTouchCancelled = false
-        default:
-            break
         }
-    }
-
-    @objc private func handleRotation(_ gesture: UIRotationGestureRecognizer) {
-        switch gesture.state {
-        case .began:
-            twoFingerActive = true
-            if !singleTouchCancelled {
-                singleTouchCancelled = true
-                onTouch?(.cancelled, .zero)
-            }
-        case .changed:
-            onCameraSpin?(Float(gesture.rotation))
-            gesture.rotation = 0
-        case .ended, .cancelled, .failed:
-            twoFingerActive = false
-            singleTouchCancelled = false
-        default:
-            break
-        }
-    }
-
-    func gestureRecognizer(_ gestureRecognizer: UIGestureRecognizer, shouldRecognizeSimultaneouslyWith otherGestureRecognizer: UIGestureRecognizer) -> Bool {
-        true
+        return maxDist
     }
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let event = event, let allTouches = event.allTouches else { return }
-        let viewTouches = allTouches.filter { $0.view === self }
+        let viewTouches = allTouches.filter { $0.view === self && $0.phase != .ended && $0.phase != .cancelled }
 
-        if viewTouches.count >= 2 {
-            twoFingerActive = true
+        if viewTouches.count >= 3 {
+            multiTouchActive = true
             if !singleTouchCancelled {
                 singleTouchCancelled = true
                 onTouch?(.cancelled, .zero)
             }
-        } else if viewTouches.count == 1 && !twoFingerActive {
+            threeFingerSpan = averageSpan(Array(viewTouches))
+        } else if viewTouches.count >= 2 {
+            multiTouchActive = true
+            if !singleTouchCancelled {
+                singleTouchCancelled = true
+                onTouch?(.cancelled, .zero)
+            }
+        } else if viewTouches.count == 1 && !multiTouchActive {
             if let currentTouch = viewTouches.first {
                 singleTouchCancelled = false
                 onTouch?(.began, currentTouch.location(in: self))
@@ -101,17 +61,33 @@ final class GameMTKView: MTKView, UIGestureRecognizerDelegate {
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let event = event, let allTouches = event.allTouches else { return }
-        let viewTouches = allTouches.filter { $0.view === self }
+        let viewTouches = allTouches.filter { $0.view === self && $0.phase != .ended && $0.phase != .cancelled }
 
-        if viewTouches.count >= 2 {
-            if !twoFingerActive {
-                twoFingerActive = true
+        if viewTouches.count >= 3 {
+            if !multiTouchActive {
+                multiTouchActive = true
+                if !singleTouchCancelled {
+                    singleTouchCancelled = true
+                    onTouch?(.cancelled, .zero)
+                }
+                threeFingerSpan = averageSpan(Array(viewTouches))
+            } else {
+                let newSpan = averageSpan(Array(viewTouches))
+                if threeFingerSpan > 1 {
+                    let scale = Float(threeFingerSpan / newSpan)
+                    onCameraZoom?(scale)
+                }
+                threeFingerSpan = newSpan
+            }
+        } else if viewTouches.count >= 2 {
+            if !multiTouchActive {
+                multiTouchActive = true
                 if !singleTouchCancelled {
                     singleTouchCancelled = true
                     onTouch?(.cancelled, .zero)
                 }
             }
-        } else if viewTouches.count == 1 && !twoFingerActive && !singleTouchCancelled {
+        } else if viewTouches.count == 1 && !multiTouchActive && !singleTouchCancelled {
             if let currentTouch = viewTouches.first {
                 onTouch?(.moved, currentTouch.location(in: self))
             }
@@ -123,36 +99,22 @@ final class GameMTKView: MTKView, UIGestureRecognizerDelegate {
         let remaining = allTouches.filter { $0.view === self && $0.phase != .ended && $0.phase != .cancelled }
 
         if remaining.isEmpty {
-            if twoFingerActive || singleTouchCancelled {
-                twoFingerActive = false
+            if multiTouchActive || singleTouchCancelled {
+                multiTouchActive = false
                 singleTouchCancelled = false
+                threeFingerSpan = 0
                 return
             }
             if let currentTouch = touches.first {
-                let now = Date()
-                if let lastTime = lastTapTime, now.timeIntervalSince(lastTime) < 0.5 {
-                    tapCount += 1
-                } else {
-                    tapCount = 1
-                }
-                lastTapTime = now
-
-                if tapCount >= 3 {
-                    tapCount = 0
-                    lastTapTime = nil
-                    onCameraDebugToggle?()
-                } else {
-                    onTouch?(.ended, currentTouch.location(in: self))
-                }
+                onTouch?(.ended, currentTouch.location(in: self))
             }
         }
     }
 
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
-        twoFingerActive = false
+        multiTouchActive = false
         singleTouchCancelled = false
-        tapCount = 0
-        lastTapTime = nil
+        threeFingerSpan = 0
         if let currentTouch = touches.first {
             onTouch?(.cancelled, currentTouch.location(in: self))
         }
@@ -168,12 +130,9 @@ final class GameMTKView: MTKView {
     var onCameraRotation: ((Float) -> Void)?
     var onCameraZoom: ((Float) -> Void)?
     var onCameraSpin: ((Float) -> Void)?
-    var onCameraDebugToggle: (() -> Void)?
 
     private var isDragging = false
     private var lastRightDragLocation: CGPoint?
-    private var clickCount = 0
-    private var lastClickTime: Date?
 
     override var acceptsFirstResponder: Bool { true }
 
@@ -197,22 +156,7 @@ final class GameMTKView: MTKView {
     override func mouseUp(with event: NSEvent) {
         let loc = flippedLocation(for: event)
         isDragging = false
-
-        let now = Date()
-        if let lastTime = lastClickTime, now.timeIntervalSince(lastTime) < 0.4 {
-            clickCount += 1
-        } else {
-            clickCount = 1
-        }
-        lastClickTime = now
-
-        if clickCount >= 3 {
-            clickCount = 0
-            lastClickTime = nil
-            onCameraDebugToggle?()
-        } else {
-            onTouch?(.ended, loc)
-        }
+        onTouch?(.ended, loc)
     }
 
     override func rightMouseDown(with event: NSEvent) {
@@ -247,5 +191,6 @@ final class GameMTKView: MTKView {
         let scale = 1.0 - Float(event.magnification)
         onCameraZoom?(scale)
     }
+
 }
 #endif

@@ -38,6 +38,7 @@ struct FrameUniforms {
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
+static float tableShadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
 
 static float3 woodSolidTexture(float2 worldXY, float seed) {
     float seedAngle = seed * 2.399;
@@ -302,12 +303,14 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
     float wrapDiff = saturate((nl + diffuseWrap) / (1.0 + diffuseWrap));
     if (cartoonMode > 0.5) wrapDiff = toonStep(wrapDiff, cartoonLevels);
 
-    float sssBackNL = saturate(dot(-n, l));
-    float sssBackWrap = saturate((sssBackNL + 0.5) / 1.5);
-    float sssForwardWrap = saturate((-nl + 0.8) / 1.8);
-    float sssViewEdge = pow(1.0 - nv, 2.0);
-    float sssContrib = (sssBackWrap * 0.5 + sssForwardWrap * 0.35 + sssViewEdge * 0.15) * subsurface;
-    float3 sssTint = albedo * float3(1.25, 0.85, 0.7);
+    float opticalThickness = sqrt(saturate(1.0 - radial * radial));
+    float opticalDepth = opticalThickness * mix(3.4, 2.1, taut);
+    float transmittance = exp2(-opticalDepth);
+    float sssBack = pow(saturate(dot(-n, l)), 1.25) * (0.35 + 0.65 * transmittance);
+    float sssWrap = pow(saturate(1.0 - nl), 1.8) * transmittance;
+    float sssEdge = pow(1.0 - nv, 2.5) * (0.2 + 0.8 * transmittance);
+    float sssContrib = (sssBack * 0.75 + sssWrap * 0.4 + sssEdge * 0.25) * subsurface;
+    float3 sssTint = mix(albedo, albedo * float3(1.45, 0.78, 0.58), 0.65);
 
     float ambientBase = mix(0.20, 0.45, matteAmount);
     float3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff) + sssTint * sssContrib;
@@ -430,10 +433,9 @@ kernel void bakeBoardWoodVolumeKernel(texture3d<float, access::write> dst [[text
 
 fragment TableOut tableFragment(VSOut in [[stage_in]],
                               constant FrameUniforms& frame [[buffer(1)]],
-                              constant HoleCountBuf& holeCounts [[buffer(3)]],
-                              const device HoleInstance* holes [[buffer(4)]],
                               depth2d<float> shadowMap [[texture(2)]],
-                              texture2d<float> woodTex [[texture(3)]]) {
+                              texture2d<float> woodTex [[texture(3)]],
+                              texture2d<float> holeMaskTex [[texture(4)]]) {
     constexpr sampler woodSampler(address::clamp_to_edge, filter::linear);
 
     float2 uv = in.uv;
@@ -452,18 +454,10 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
     float4 clipPos = frame.viewProj * float4(worldPos, 1.0);
     float tableDepth = clipPos.z / clipPos.w + 0.0004;
 
-    float squareHoles = frame.tableParams2.w;
-    for (uint i = 0; i < holeCounts.count; i++) {
-        float holeElev = holes[i].position_radius.z;
-        if (holeElev > 0.01) continue;
-        float2 holeCenter = holes[i].position_radius.xy;
-        float holeR = holes[i].position_radius.w * 0.76;
-        float2 d = abs(worldXY - holeCenter);
-        float dist = squareHoles > 0.5 ? max(d.x, d.y) : length(worldXY - holeCenter);
-        if (dist < holeR) {
-            tableDepth = 1.0;
-            break;
-        }
+    float2 holeUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
+    float holeMask = holeMaskTex.sample(woodSampler, holeUV).r;
+    if (holeMask > 0.5) {
+        tableDepth = 1.0;
     }
 
     float3 worldN = float3(0.0, 0.0, 1.0);
@@ -471,15 +465,8 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
     float tableStyle = frame.tableParams.x;
     float3 baseColor;
     if (tableStyle < 0.5) {
-        if (woodTex.get_width() > 1) {
-            float2 woodUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
-            baseColor = woodTex.sample(woodSampler, woodUV).rgb;
-        } else {
-            float levelSeed = frame.timeDrag.z;
-            baseColor = woodTexture(uv, worldXY, levelSeed);
-        }
-
-        baseColor = saturate(baseColor);
+        float2 woodUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
+        baseColor = woodTex.sample(woodSampler, woodUV).rgb;
     } else if (tableStyle < 1.5) {
         float3 c1 = frame.tableParams.yzw;
         float3 c2 = frame.tableParams2.xyz;
@@ -524,7 +511,7 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
 
         float shadow = 1.0;
         if (shadowMap.get_width() > 0) {
-            shadow = shadowVisibility(worldPos, worldN, frame, shadowMap);
+            shadow = tableShadowVisibility(worldPos, worldN, frame, shadowMap);
         }
         shadow = pow(shadow, 2.2);
         float shadowDark = frame.lightingParams.y;
@@ -551,6 +538,7 @@ struct HoleOut {
     float3 worldPos;
     float highlight;
     float holeId;
+    float localZ;
 };
 
 vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
@@ -573,6 +561,7 @@ vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
     o.normal = normalize(vertices[vid].normal);
     o.highlight = isHighlight;
     o.holeId = float(iid);
+    o.localZ = vertices[vid].position.z;
     return o;
 }
 
@@ -583,12 +572,16 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
 
-    float3 baseCol = float3(0.12, 0.13, 0.15);
-    float3 topCol = float3(0.18, 0.19, 0.22);
-    float specPower = 120.0;
-    float specStrength = 0.55;
+    float depthFade = saturate(-in.localZ * 1.2);
+    float metalMask = 1.0 - depthFade * depthFade;
 
-    float3 col = mix(baseCol, topCol, smoothstep(0.15, 0.75, n.z));
+    float metallic = 0.85;
+    float roughness = 0.28;
+    float3 baseCol = float3(0.75, 0.76, 0.78);
+    float3 darkCol = float3(0.45, 0.46, 0.50);
+    float3 col = mix(darkCol, baseCol, smoothstep(0.1, 0.8, n.z));
+    col *= metalMask;
+
     float3 tint = frame.holeTint.xyz;
     float tintAmt = frame.holeTint.w;
     col = mix(col, col * tint, tintAmt);
@@ -610,10 +603,27 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
         float3 h = normalize(l + v);
         float ndh = saturate(dot(n, h));
         float nv = saturate(dot(n, v));
-        float fresnel = pow(1.0 - nv, 4.0);
-        float spec = pow(ndh, specPower) * specStrength * (0.3 + 0.7 * fresnel);
-        float3 specCol = mix(col, float3(1.0), 0.5) * spec * lightI;
-        lit = col * (0.22 + 0.78 * ndl) * lightI + specCol;
+
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float denom = ndh * ndh * (alpha2 - 1.0) + 1.0;
+        float D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        float Gl = ndl / (ndl * (1.0 - k) + k + 1e-5);
+        float Gv = nv / (nv * (1.0 - k) + k + 1e-5);
+        float G = Gl * Gv;
+
+        float3 F0 = mix(float3(0.04), col, metallic);
+        float3 F = F0 + (1.0 - F0) * pow(1.0 - saturate(dot(h, v)), 5.0);
+
+        float3 spec = D * G * F / (4.0 * max(ndl, 0.001) * max(nv, 0.001) + 1e-5);
+        float3 diffuse = col * (1.0 - metallic) * (1.0 - F) / 3.14159265;
+
+        lit = (diffuse + spec) * ndl * lightI;
+        lit += col * 0.08;
+
+        float rimPow = pow(1.0 - nv, 5.0);
+        lit += F0 * rimPow * 0.4 * lightI * metalMask;
 
         float shadow = 1.0;
         if (shadowMap.get_width() > 0) {
@@ -674,9 +684,7 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
         sideDir = normalize(sideDir);
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
-        float amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
-        float wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
-        displaced = in.position + normalize(in.normal) * (wave * amp);
+        displaced = in.position;
     }
 
     o.worldPos = displaced;
@@ -771,7 +779,8 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
                              constant FrameUniforms& frame [[buffer(1)]],
                              depth2d<float> shadowMap [[texture(2)]],
                              texture2d<float> noiseTex [[texture(3)]],
-                             texture2d<float> envTex [[texture(4)]]) {
+                             texture2d<float> envTex [[texture(4)]],
+                             texture2d<float> envDepthTex [[texture(5)]]) {
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float lightI = frame.lightDir_intensity.w;
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
@@ -895,33 +904,93 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
         float envReflect = frame.ropeMatParams4.x;
         float subsurfaceAtten = 1.0 - frame.ropeMatParams.w * 0.7;
         float envSpread = max(0.01, frame.ropeMatParams4.z);
-        if (envReflect > 0.001 && envTex.get_width() > 1) {
+        if (envReflect > 0.001 && envTex.get_width() > 1 && envDepthTex.get_width() > 1) {
             constexpr sampler envSampler(address::clamp_to_edge, filter::linear);
-            float2 screenUV = in.position.xy / float2(envTex.get_width(), envTex.get_height());
-            float nv2 = saturate(dot(n, v));
+            float3 geomN = normalize(in.normal);
+            float nv2 = saturate(dot(geomN, v));
             float envFresnel = pow(1.0 - nv2, 2.5);
 
-            float3 r = reflect(-v, n);
-            float2 offset = r.xy * envSpread;
+            float3 r = reflect(-v, geomN);
 
-            float2 envUV = screenUV + offset;
-            float3 envSample = envTex.sample(envSampler, envUV).rgb;
-            float envStrength = envReflect * (0.4 + 0.6 * envFresnel) * subsurfaceAtten;
+            float4 startClip = frame.viewProj * float4(in.worldPos, 1.0);
+            float3 startNDC = startClip.xyz / startClip.w;
+            float2 startUV = float2(startNDC.x * 0.5 + 0.5, 0.5 - startNDC.y * 0.5);
+
+            float3 endWorld = in.worldPos + r * envSpread;
+            float4 endClip = frame.viewProj * float4(endWorld, 1.0);
+            float3 endNDC = endClip.xyz / endClip.w;
+            float2 endUV = float2(endNDC.x * 0.5 + 0.5, 0.5 - endNDC.y * 0.5);
+
+            float2 rayDir = endUV - startUV;
+            float rayLen = length(rayDir);
+
+            bool hit = false;
+            float2 hitUV = endUV;
+            float hitFade = 1.0;
+
+            int stepCount = 16;
+            if (rayLen > 0.001) {
+                float depthStart = startNDC.z;
+                float depthEnd = endNDC.z;
+
+                for (int i = 1; i <= stepCount; i++) {
+                    float t = float(i) / float(stepCount);
+                    float2 sampleUV = startUV + rayDir * t;
+                    if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0) break;
+
+                    float sceneDepth = envDepthTex.sample(envSampler, sampleUV).r;
+                    float rayDepth = mix(depthStart, depthEnd, t);
+
+                    if (rayDepth > sceneDepth + 0.001) {
+                        float tPrev = float(i - 1) / float(stepCount);
+                        for (int j = 0; j < 4; j++) {
+                            float tMid = (tPrev + t) * 0.5;
+                            float2 midUV = startUV + rayDir * tMid;
+                            float midScene = envDepthTex.sample(envSampler, midUV).r;
+                            float midRay = mix(depthStart, depthEnd, tMid);
+                            if (midRay > midScene + 0.001) {
+                                t = tMid;
+                            } else {
+                                tPrev = tMid;
+                            }
+                        }
+                        hitUV = startUV + rayDir * t;
+                        hitFade = 1.0;
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+
+            float3 fallbackSample;
+            if (r.z < 0.0) {
+                fallbackSample = envTex.sample(envSampler, startUV).rgb;
+            } else {
+                float3 lightDir = normalize(frame.lightDir_intensity.xyz);
+                float rDotL = dot(r, lightDir);
+                float skyGrad = r.z * 0.5 + 0.5;
+                fallbackSample = mix(float3(0.08, 0.07, 0.06), float3(0.35, 0.33, 0.30), skyGrad);
+                fallbackSample += float3(0.15, 0.13, 0.10) * saturate(rDotL);
+                fallbackSample *= lightI;
+            }
+
+            float mirrorBlend = saturate(envReflect);
+
             bool debugEnv = frame.ropeMatParams4.y > 0.5;
             if (debugEnv) {
-                c = envSample;
+                c = hit ? envTex.sample(envSampler, hitUV).rgb : fallbackSample;
             } else {
-                float3 ropeColor = in.color;
-                float3 tinted = envSample * mix(float3(1.0), ropeColor, 0.5);
-                float envLum = dot(envSample, float3(0.299, 0.587, 0.114));
-                float selfLum = dot(c, float3(0.299, 0.587, 0.114));
-                float bleedAmount = saturate(envLum - selfLum * 0.5);
-                c += tinted * envStrength * bleedAmount;
+                float3 envSample = hit ? envTex.sample(envSampler, hitUV).rgb : fallbackSample;
+                float3 tinted = envSample * mix(float3(1.0), in.color, 0.3);
+                c = mix(c, tinted, mirrorBlend);
             }
         }
     }
 
-    return float4(c, 1.0);
+    float opacity = saturate(frame.timeDrag.y);
+    bool hasEnvPass = envTex.get_width() > 1 && envDepthTex.get_width() > 1;
+    float finalAlpha = hasEnvPass ? 1.0 : opacity;
+    return float4(c, finalAlpha);
 }
 
 struct ShadowOut {
@@ -953,9 +1022,7 @@ vertex ShadowOut ropeShadowVertex(RopeIn in [[stage_in]],
         sideDir = normalize(sideDir);
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
-        float amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
-        float wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
-        displaced = in.position + normalize(in.normal) * (wave * amp);
+        displaced = in.position;
     }
 
     o.position = frame.lightViewProj * float4(displaced, 1.0);
@@ -1160,6 +1227,22 @@ static float shadowMapSample(depth2d<float> shadowMap, float2 uv, float depthRef
     return shadowMap.sample_compare(shadowSampler, uv, depthRef);
 }
 
+static float tableShadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap) {
+    if (frame.lightingParams.w < 0.5) return 1.0;
+
+    float4 lp = frame.lightViewProj * float4(worldPos, 1.0);
+    float3 ndc = lp.xyz / max(1e-6, lp.w);
+    float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+
+    float biasBase = frame.orthoHalfSize_shadowBias.z;
+    float ndl = saturate(dot(normalize(worldN), normalize(frame.lightDir_intensity.xyz)));
+    float bias = biasBase + (1.0 - ndl) * biasBase * 2.2;
+    float depthRef = ndc.z - bias;
+
+    return shadowMapSample(shadowMap, uv, depthRef);
+}
+
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap) {
     if (frame.lightingParams.w < 0.5) return 1.0;
 
@@ -1212,6 +1295,14 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
     shadow = pow(shadow, 1.2);
 
     return shadow;
+}
+
+kernel void copyDepthKernel(depth2d<float, access::read> src [[texture(0)]],
+                            texture2d<float, access::write> dst [[texture(1)]],
+                            uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float d = src.read(gid);
+    dst.write(float4(d, 0.0, 0.0, 1.0), gid);
 }
 
 kernel void bloomThreshold(texture2d<float, access::read> src [[texture(0)]],
@@ -1319,5 +1410,30 @@ fragment float4 postFragment(VSOut in [[stage_in]],
         }
     }
     return float4(mapped, 1.0);
+}
+
+// MARK: - Debug 2D Overlay
+
+struct Debug2DVertex {
+    float2 position [[attribute(0)]];
+    float4 color    [[attribute(1)]];
+};
+
+struct Debug2DOut {
+    float4 position [[position]];
+    float4 color;
+    float  pointSize [[point_size]];
+};
+
+vertex Debug2DOut debug2DVertex(Debug2DVertex in [[stage_in]]) {
+    Debug2DOut out;
+    out.position = float4(in.position, 0.0, 1.0);
+    out.color = in.color;
+    out.pointSize = 8.0;
+    return out;
+}
+
+fragment float4 debug2DFragment(Debug2DOut in [[stage_in]]) {
+    return in.color;
 }
 

@@ -92,15 +92,6 @@ final class RubberFrictionSound: @unchecked Sendable {
         }
     }
 
-    func stop() {
-        guard isRunning else { return }
-        engine.stop()
-        isRunning = false
-        smoothedVolume = 0
-        Self._currentVolume = 0
-        mixerNode.outputVolume = 0
-    }
-
     func update(intensity: Float, speed: Float) {
         guard enabled else {
             if smoothedVolume > 0.001 {

@@ -32,22 +32,42 @@ struct Camera {
         center = SIMD3<Float>(centerX, centerY, 0)
 
         rotationAngle = 0
-
-        if maxElevation > 0.01 && tiltAngle < 0.15 {
-            tiltAngle = 0.25
-        }
+        tiltAngle = (maxElevation > 0.01) ? 0.25 : 0.0
     }
 
     func viewProj(aspect: Float) -> simd_float4x4 {
-        let yOffset = distance * sin(tiltAngle)
-        let zOffset = distance * cos(tiltAngle)
-        let eye = center + SIMD3<Float>(0, yOffset, zOffset)
-        let view = simd_float4x4.lookAt(eye: eye, center: center, up: SIMD3<Float>(0, 1, 0))
-        let rot = simd_float4x4.rotationZ(rotationAngle)
+        let yDist = distance * sin(tiltAngle)
+        let zDist = distance * cos(tiltAngle)
+        
+        // Orbit the camera around the Z axis based on rotationAngle
+        // Initial offset (rotation=0) is along +Y axis: (0, yDist, zDist)
+        let xOffset = -yDist * sin(rotationAngle)
+        let yOffset = yDist * cos(rotationAngle)
+        
+        let eye = center + SIMD3<Float>(xOffset, yOffset, zDist)
+        
+        // Calculate view matrix basis vectors manually to ensure horizon stability
+        let f = simd_normalize(center - eye)
+        
+        // Right vector (s) is X axis rotated by rotationAngle
+        // This ensures the camera doesn't roll relative to the table plane
+        let s = SIMD3<Float>(cos(rotationAngle), sin(rotationAngle), 0)
+        
+        // Up vector (u)
+        let u = simd_cross(s, f)
+        
+        let view = simd_float4x4(
+            SIMD4<Float>(s.x, u.x, -f.x, 0),
+            SIMD4<Float>(s.y, u.y, -f.y, 0),
+            SIMD4<Float>(s.z, u.z, -f.z, 0),
+            SIMD4<Float>(-simd_dot(s, eye), -simd_dot(u, eye), simd_dot(f, eye), 1)
+        )
+        
         let halfH = orthoHalfHeight
         let halfW = orthoHalfHeight * aspect
         let proj = simd_float4x4.ortho(left: -halfW, right: halfW, bottom: -halfH, top: halfH, near: 0.01, far: 10.0)
-        return proj * rot * view
+        
+        return proj * view
     }
 }
 
@@ -62,17 +82,6 @@ extension simd_float4x4 {
             SIMD4<Float>(0, 2.0 / tb, 0, 0),
             SIMD4<Float>(0, 0, -1.0 / fn, 0),
             SIMD4<Float>(-(right + left) / rl, -(top + bottom) / tb, -near / fn, 1)
-        )
-    }
-
-    static func rotationZ(_ angle: Float) -> simd_float4x4 {
-        let c = cos(angle)
-        let s = sin(angle)
-        return simd_float4x4(
-            SIMD4<Float>( c, s, 0, 0),
-            SIMD4<Float>(-s, c, 0, 0),
-            SIMD4<Float>( 0, 0, 1, 0),
-            SIMD4<Float>( 0, 0, 0, 1)
         )
     }
 

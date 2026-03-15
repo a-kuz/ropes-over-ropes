@@ -322,67 +322,6 @@ enum RopeMeshBuilder {
         return RopeMesh(vertices: vertices, indices: indices)
     }
 
-    static func buildSquareCap(center: SIMD3<Float>, halfSize: Float, depth: Float, facing: SIMD3<Float>, color: SIMD3<Float>, darken: Float = 0.7, wormMode: Bool = false) -> RopeMesh {
-        let h = max(0.001, halfSize)
-        let d = max(0.001, depth)
-
-        let capParams = SIMD4<Float>(0, 0, 0, wormMode ? 1.0 : 0.0)
-
-        var vertices: [RopeVertex] = []
-        var indices: [UInt32] = []
-
-        let topN = SIMD3<Float>(0, 0, 1)
-
-        let corners: [SIMD2<Float>] = [
-            SIMD2<Float>( h,  h),
-            SIMD2<Float>(-h,  h),
-            SIMD2<Float>(-h, -h),
-            SIMD2<Float>( h, -h),
-        ]
-
-        func pos3(_ c: SIMD2<Float>, z: Float) -> SIMD3<Float> {
-            SIMD3<Float>(center.x + c.x, center.y + c.y, z)
-        }
-
-        func quad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, n: SIMD3<Float>, c: SIMD3<Float>) {
-            let base = UInt32(vertices.count)
-            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
-        }
-
-        let topZ = center.z
-        let botZ = center.z - d
-
-        quad(pos3(corners[0], z: topZ), pos3(corners[1], z: topZ),
-             pos3(corners[2], z: topZ), pos3(corners[3], z: topZ),
-             n: topN, c: color)
-
-        let sideColor = color * (1.0 - darken * 0.4)
-        let wallNormals: [SIMD3<Float>] = [
-            SIMD3<Float>( 0,  1, 0),
-            SIMD3<Float>(-1,  0, 0),
-            SIMD3<Float>( 0, -1, 0),
-            SIMD3<Float>( 1,  0, 0),
-        ]
-        let wallEdges: [(Int, Int)] = [(0, 1), (1, 2), (2, 3), (3, 0)]
-        for (edgeIdx, (a, b)) in wallEdges.enumerated() {
-            let n = wallNormals[edgeIdx]
-            quad(pos3(corners[a], z: topZ), pos3(corners[b], z: topZ),
-                 pos3(corners[b], z: botZ), pos3(corners[a], z: botZ),
-                 n: n, c: sideColor)
-        }
-
-        let bottomColor = color * (1.0 - darken)
-        quad(pos3(corners[3], z: botZ), pos3(corners[2], z: botZ),
-             pos3(corners[1], z: botZ), pos3(corners[0], z: botZ),
-             n: SIMD3<Float>(0, 0, -1), c: bottomColor)
-
-        return RopeMesh(vertices: vertices, indices: indices)
-    }
-
     static func buildSwivel(
         center: SIMD3<Float>,
         tangent: SIMD3<Float>,
@@ -466,14 +405,6 @@ enum RopeMeshBuilder {
         }
 
         return RopeMesh(vertices: vertices, indices: indices)
-    }
-
-    private static func rotate(vector: SIMD3<Float>, axis: SIMD3<Float>, angle: Float) -> SIMD3<Float> {
-        let cosAngle = cos(angle)
-        let sinAngle = sin(angle)
-        return vector * cosAngle
-            + simd_cross(axis, vector) * sinAngle
-            + axis * simd_dot(axis, vector) * (1 - cosAngle)
     }
 
     private static func twistAngle(at distanceAlong: Float, events: [TwistEvent]) -> Float {

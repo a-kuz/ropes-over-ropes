@@ -166,10 +166,12 @@ struct LevelDefinition: Codable {
     }
 
     struct Action: Codable {
-        let type: String       // "pin" or "drag"
+        let type: String       // "pin", "drag", or "swap"
         let ropeIndex: Int
         let endIndex: Int      // 0 = start, 1 = end
         let holeIndex: Int
+        var ropeIndex2: Int?   // for swap: second rope
+        var endIndex2: Int?    // for swap: second rope's end
     }
 
     struct WeightDef: Codable {

@@ -13,6 +13,10 @@ final class PhysicsProfiler: @unchecked Sendable {
         case constraints       = "constr"
         case narrowphase       = "narrow"
         case postCollision     = "postCol"
+        case dragFrame         = "drag"
+        case crossingSolve     = "x2d"
+        case crossingTunnel    = "tunnel"
+        case crossingRecords   = "xRec"
         case meshBuild         = "mesh"
         case winCheck          = "winChk"
     }
@@ -109,9 +113,13 @@ final class PhysicsProfiler: @unchecked Sendable {
     func summaryString() -> String {
         let snap = snapshot()
         guard !snap.isEmpty else { return "no data" }
-        let totalAvg = snap.reduce(0.0) { $0 + $1.avgUs }
-        let phases = snap.map { "\($0.phase.rawValue)=\(Int($0.avgUs))µs(max \(Int($0.maxUs)))" }
-        var counters = "total=\(Int(totalAvg))µs"
+        let sorted = snap.sorted { lhs, rhs in
+            if lhs.avgUs == rhs.avgUs { return lhs.phase.rawValue < rhs.phase.rawValue }
+            return lhs.avgUs > rhs.avgUs
+        }
+        let totalAvg = sorted.reduce(0.0) { $0 + $1.avgUs }
+        let phases = sorted.map { "\($0.phase.rawValue)=\(Self.formatDuration($0.avgUs))(max \(Self.formatDuration($0.maxUs)))" }
+        var counters = "total=\(Self.formatDuration(totalAvg))"
         for (k, v) in extraCounters.sorted(by: { $0.key < $1.key }) {
             counters += " \(k)=\(v)"
         }
@@ -145,5 +153,12 @@ final class PhysicsProfiler: @unchecked Sendable {
         let elapsed = CACurrentMediaTime() - startTime
         let line = summaryString()
         Self.logger.warning("[PROF] final (\(String(format: "%.1f", elapsed), privacy: .public)s): \(line, privacy: .public)")
+    }
+
+    private static func formatDuration(_ us: Double) -> String {
+        if us >= 1000 {
+            return String(format: "%.2fms", us / 1000.0)
+        }
+        return "\(Int(us))µs"
     }
 }

@@ -3,7 +3,6 @@ import simd
 
 extension Renderer {
     func handleCameraPan(translation: SIMD2<Float>, in view: MTKView) {
-        guard cameraDebugMode else { return }
         let width = max(1.0, Float(view.bounds.size.width))
         let height = max(1.0, Float(view.bounds.size.height))
         let aspect = width / height
@@ -18,7 +17,6 @@ extension Renderer {
     }
 
     func handleCameraRotation(delta: Float) {
-        guard cameraDebugMode else { return }
         camera.tiltAngle += delta
         camera.tiltAngle = max(-Float.pi / 2 + 0.1, min(Float.pi / 2 - 0.1, camera.tiltAngle))
     }

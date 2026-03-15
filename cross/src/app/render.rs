@@ -494,6 +494,7 @@ impl App {
                 mut table_settings,
                 mut cartoon_settings,
                 mut cap_settings,
+                mut worm_settings,
                 mut exact_render_scale,
             ) = self
                 .renderer
@@ -506,6 +507,7 @@ impl App {
                         r.table.clone(),
                         r.cartoon.clone(),
                         r.cap.clone(),
+                        r.worm.clone(),
                         r.render_scale,
                     )
                 })
@@ -516,6 +518,7 @@ impl App {
                     TableSettings::default(),
                     CartoonSettings::default(),
                     CapSettings::default(),
+                    WormSettings::default(),
                     render_mode_scale(self.render_mode),
                 ));
             let mut cel_mode_local = self.cel_mode;
@@ -544,8 +547,10 @@ impl App {
                     &mut table_settings,
                     &mut cartoon_settings,
                     &mut cap_settings,
+                    &mut worm_settings,
                     &mut exact_render_scale,
                     &mut sq_cross,
+                    self.current_level_id,
                     &lb_result,
                 );
             });

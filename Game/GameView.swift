@@ -10,20 +10,410 @@ import SwiftUI
 class GameController: ObservableObject {
     weak var renderer: Renderer?
 
+    struct Preset: Identifiable, Equatable {
+        let id = UUID()
+        let name: String
+        // Physics
+        let gravity: Float?
+        let damping: Float?
+        let ropeTension: Float?
+        let bendCompliance: Float?
+        let stretchThinning: Float?
+        let particleCount: Float?
+        let constraintIterations: Float?
+        let settleSteps: Float?
+        let bendVelocityCoupling: Float?
+        let dragHeight: Float?
+        let liftHeight: Float?
+        let frictionSoundEnabled: Bool?
+        // Visuals
+        let profileSegments: Float?
+        let holeRadiusScale: Float?
+        let holeSegments: Float?
+        let ropeRadiusScale: Float?
+        let exposure: Float?
+        let lightIntensity: Float?
+        let lightDirX: Float?
+        let lightDirY: Float?
+        let lightDirZ: Float?
+        let shadowType: ShadowType?
+        let ambient: Float?
+        let shadowBias: Float?
+        let shadowDarkness: Float?
+        let lightSize: Float?
+        let shadowsEnabled: Bool?
+        let bloomStrength: Float?
+        let cartoonShaderEnabled: Bool?
+        let cartoonExposure: Float?
+        let cartoonBloom: Float?
+        let cartoonEdgeStrength: Float?
+        let cartoonLevels: Float?
+        let tableStyle: TableStyle?
+        let tableColor1R: Float?
+        let tableColor1G: Float?
+        let tableColor1B: Float?
+        let tableColor2R: Float?
+        let tableColor2G: Float?
+        let tableColor2B: Float?
+        let woodSeed: Float?
+        let woodBrightness: Float?
+        let woodPatternScale: Float?
+        let capRadiusScale: Float?
+        let capSegments: Float?
+        let capRings: Float?
+        let capDarken: Float?
+        let ropeMatte: Float?
+        let ropeGloss: Float?
+        let ropeDiffuseWrap: Float?
+        let ropeSubsurface: Float?
+        let ropeEdgeLight: Float?
+        let ropeSaturation: Float?
+        let ropeMicroBump: Float?
+        let ropeBumpScale: Float?
+        let ropeContactAO: Float?
+        let ropeLiftGlow: Float?
+        let ropeStretchGloss: Float?
+        let ropeStretchSpec: Float?
+        let ropeEnvReflect: Float?
+        let ropeEnvSpread: Float?
+        let ropeOpacity: Float?
+        let wormMode: Bool?
+        let squareCrossSection: Bool?
+        let renderScale: Float?
+        let zoomScale: Float?
+
+        init(
+            name: String,
+            gravity: Float? = nil,
+            damping: Float? = nil,
+            ropeTension: Float? = nil,
+            bendCompliance: Float? = nil,
+            stretchThinning: Float? = nil,
+            particleCount: Float? = nil,
+            constraintIterations: Float? = nil,
+            settleSteps: Float? = nil,
+            bendVelocityCoupling: Float? = nil,
+            dragHeight: Float? = nil,
+            liftHeight: Float? = nil,
+            frictionSoundEnabled: Bool? = nil,
+            profileSegments: Float? = nil,
+            holeRadiusScale: Float? = nil,
+            holeSegments: Float? = nil,
+            ropeRadiusScale: Float? = nil,
+            exposure: Float? = nil,
+            lightIntensity: Float? = nil,
+            lightDirX: Float? = nil,
+            lightDirY: Float? = nil,
+            lightDirZ: Float? = nil,
+            shadowType: ShadowType? = nil,
+            ambient: Float? = nil,
+            shadowBias: Float? = nil,
+            shadowDarkness: Float? = nil,
+            lightSize: Float? = nil,
+            shadowsEnabled: Bool? = nil,
+            bloomStrength: Float? = nil,
+            cartoonShaderEnabled: Bool? = nil,
+            cartoonExposure: Float? = nil,
+            cartoonBloom: Float? = nil,
+            cartoonEdgeStrength: Float? = nil,
+            cartoonLevels: Float? = nil,
+            tableStyle: TableStyle? = nil,
+            tableColor1R: Float? = nil,
+            tableColor1G: Float? = nil,
+            tableColor1B: Float? = nil,
+            tableColor2R: Float? = nil,
+            tableColor2G: Float? = nil,
+            tableColor2B: Float? = nil,
+            woodSeed: Float? = nil,
+            woodBrightness: Float? = nil,
+            woodPatternScale: Float? = nil,
+            capRadiusScale: Float? = nil,
+            capSegments: Float? = nil,
+            capRings: Float? = nil,
+            capDarken: Float? = nil,
+            ropeMatte: Float? = nil,
+            ropeGloss: Float? = nil,
+            ropeDiffuseWrap: Float? = nil,
+            ropeSubsurface: Float? = nil,
+            ropeEdgeLight: Float? = nil,
+            ropeSaturation: Float? = nil,
+            ropeMicroBump: Float? = nil,
+            ropeBumpScale: Float? = nil,
+            ropeContactAO: Float? = nil,
+            ropeLiftGlow: Float? = nil,
+            ropeStretchGloss: Float? = nil,
+            ropeStretchSpec: Float? = nil,
+            ropeEnvReflect: Float? = nil,
+            ropeEnvSpread: Float? = nil,
+            ropeOpacity: Float? = nil,
+            wormMode: Bool? = nil,
+            squareCrossSection: Bool? = nil,
+            renderScale: Float? = nil,
+            zoomScale: Float? = nil
+        ) {
+            self.name = name
+            self.gravity = gravity
+            self.damping = damping
+            self.ropeTension = ropeTension
+            self.bendCompliance = bendCompliance
+            self.stretchThinning = stretchThinning
+            self.particleCount = particleCount
+            self.constraintIterations = constraintIterations
+            self.settleSteps = settleSteps
+            self.bendVelocityCoupling = bendVelocityCoupling
+            self.dragHeight = dragHeight
+            self.liftHeight = liftHeight
+            self.frictionSoundEnabled = frictionSoundEnabled
+            self.profileSegments = profileSegments
+            self.holeRadiusScale = holeRadiusScale
+            self.holeSegments = holeSegments
+            self.ropeRadiusScale = ropeRadiusScale
+            self.exposure = exposure
+            self.lightIntensity = lightIntensity
+            self.lightDirX = lightDirX
+            self.lightDirY = lightDirY
+            self.lightDirZ = lightDirZ
+            self.shadowType = shadowType
+            self.ambient = ambient
+            self.shadowBias = shadowBias
+            self.shadowDarkness = shadowDarkness
+            self.lightSize = lightSize
+            self.shadowsEnabled = shadowsEnabled
+            self.bloomStrength = bloomStrength
+            self.cartoonShaderEnabled = cartoonShaderEnabled
+            self.cartoonExposure = cartoonExposure
+            self.cartoonBloom = cartoonBloom
+            self.cartoonEdgeStrength = cartoonEdgeStrength
+            self.cartoonLevels = cartoonLevels
+            self.tableStyle = tableStyle
+            self.tableColor1R = tableColor1R
+            self.tableColor1G = tableColor1G
+            self.tableColor1B = tableColor1B
+            self.tableColor2R = tableColor2R
+            self.tableColor2G = tableColor2G
+            self.tableColor2B = tableColor2B
+            self.woodSeed = woodSeed
+            self.woodBrightness = woodBrightness
+            self.woodPatternScale = woodPatternScale
+            self.capRadiusScale = capRadiusScale
+            self.capSegments = capSegments
+            self.capRings = capRings
+            self.capDarken = capDarken
+            self.ropeMatte = ropeMatte
+            self.ropeGloss = ropeGloss
+            self.ropeDiffuseWrap = ropeDiffuseWrap
+            self.ropeSubsurface = ropeSubsurface
+            self.ropeEdgeLight = ropeEdgeLight
+            self.ropeSaturation = ropeSaturation
+            self.ropeMicroBump = ropeMicroBump
+            self.ropeBumpScale = ropeBumpScale
+            self.ropeContactAO = ropeContactAO
+            self.ropeLiftGlow = ropeLiftGlow
+            self.ropeStretchGloss = ropeStretchGloss
+            self.ropeStretchSpec = ropeStretchSpec
+            self.ropeEnvReflect = ropeEnvReflect
+            self.ropeEnvSpread = ropeEnvSpread
+            self.ropeOpacity = ropeOpacity
+            self.wormMode = wormMode
+            self.squareCrossSection = squareCrossSection
+            self.renderScale = renderScale
+            self.zoomScale = zoomScale
+        }
+    }
+
+    let presets: [Preset] = [
+        Preset(
+            name: "Default",
+            gravity: Defaults.gravity,
+            damping: Defaults.damping,
+            ropeTension: Defaults.ropeTension,
+            bendCompliance: Defaults.bendCompliance,
+            stretchThinning: 0.039,
+            cartoonShaderEnabled: false,
+            ropeMatte: 0.69,
+            ropeGloss: 1.17,
+            ropeSubsurface: 0.303,
+            ropeEdgeLight: 0.009,
+            ropeSaturation: 0.979,
+            ropeMicroBump: 1.5,
+            ropeBumpScale: 7.37,
+            ropeEnvReflect: 0.15,
+            ropeOpacity: 1.0
+        ),
+        Preset(
+            name: "Jelly",
+            gravity: -0.1953949,
+            damping: 0.9901605,
+            ropeTension: 1.0,
+            bendCompliance: 0.0074757283,
+            stretchThinning: 0.1,
+            particleCount: 69,
+            constraintIterations: 9,
+            settleSteps: 1,
+            bendVelocityCoupling: 0,
+            dragHeight: 0.85,
+            liftHeight: 0.9,
+            frictionSoundEnabled: false,
+            profileSegments: 6,
+            holeRadiusScale: 1.0,
+            holeSegments: 19,
+            ropeRadiusScale: 1.0,
+            exposure: 0.6805594,
+            lightIntensity: 1.0721008,
+            lightDirX: 0.68410814,
+            lightDirY: -0.79935646,
+            lightDirZ: 0.6411401,
+            shadowType: ShadowType.pcf,
+            ambient: 0,
+            shadowBias: 0.0009,
+            shadowDarkness: 0.14629121,
+            lightSize: 0.020752506,
+            shadowsEnabled: true,
+            bloomStrength: 0.35820743,
+            cartoonShaderEnabled: false,
+            cartoonExposure: 1.33,
+            cartoonBloom: 0,
+            cartoonEdgeStrength: 1,
+            cartoonLevels: 2,
+            tableStyle: TableStyle.wood,
+            tableColor1R: 0,
+            tableColor1G: 0,
+            tableColor1B: 0,
+            tableColor2R: 0.044013005,
+            tableColor2G: 0.0649406,
+            tableColor2B: 0.07229897,
+            woodSeed: 0.44339293,
+            woodBrightness: 0.8587378,
+            woodPatternScale: 2.393613,
+            capRadiusScale: 0.38643488,
+            capSegments: 12,
+            capRings: 2,
+            capDarken: 0.116093226,
+            ropeMatte: 0.05,
+            ropeGloss: 2.5,
+            ropeDiffuseWrap: 0.14709696,
+            ropeSubsurface: 0.0,
+            ropeEdgeLight: 0.17961414,
+            ropeSaturation: 1.0922331,
+            ropeMicroBump: 0.8786408,
+            ropeBumpScale: 3.1103795,
+            ropeContactAO: 0,
+            ropeLiftGlow: 0,
+            ropeStretchGloss: 0.014713832,
+            ropeStretchSpec: 0.6748382,
+            ropeEnvReflect: 0.8177177,
+            ropeEnvSpread: 0.059403844,
+            ropeOpacity: 0.7696207,
+            wormMode: false,
+            squareCrossSection: false,
+            renderScale: 0.6312977,
+            zoomScale: 1.2382903
+        ),
+        Preset(
+            name: "Steel Cable",
+            gravity: -15.0,
+            damping: 0.85,
+            ropeTension: 1.0,
+            bendCompliance: 0.0,
+            stretchThinning: 0.0,
+            ropeMatte: 0.4,
+            ropeGloss: 1.5,
+            ropeSubsurface: 0.0,
+            ropeEdgeLight: 0.2,
+            ropeSaturation: 0.0,
+            ropeMicroBump: 0.5,
+            ropeBumpScale: 2.0,
+            ropeEnvReflect: 0.8,
+            ropeOpacity: 1.0
+        )
+    ]
+
+    func applyPreset(_ preset: Preset) {
+        // Physics
+        if let particleCount = preset.particleCount { self.particleCount = particleCount }
+        if let gravity = preset.gravity { self.gravity = gravity }
+        if let damping = preset.damping { self.damping = damping }
+        if let constraintIterations = preset.constraintIterations { self.constraintIterations = constraintIterations }
+        if let settleSteps = preset.settleSteps { self.settleSteps = settleSteps }
+        if let bendCompliance = preset.bendCompliance { self.bendCompliance = bendCompliance }
+        if let bendVelocityCoupling = preset.bendVelocityCoupling { self.bendVelocityCoupling = bendVelocityCoupling }
+        if let dragHeight = preset.dragHeight { self.dragHeight = dragHeight }
+        if let liftHeight = preset.liftHeight { self.liftHeight = liftHeight }
+        if let ropeTension = preset.ropeTension { self.ropeTension = ropeTension }
+        if let frictionSoundEnabled = preset.frictionSoundEnabled { self.frictionSoundEnabled = frictionSoundEnabled }
+        if let profileSegments = preset.profileSegments { self.profileSegments = profileSegments }
+        if let holeRadiusScale = preset.holeRadiusScale { self.holeRadiusScale = holeRadiusScale }
+        if let holeSegments = preset.holeSegments { self.holeSegments = holeSegments }
+        if let ropeRadiusScale = preset.ropeRadiusScale { self.ropeRadiusScale = ropeRadiusScale }
+        if let stretchThinning = preset.stretchThinning { self.stretchThinning = stretchThinning }
+
+        // Visuals
+        if let exposure = preset.exposure { self.exposure = exposure }
+        if let lightIntensity = preset.lightIntensity { self.lightIntensity = lightIntensity }
+        if let lightDirX = preset.lightDirX { self.lightDirX = lightDirX }
+        if let lightDirY = preset.lightDirY { self.lightDirY = lightDirY }
+        if let lightDirZ = preset.lightDirZ { self.lightDirZ = lightDirZ }
+        if let shadowType = preset.shadowType { self.shadowType = shadowType }
+        if let ambient = preset.ambient { self.ambient = ambient }
+        if let shadowBias = preset.shadowBias { self.shadowBias = shadowBias }
+        if let shadowDarkness = preset.shadowDarkness { self.shadowDarkness = shadowDarkness }
+        if let lightSize = preset.lightSize { self.lightSize = lightSize }
+        if let shadowsEnabled = preset.shadowsEnabled { self.shadowsEnabled = shadowsEnabled }
+        if let bloomStrength = preset.bloomStrength { self.bloomStrength = bloomStrength }
+        if let cartoonShaderEnabled = preset.cartoonShaderEnabled { self.cartoonShaderEnabled = cartoonShaderEnabled }
+        if let cartoonExposure = preset.cartoonExposure { self.cartoonExposure = cartoonExposure }
+        if let cartoonBloom = preset.cartoonBloom { self.cartoonBloom = cartoonBloom }
+        if let cartoonEdgeStrength = preset.cartoonEdgeStrength { self.cartoonEdgeStrength = cartoonEdgeStrength }
+        if let cartoonLevels = preset.cartoonLevels { self.cartoonLevels = cartoonLevels }
+        if let tableStyle = preset.tableStyle { self.tableStyle = tableStyle }
+        if let tableColor1R = preset.tableColor1R { self.tableColor1R = tableColor1R }
+        if let tableColor1G = preset.tableColor1G { self.tableColor1G = tableColor1G }
+        if let tableColor1B = preset.tableColor1B { self.tableColor1B = tableColor1B }
+        if let tableColor2R = preset.tableColor2R { self.tableColor2R = tableColor2R }
+        if let tableColor2G = preset.tableColor2G { self.tableColor2G = tableColor2G }
+        if let tableColor2B = preset.tableColor2B { self.tableColor2B = tableColor2B }
+        if let woodSeed = preset.woodSeed { self.woodSeed = woodSeed }
+        if let woodBrightness = preset.woodBrightness { self.woodBrightness = woodBrightness }
+        if let woodPatternScale = preset.woodPatternScale { self.woodPatternScale = woodPatternScale }
+        if let capRadiusScale = preset.capRadiusScale { self.capRadiusScale = capRadiusScale }
+        if let capSegments = preset.capSegments { self.capSegments = capSegments }
+        if let capRings = preset.capRings { self.capRings = capRings }
+        if let capDarken = preset.capDarken { self.capDarken = capDarken }
+        if let ropeMatte = preset.ropeMatte { self.ropeMatte = ropeMatte }
+        if let ropeGloss = preset.ropeGloss { self.ropeGloss = ropeGloss }
+        if let ropeDiffuseWrap = preset.ropeDiffuseWrap { self.ropeDiffuseWrap = ropeDiffuseWrap }
+        if let ropeSubsurface = preset.ropeSubsurface { self.ropeSubsurface = ropeSubsurface }
+        if let ropeEdgeLight = preset.ropeEdgeLight { self.ropeEdgeLight = ropeEdgeLight }
+        if let ropeSaturation = preset.ropeSaturation { self.ropeSaturation = ropeSaturation }
+        if let ropeMicroBump = preset.ropeMicroBump { self.ropeMicroBump = ropeMicroBump }
+        if let ropeBumpScale = preset.ropeBumpScale { self.ropeBumpScale = ropeBumpScale }
+        if let ropeContactAO = preset.ropeContactAO { self.ropeContactAO = ropeContactAO }
+        if let ropeLiftGlow = preset.ropeLiftGlow { self.ropeLiftGlow = ropeLiftGlow }
+        if let ropeStretchGloss = preset.ropeStretchGloss { self.ropeStretchGloss = ropeStretchGloss }
+        if let ropeStretchSpec = preset.ropeStretchSpec { self.ropeStretchSpec = ropeStretchSpec }
+        if let ropeEnvReflect = preset.ropeEnvReflect { self.ropeEnvReflect = ropeEnvReflect }
+        if let ropeEnvSpread = preset.ropeEnvSpread { self.ropeEnvSpread = ropeEnvSpread }
+        if let ropeOpacity = preset.ropeOpacity { self.ropeOpacity = ropeOpacity }
+        if let wormMode = preset.wormMode { self.wormMode = wormMode }
+        if let squareCrossSection = preset.squareCrossSection { self.squareCrossSection = squareCrossSection }
+        if let renderScale = preset.renderScale { self.renderScale = renderScale }
+        if let zoomScale = preset.zoomScale { self.zoomScale = zoomScale }
+    }
+
     struct Defaults {
         // Rope
-        static let particleCount: Float = 122
-        static let gravity: Float = -14.79
-        static let damping: Float = 0.809
+        static let particleCount: Float = 77
+        static let gravity: Float = -7.374
+        static let damping: Float = 0.908
         // Solver
-        static let constraintIterations: Float = 7
-        static let settleSteps: Float = 19
-        static let bendCompliance: Float = 0.0089
-        static let bendVelocityCoupling: Float = 0.65
+        static let constraintIterations: Float = 12
+        static let settleSteps: Float = 1
+        static let bendCompliance: Float = 0.0006
+        static let bendVelocityCoupling: Float = 0
         // Drag
         static let dragHeight: Float = 0.35
         static let liftHeight: Float = 0.3
-        static let ropeTension: Float = 0.5
+        static let ropeTension: Float = 0.918
         static let boardElevation: Float = 0.12
     }
 
@@ -72,8 +462,11 @@ class GameController: ObservableObject {
     @Published var useParticleBraid: Bool = false {
         didSet { renderer?.useParticleBraid = useParticleBraid }
     }
+    @Published var physicsPaused: Bool = false {
+        didSet { renderer?.physicsPaused = physicsPaused }
+    }
 
-    @Published var profileSegments: Float = 10 {
+    @Published var profileSegments: Float = 6 {
         didSet { renderer?.profileSegments = Int(profileSegments); persist("v.prf", profileSegments) }
     }
     @Published var holeRadiusScale: Float = 0.734 {
@@ -86,25 +479,25 @@ class GameController: ObservableObject {
     @Published var holeSegments: Float = 19 {
         didSet { renderer?.holeSegments = Int(holeSegments); persist("v.hsg", holeSegments) }
     }
-    @Published var ropeRadiusScale: Float = 0.767 {
+    @Published var ropeRadiusScale: Float = 0.761 {
         didSet { renderer?.ropeRadiusScale = ropeRadiusScale; persist("v.rrs", ropeRadiusScale) }
     }
-    @Published var stretchThinning: Float = 0.027 {
+    @Published var stretchThinning: Float = 0.039 {
         didSet { renderer?.stretchThinning = stretchThinning; persist("v.stn", stretchThinning) }
     }
-    @Published var exposure: Float = 0.735 {
-        didSet { renderer?.exposure = exposure; persist("v.exp", exposure) }
+    @Published var exposure: Float = 1.409 {
+        didSet { renderer?.shaderParams.exposure = exposure; persist("v.exp", exposure) }
     }
-    @Published var lightIntensity: Float = 1.24 {
-        didSet { renderer?.lightIntensity = lightIntensity; persist("v.lit", lightIntensity) }
+    @Published var lightIntensity: Float = 0.766 {
+        didSet { renderer?.shaderParams.lightIntensity = lightIntensity; persist("v.lit", lightIntensity) }
     }
-    @Published var lightDirX: Float = -0.131 {
+    @Published var lightDirX: Float = -0.125 {
         didSet { updateLightDir(); persist("v.ldx", lightDirX) }
     }
     @Published var lightDirY: Float = -0.156 {
         didSet { updateLightDir(); persist("v.ldy", lightDirY) }
     }
-    @Published var lightDirZ: Float = 0.125 {
+    @Published var lightDirZ: Float = 0.532 {
         didSet { updateLightDir(); persist("v.ldz", lightDirZ) }
     }
 
@@ -122,68 +515,68 @@ class GameController: ObservableObject {
         }
     }
 
-    @Published var shadowType: ShadowType = .pcss {
-        didSet { renderer?.shadowType = shadowType.rawValue; persist("v.stp", Float(shadowType.rawValue)) }
+    @Published var shadowType: ShadowType = .pcf {
+        didSet { renderer?.shaderParams.shadowType = shadowType.rawValue; persist("v.stp", Float(shadowType.rawValue)) }
     }
-    @Published var ambient: Float = 0.064 {
-        didSet { renderer?.ambient = ambient; persist("v.amb", ambient) }
+    @Published var ambient: Float = 0 {
+        didSet { renderer?.shaderParams.ambient = ambient; persist("v.amb", ambient) }
     }
     @Published var shadowBias: Float = 0.0001 {
-        didSet { renderer?.shadowBias = shadowBias; persist("v.sb", shadowBias) }
+        didSet { renderer?.shaderParams.shadowBias = shadowBias; persist("v.sb", shadowBias) }
     }
     @Published var shadowDarkness: Float = 0 {
-        didSet { renderer?.shadowDarkness = shadowDarkness; persist("v.sd", shadowDarkness) }
+        didSet { renderer?.shaderParams.shadowDarkness = shadowDarkness; persist("v.sd", shadowDarkness) }
     }
-    @Published var lightSize: Float = 0.0069 {
-        didSet { renderer?.lightSize = lightSize; persist("v.lsz", lightSize) }
+    @Published var lightSize: Float = 0.002 {
+        didSet { renderer?.shaderParams.lightSize = lightSize; persist("v.lsz", lightSize) }
     }
     @Published var shadowsEnabled: Bool = true {
-        didSet { renderer?.shadowsEnabled = shadowsEnabled; persist("v.sen", shadowsEnabled ? 1 : 0) }
+        didSet { renderer?.shaderParams.shadowsEnabled = shadowsEnabled; persist("v.sen", shadowsEnabled ? 1 : 0) }
     }
     @Published var shadowMapSize: Int = 1024 {
         didSet { renderer?.shadowMapSize = shadowMapSize; persist("v.sms", Float(shadowMapSize)) }
     }
     @Published var bloomEnabled: Bool = true {
-        didSet { renderer?.bloomEnabled = bloomEnabled; persist("v.blen", bloomEnabled ? 1 : 0) }
+        didSet { renderer?.shaderParams.bloomEnabled = bloomEnabled; persist("v.blen", bloomEnabled ? 1 : 0) }
     }
 
     private func updateLightDir() {
         var d = SIMD3<Float>(lightDirX, lightDirY, lightDirZ)
         if simd_length_squared(d) < 1e-6 { d = SIMD3<Float>(-0.65, -0.35, 0.67) }
-        renderer?.lightDir = simd_normalize(d)
+        renderer?.shaderParams.lightDir = simd_normalize(d)
     }
     @Published var bloomStrength: Float = 0 {
-        didSet { renderer?.bloomStrength = bloomStrength; persist("v.blm", bloomStrength) }
+        didSet { renderer?.shaderParams.bloomStrength = bloomStrength; persist("v.blm", bloomStrength) }
     }
     @Published var cartoonShaderEnabled: Bool = false {
-        didSet { renderer?.cartoonShaderEnabled = cartoonShaderEnabled; persist("v.crt", cartoonShaderEnabled ? 1 : 0) }
+        didSet { renderer?.shaderParams.cartoonShaderEnabled = cartoonShaderEnabled; persist("v.crt", cartoonShaderEnabled ? 1 : 0) }
     }
     @Published var cartoonExposure: Float = 1.33 {
-        didSet { renderer?.cartoonExposure = cartoonExposure; persist("v.cex", cartoonExposure) }
+        didSet { renderer?.shaderParams.cartoonExposure = cartoonExposure; persist("v.cex", cartoonExposure) }
     }
     @Published var cartoonBloom: Float = 0 {
-        didSet { renderer?.cartoonBloom = cartoonBloom; persist("v.cbl", cartoonBloom) }
+        didSet { renderer?.shaderParams.cartoonBloom = cartoonBloom; persist("v.cbl", cartoonBloom) }
     }
     @Published var cartoonEdgeStrength: Float = 1 {
-        didSet { renderer?.cartoonEdgeStrength = cartoonEdgeStrength; persist("v.ced", cartoonEdgeStrength) }
+        didSet { renderer?.shaderParams.cartoonEdgeStrength = cartoonEdgeStrength; persist("v.ced", cartoonEdgeStrength) }
     }
     @Published var cartoonLevels: Float = 2 {
-        didSet { renderer?.cartoonLevels = Int(cartoonLevels); persist("v.clv", cartoonLevels) }
+        didSet { renderer?.shaderParams.cartoonLevels = Int(cartoonLevels); persist("v.clv", cartoonLevels) }
     }
     @Published var cartoonShadowBright: Float = 0.38 {
-        didSet { renderer?.cartoonShadowBright = cartoonShadowBright; persist("v.csb", cartoonShadowBright) }
+        didSet { renderer?.shaderParams.cartoonShadowBright = cartoonShadowBright; persist("v.csb", cartoonShadowBright) }
     }
     @Published var cartoonWrap: Float = 0.15 {
-        didSet { renderer?.cartoonWrap = cartoonWrap; persist("v.cwp", cartoonWrap) }
+        didSet { renderer?.shaderParams.cartoonWrap = cartoonWrap; persist("v.cwp", cartoonWrap) }
     }
     @Published var cartoonEdgeSmooth: Float = 0.5 {
-        didSet { renderer?.cartoonEdgeSmooth = cartoonEdgeSmooth; persist("v.ces", cartoonEdgeSmooth) }
+        didSet { renderer?.shaderParams.cartoonEdgeSmooth = cartoonEdgeSmooth; persist("v.ces", cartoonEdgeSmooth) }
     }
     @Published var ropeFlatNormals: Bool = false {
-        didSet { renderer?.ropeFlatNormals = ropeFlatNormals; persist("v.rfn", ropeFlatNormals ? 1 : 0) }
+        didSet { renderer?.shaderParams.ropeFlatNormals = ropeFlatNormals; persist("v.rfn", ropeFlatNormals ? 1 : 0) }
     }
     @Published var pcssPenumbraScale: Float = 80.0 {
-        didSet { renderer?.pcssPenumbraScale = pcssPenumbraScale; persist("v.pps", pcssPenumbraScale) }
+        didSet { renderer?.shaderParams.pcssPenumbraScale = pcssPenumbraScale; persist("v.pps", pcssPenumbraScale) }
     }
     enum TableStyle: Int, CaseIterable {
         case wood = 0
@@ -199,159 +592,162 @@ class GameController: ObservableObject {
         }
     }
 
-    @Published var tableStyle: TableStyle = .wood {
-        didSet { renderer?.tableStyle = tableStyle.rawValue; persist("v.tst", Float(tableStyle.rawValue)) }
+    @Published var tableStyle: TableStyle = .gradient {
+        didSet { renderer?.shaderParams.tableStyle = tableStyle.rawValue; persist("v.tst", Float(tableStyle.rawValue)) }
     }
-    @Published var tableColor1R: Float = 0.08 { didSet { updateTableColor(); persist("v.tc1r", tableColor1R) } }
-    @Published var tableColor1G: Float = 0.09 { didSet { updateTableColor(); persist("v.tc1g", tableColor1G) } }
-    @Published var tableColor1B: Float = 0.13 { didSet { updateTableColor(); persist("v.tc1b", tableColor1B) } }
-    @Published var tableColor2R: Float = 0.12 { didSet { updateTableColor(); persist("v.tc2r", tableColor2R) } }
-    @Published var tableColor2G: Float = 0.13 { didSet { updateTableColor(); persist("v.tc2g", tableColor2G) } }
-    @Published var tableColor2B: Float = 0.2 { didSet { updateTableColor(); persist("v.tc2b", tableColor2B) } }
-    @Published var woodSeed: Float = 0.613 {
+    @Published var tableColor1R: Float = 0 { didSet { updateTableColor(); persist("v.tc1r", tableColor1R) } }
+    @Published var tableColor1G: Float = 0 { didSet { updateTableColor(); persist("v.tc1g", tableColor1G) } }
+    @Published var tableColor1B: Float = 0 { didSet { updateTableColor(); persist("v.tc1b", tableColor1B) } }
+    @Published var tableColor2R: Float = 0.044 { didSet { updateTableColor(); persist("v.tc2r", tableColor2R) } }
+    @Published var tableColor2G: Float = 0.065 { didSet { updateTableColor(); persist("v.tc2g", tableColor2G) } }
+    @Published var tableColor2B: Float = 0.072 { didSet { updateTableColor(); persist("v.tc2b", tableColor2B) } }
+    @Published var woodSeed: Float = 0.052 {
         didSet { renderer?.woodSeed = woodSeed; persist("v.wsd", woodSeed) }
     }
-    @Published var woodBrightness: Float = 1.18 {
+    @Published var woodBrightness: Float = 0.551 {
         didSet { renderer?.woodBrightness = woodBrightness; persist("v.wbr", woodBrightness) }
     }
     @Published var woodPatternScale: Float = 3.95 {
         didSet { renderer?.woodPatternScale = woodPatternScale; persist("v.wps", woodPatternScale) }
     }
     @Published var capRadiusScale: Float = 0.91 {
-        didSet { renderer?.capRadiusScale = capRadiusScale; persist("v.crs", capRadiusScale) }
+        didSet { renderer?.shaderParams.capRadiusScale = capRadiusScale; persist("v.crs", capRadiusScale) }
     }
     @Published var capSegments: Float = 12 {
-        didSet { renderer?.capSegments = Int(capSegments); persist("v.csg", capSegments) }
+        didSet { renderer?.shaderParams.capSegments = Int(capSegments); persist("v.csg", capSegments) }
     }
     @Published var capRings: Float = 6 {
-        didSet { renderer?.capRings = Int(capRings); persist("v.crg", capRings) }
+        didSet { renderer?.shaderParams.capRings = Int(capRings); persist("v.crg", capRings) }
     }
     @Published var capDarken: Float = 0 {
-        didSet { renderer?.capDarken = capDarken; persist("v.cdk", capDarken) }
+        didSet { renderer?.shaderParams.capDarken = capDarken; persist("v.cdk", capDarken) }
     }
 
-    @Published var ropeMatte: Float = 0.69 {
-        didSet { renderer?.ropeMatte = ropeMatte; persist("v.rmat", ropeMatte) }
+    @Published var ropeMatte: Float = 1 {
+        didSet { renderer?.shaderParams.ropeMatte = ropeMatte; persist("v.rmat", ropeMatte) }
     }
-    @Published var ropeGloss: Float = 1.17 {
-        didSet { renderer?.ropeGloss = ropeGloss; persist("v.rgls", ropeGloss) }
+    @Published var ropeGloss: Float = 0 {
+        didSet { renderer?.shaderParams.ropeGloss = ropeGloss; persist("v.rgls", ropeGloss) }
     }
-    @Published var ropeDiffuseWrap: Float = 0.045 {
-        didSet { renderer?.ropeDiffuseWrap = ropeDiffuseWrap; persist("v.rdwp", ropeDiffuseWrap) }
+    @Published var ropeDiffuseWrap: Float = 0 {
+        didSet { renderer?.shaderParams.ropeDiffuseWrap = ropeDiffuseWrap; persist("v.rdwp", ropeDiffuseWrap) }
     }
-    @Published var ropeSubsurface: Float = 0.0072 {
-        didSet { renderer?.ropeSubsurface = ropeSubsurface; persist("v.rsss", ropeSubsurface) }
+    @Published var ropeSubsurface: Float = 0.303 {
+        didSet { renderer?.shaderParams.ropeSubsurface = ropeSubsurface; persist("v.rsss", ropeSubsurface) }
     }
-    @Published var ropeEdgeLight: Float = 0.009 {
-        didSet { renderer?.ropeEdgeLight = ropeEdgeLight; persist("v.redg", ropeEdgeLight) }
+    @Published var ropeEdgeLight: Float = 0 {
+        didSet { renderer?.shaderParams.ropeEdgeLight = ropeEdgeLight; persist("v.redg", ropeEdgeLight) }
     }
-    @Published var ropeSaturation: Float = 0.979 {
-        didSet { renderer?.ropeSaturation = ropeSaturation; persist("v.rsat", ropeSaturation) }
+    @Published var ropeSaturation: Float = 0.501 {
+        didSet { renderer?.shaderParams.ropeSaturation = ropeSaturation; persist("v.rsat", ropeSaturation) }
     }
-    @Published var ropeMicroBump: Float = 1.5 {
-        didSet { renderer?.ropeMicroBump = ropeMicroBump; persist("v.rmbp", ropeMicroBump) }
+    @Published var ropeMicroBump: Float = 1.265 {
+        didSet { renderer?.shaderParams.ropeMicroBump = ropeMicroBump; persist("v.rmbp", ropeMicroBump) }
     }
-    @Published var ropeBumpScale: Float = 7.37 {
-        didSet { renderer?.ropeBumpScale = ropeBumpScale; persist("v.rbsc", ropeBumpScale) }
+    @Published var ropeBumpScale: Float = 0.5 {
+        didSet { renderer?.shaderParams.ropeBumpScale = ropeBumpScale; persist("v.rbsc", ropeBumpScale) }
     }
-    @Published var ropeContactAO: Float = 0.649 {
-        didSet { renderer?.ropeContactAO = ropeContactAO; persist("v.rcao", ropeContactAO) }
+    @Published var ropeContactAO: Float = 0 {
+        didSet { renderer?.shaderParams.ropeContactAO = ropeContactAO; persist("v.rcao", ropeContactAO) }
     }
     @Published var ropeLiftGlow: Float = 0 {
-        didSet { renderer?.ropeLiftGlow = ropeLiftGlow; persist("v.rlgw", ropeLiftGlow) }
+        didSet { renderer?.shaderParams.ropeLiftGlow = ropeLiftGlow; persist("v.rlgw", ropeLiftGlow) }
     }
-    @Published var ropeStretchGloss: Float = 0.879 {
-        didSet { renderer?.ropeStretchGloss = ropeStretchGloss; persist("v.rsg", ropeStretchGloss) }
+    @Published var ropeStretchGloss: Float = 0.313 {
+        didSet { renderer?.shaderParams.ropeStretchGloss = ropeStretchGloss; persist("v.rsg", ropeStretchGloss) }
     }
-    @Published var ropeStretchSpec: Float = 0.371 {
-        didSet { renderer?.ropeStretchSpec = ropeStretchSpec; persist("v.rss", ropeStretchSpec) }
+    @Published var ropeStretchSpec: Float = 0.256 {
+        didSet { renderer?.shaderParams.ropeStretchSpec = ropeStretchSpec; persist("v.rss", ropeStretchSpec) }
     }
-    @Published var ropeEnvReflect: Float = 0.15 {
-        didSet { renderer?.ropeEnvReflect = ropeEnvReflect; persist("v.renv", ropeEnvReflect) }
+    @Published var ropeEnvReflect: Float = 0 {
+        didSet { renderer?.shaderParams.ropeEnvReflect = ropeEnvReflect; persist("v.renv", ropeEnvReflect) }
     }
-    @Published var ropeEnvSpread: Float = 0.15 {
-        didSet { renderer?.ropeEnvSpread = ropeEnvSpread; persist("v.rens", ropeEnvSpread) }
+    @Published var ropeEnvSpread: Float = 0.042 {
+        didSet { renderer?.shaderParams.ropeEnvSpread = ropeEnvSpread; persist("v.rens", ropeEnvSpread) }
+    }
+    @Published var ropeOpacity: Float = 1.0 {
+        didSet { renderer?.shaderParams.ropeOpacity = ropeOpacity; persist("v.ropa", ropeOpacity) }
     }
     @Published var ropeEnvDebug: Bool = false {
-        didSet { renderer?.ropeEnvDebug = ropeEnvDebug }
+        didSet { renderer?.shaderParams.ropeEnvDebug = ropeEnvDebug }
     }
     @Published var shadowDebugMode: Int = 0 {
-        didSet { renderer?.shadowDebugMode = shadowDebugMode }
+        didSet { renderer?.shaderParams.shadowDebugMode = shadowDebugMode }
     }
     @Published var wormMode: Bool = false {
-        didSet { renderer?.wormMode = wormMode; persist("v.wrm", wormMode ? 1 : 0) }
+        didSet { renderer?.shaderParams.wormMode = wormMode; persist("v.wrm", wormMode ? 1 : 0) }
     }
     @Published var wormSegFreq: Float = 28.0 {
-        didSet { renderer?.wormSegFreq = wormSegFreq; persist("w.sf", wormSegFreq) }
+        didSet { renderer?.shaderParams.wormSegFreq = wormSegFreq; persist("w.sf", wormSegFreq) }
     }
     @Published var wormSegBulge: Float = 0.12 {
-        didSet { renderer?.wormSegBulge = wormSegBulge; persist("w.sb", wormSegBulge) }
+        didSet { renderer?.shaderParams.wormSegBulge = wormSegBulge; persist("w.sb", wormSegBulge) }
     }
     @Published var wormThickness: Float = 1.35 {
-        didSet { renderer?.wormThickness = wormThickness; persist("w.th", wormThickness) }
+        didSet { renderer?.shaderParams.wormThickness = wormThickness; persist("w.th", wormThickness) }
     }
     @Published var wormTaperLen: Float = 0.12 {
-        didSet { renderer?.wormTaperLen = wormTaperLen; persist("w.tl", wormTaperLen) }
+        didSet { renderer?.shaderParams.wormTaperLen = wormTaperLen; persist("w.tl", wormTaperLen) }
     }
     @Published var wormGrooveDepth: Float = 0.35 {
-        didSet { renderer?.wormGrooveDepth = wormGrooveDepth; persist("w.gd", wormGrooveDepth) }
+        didSet { renderer?.shaderParams.wormGrooveDepth = wormGrooveDepth; persist("w.gd", wormGrooveDepth) }
     }
     @Published var wormBellyBright: Float = 1.15 {
-        didSet { renderer?.wormBellyBright = wormBellyBright; persist("w.bb", wormBellyBright) }
+        didSet { renderer?.shaderParams.wormBellyBright = wormBellyBright; persist("w.bb", wormBellyBright) }
     }
     @Published var wormBackDark: Float = 0.7 {
-        didSet { renderer?.wormBackDark = wormBackDark; persist("w.bd", wormBackDark) }
+        didSet { renderer?.shaderParams.wormBackDark = wormBackDark; persist("w.bd", wormBackDark) }
     }
     @Published var wormSkinNoise: Float = 0.08 {
-        didSet { renderer?.wormSkinNoise = wormSkinNoise; persist("w.sn", wormSkinNoise) }
+        didSet { renderer?.shaderParams.wormSkinNoise = wormSkinNoise; persist("w.sn", wormSkinNoise) }
     }
     @Published var wormSSS: Float = 0.25 {
-        didSet { renderer?.wormSSS = wormSSS; persist("w.ss", wormSSS) }
+        didSet { renderer?.shaderParams.wormSSS = wormSSS; persist("w.ss", wormSSS) }
     }
     @Published var wormRoughness: Float = 0.25 {
-        didSet { renderer?.wormRoughness = wormRoughness; persist("w.rg", wormRoughness) }
+        didSet { renderer?.shaderParams.wormRoughness = wormRoughness; persist("w.rg", wormRoughness) }
     }
     @Published var wormSpecular: Float = 0.8 {
-        didSet { renderer?.wormSpecular = wormSpecular; persist("w.sp", wormSpecular) }
+        didSet { renderer?.shaderParams.wormSpecular = wormSpecular; persist("w.sp", wormSpecular) }
     }
     @Published var wormRimStrength: Float = 0.08 {
-        didSet { renderer?.wormRimStrength = wormRimStrength; persist("w.rm", wormRimStrength) }
+        didSet { renderer?.shaderParams.wormRimStrength = wormRimStrength; persist("w.rm", wormRimStrength) }
     }
     @Published var wormEyeSize: Float = 0.015 {
-        didSet { renderer?.wormEyeSize = wormEyeSize; persist("w.es", wormEyeSize) }
+        didSet { renderer?.shaderParams.wormEyeSize = wormEyeSize; persist("w.es", wormEyeSize) }
     }
     @Published var wormPulseSpeed: Float = 2.5 {
-        didSet { renderer?.wormPulseSpeed = wormPulseSpeed; persist("w.ps", wormPulseSpeed) }
+        didSet { renderer?.shaderParams.wormPulseSpeed = wormPulseSpeed; persist("w.ps", wormPulseSpeed) }
     }
     @Published var wormPulseAmp: Float = 0.02 {
-        didSet { renderer?.wormPulseAmp = wormPulseAmp; persist("w.pa", wormPulseAmp) }
+        didSet { renderer?.shaderParams.wormPulseAmp = wormPulseAmp; persist("w.pa", wormPulseAmp) }
     }
     @Published var wormCrawlSpeed: Float = 3.5 {
-        didSet { renderer?.wormCrawlSpeed = wormCrawlSpeed; persist("w.cs", wormCrawlSpeed) }
+        didSet { renderer?.shaderParams.wormCrawlSpeed = wormCrawlSpeed; persist("w.cs", wormCrawlSpeed) }
     }
     @Published var wormCrawlAmp: Float = 0.012 {
-        didSet { renderer?.wormCrawlAmp = wormCrawlAmp; persist("w.ca", wormCrawlAmp) }
+        didSet { renderer?.shaderParams.wormCrawlAmp = wormCrawlAmp; persist("w.ca", wormCrawlAmp) }
     }
     @Published var wormSideAmp: Float = 0.008 {
-        didSet { renderer?.wormSideAmp = wormSideAmp; persist("w.sa", wormSideAmp) }
+        didSet { renderer?.shaderParams.wormSideAmp = wormSideAmp; persist("w.sa", wormSideAmp) }
     }
-    @Published var squareCrossSection: Bool = true {
+    @Published var squareCrossSection: Bool = false {
         didSet { renderer?.squareCrossSection = squareCrossSection; persist("v.sqcs", squareCrossSection ? 1 : 0) }
     }
-    @Published var renderScale: Float = 1.0 {
+    @Published var renderScale: Float = 0.753 {
         didSet { renderer?.renderScale = renderScale; persist("v.rsc", renderScale) }
     }
 
     private func updateHoleTint() {
-        renderer?.holeTint = SIMD4<Float>(holeTintR, holeTintG, holeTintB, holeTintAmount)
+        renderer?.shaderParams.holeTint = SIMD4<Float>(holeTintR, holeTintG, holeTintB, holeTintAmount)
     }
 
     private func updateTableColor() {
-        renderer?.tableColor1 = SIMD3<Float>(tableColor1R, tableColor1G, tableColor1B)
-        renderer?.tableColor2 = SIMD3<Float>(tableColor2R, tableColor2G, tableColor2B)
+        renderer?.shaderParams.tableColor1 = SIMD3<Float>(tableColor1R, tableColor1G, tableColor1B)
+        renderer?.shaderParams.tableColor2 = SIMD3<Float>(tableColor2R, tableColor2G, tableColor2B)
     }
 
-    @Published var zoomScale: Float = 1.0 {
+    @Published var zoomScale: Float = 0.955 {
         didSet { renderer?.cameraZoomScale = zoomScale; persist("p.zoom", zoomScale) }
     }
 
@@ -393,7 +789,7 @@ class GameController: ObservableObject {
         fpsTimer = Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor [weak self] in
                 guard let self, let r = self.renderer else { return }
-                self.fps = r.currentFPS
+                self.fps = max(r.currentFPS, r.potentialFPS)
                 if self.currentLevel != r.currentLevelId {
                     self.currentLevel = r.currentLevelId
                 }
@@ -489,6 +885,7 @@ class GameController: ObservableObject {
         if let v = f("v.rsg") { ropeStretchGloss = v }
         if let v = f("v.rss") { ropeStretchSpec = v }
         if let v = f("v.renv") { ropeEnvReflect = v }
+        if let v = f("v.ropa") { ropeOpacity = v }
         if let v = f("v.rens") { ropeEnvSpread = v }
         if let v = f("v.sqcs") { squareCrossSection = v > 0.5 }
         if let v = f("v.rsc"), v > 0 { renderScale = v }
@@ -579,7 +976,7 @@ class GameController: ObservableObject {
         ropeMatte = 0.69
         ropeGloss = 1.17
         ropeDiffuseWrap = 0.045
-        ropeSubsurface = 0.0072
+        ropeSubsurface = 0.303
         ropeEdgeLight = 0.009
         ropeSaturation = 0.979
         ropeMicroBump = 1.5
@@ -666,14 +1063,6 @@ class GameController: ObservableObject {
 
     func resetCamera() {
         renderer?.resetCameraOrientation()
-    }
-
-    func restartLevel() {
-        guard let renderer = renderer else { return }
-        renderer.loadLevel(levelId: renderer.currentLevelId)
-        levelStartTime = Date()
-        percentile = nil
-        updateBraidTargets()
     }
 
     private func updateBraidTargets() {
@@ -776,12 +1165,39 @@ class GameController: ObservableObject {
             "ropeStretchSpec": ropeStretchSpec,
             "ropeEnvReflect": ropeEnvReflect,
             "ropeEnvSpread": ropeEnvSpread,
+            "ropeOpacity": ropeOpacity,
             "squareCrossSection": squareCrossSection,
             "wormMode": wormMode,
             "renderScale": renderScale
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
               let str = String(data: data, encoding: .utf8) else { return false }
+        #if os(iOS)
+        UIPasteboard.general.string = str
+        #elseif os(macOS)
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(str, forType: .string)
+        #endif
+        return true
+    }
+
+    func dumpGeometryToClipboard() -> Bool {
+        guard let sim = renderer?.simulator else { return false }
+        var lines: [String] = []
+        lines.append("// Geometry dump: \(sim.bands.count) bands")
+        for (bi, band) in sim.bands.enumerated() {
+            guard band.active else { continue }
+            lines.append("// Band \(bi): \(band.positions.count) particles, pinStart=\(band.pinStart ?? -1) pinEnd=\(band.pinEnd ?? -1) segLen=\(String(format: "%.4f", band.segmentLength))")
+            for (pi, pos) in band.positions.enumerated() {
+                lines.append("  [\(pi)] x=\(String(format: "%.4f", pos.x)) y=\(String(format: "%.4f", pos.y)) z=\(String(format: "%.4f", pos.z))")
+            }
+        }
+        let holes = sim.holePositions
+        lines.append("// Holes: \(holes.count)")
+        for (hi, h) in holes.enumerated() {
+            lines.append("  [\(hi)] x=\(String(format: "%.4f", h.x)) y=\(String(format: "%.4f", h.y))")
+        }
+        let str = lines.joined(separator: "\n")
         #if os(iOS)
         UIPasteboard.general.string = str
         #elseif os(macOS)
@@ -878,6 +1294,7 @@ class GameController: ObservableObject {
         if let v = f("ropeStretchGloss") { ropeStretchGloss = v }
         if let v = f("ropeStretchSpec") { ropeStretchSpec = v }
         if let v = f("ropeEnvReflect") { ropeEnvReflect = v }
+        if let v = f("ropeOpacity") { ropeOpacity = v }
         if let v = f("ropeEnvSpread") { ropeEnvSpread = v }
         if let v = b("squareCrossSection") { squareCrossSection = v }
         if let v = b("wormMode") { wormMode = v }
@@ -908,133 +1325,6 @@ class GameController: ObservableObject {
         return true
     }
 
-    func dumpTopology() -> URL? {
-        guard let renderer = renderer,
-              let topology = renderer.topology else { return nil }
-
-        let holes = renderer.holePositions.map {
-            LevelDefinition.Vec2(xPosition: $0.x, yPosition: $0.y)
-        }
-
-        let levelRopes = renderer.ropes.map { rope in
-            LevelDefinition.Rope(
-                startHole: rope.startHole,
-                endHole: rope.endHole,
-                color: LevelDefinition.Color(
-                    redChannel: rope.color.x,
-                    greenChannel: rope.color.y,
-                    blueChannel: rope.color.z
-                ),
-                radius: rope.radius
-            )
-        }
-
-        var levelHooks: [LevelDefinition.Hook] = []
-        for (_, hook) in topology.hooks.sorted(by: { $0.key < $1.key }) {
-            guard hook.N != 0 else { continue }
-            levelHooks.append(LevelDefinition.Hook(
-                ropeA: .init(fromType: "hole", index: hook.ropeA, hookIndex: nil),
-                ropeB: .init(fromType: "hole", index: hook.ropeB, hookIndex: nil),
-                N: hook.N,
-                ropeAStartIsOver: hook.ropeAStartIsOver
-            ))
-        }
-
-        let def = LevelDefinition(
-            mode: nil,
-            id: renderer.currentLevelId,
-            holeRadius: renderer.holeRadius,
-            particlesPerRope: renderer.physicsParticleCount,
-            holes: holes,
-            ropes: levelRopes,
-            hooks: levelHooks.isEmpty ? nil : levelHooks,
-            actions: nil,
-            boards: nil,
-            weights: nil,
-            targets: nil,
-            rails: nil,
-            carts: nil,
-            stations: nil
-        )
-
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-        guard let data = try? encoder.encode(def) else { return nil }
-
-        let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first!
-        let ts = Int(Date().timeIntervalSince1970)
-        let url = docs.appendingPathComponent("level_\(renderer.currentLevelId)_\(ts).json")
-        try? data.write(to: url)
-        return url
-    }
-
-    // MARK: - Drag Recording
-
-    @Published var isRecording: Bool = false
-
-    func toggleRecording() {
-        guard let renderer = renderer else { return }
-        if isRecording {
-            // Stop recording, export to clipboard
-            isRecording = false
-            renderer.isRecording = false
-            exportRecordedActions()
-        } else {
-            // Start recording
-            renderer.recordedActions.removeAll()
-            renderer.isRecording = true
-            isRecording = true
-        }
-    }
-
-    private func exportRecordedActions() {
-        guard let renderer = renderer else { return }
-        let actions = renderer.recordedActions
-        guard !actions.isEmpty else { return }
-
-        var lines = [String]()
-        lines.append("// Recorded \(actions.count) drags on level \(renderer.currentLevelId)")
-        lines.append("// Holes: \(renderer.holePositions.count)")
-
-        // Print hole positions for reference
-        for (i, h) in renderer.holePositions.enumerated() {
-            lines.append("// hole\(i) = (\(String(format:"%.3f",h.x)), \(String(format:"%.3f",h.y)))")
-        }
-
-        // Print ropes
-        for (i, r) in renderer.ropes.enumerated() {
-            lines.append("// rope\(i): \(r.startHole) → \(r.endHole)")
-        }
-
-        lines.append("")
-        lines.append("let dragSequence: [(rope: Int, end: Int, hole: Int)] = [")
-        for a in actions {
-            lines.append("    (\(a.ropeIndex), \(a.endIndex), \(a.toHole)),  // from hole \(a.fromHole)")
-        }
-        lines.append("]")
-
-        // Also dump particle positions for the braid shape
-        if let sim = renderer.simulator {
-            lines.append("")
-            lines.append("// Particle positions after braid:")
-            for (bi, band) in sim.bands.enumerated() where band.active {
-                let n = band.positions.count
-                lines.append("// band\(bi): \(n) particles")
-                for pi in stride(from: 0, to: n, by: max(1, n/10)) {
-                    let p = band.positions[pi]
-                    lines.append("//   [\(pi)] (\(String(format:"%.3f",p.x)), \(String(format:"%.3f",p.y)), \(String(format:"%.4f",p.z)))")
-                }
-            }
-        }
-
-        let text = lines.joined(separator: "\n")
-        #if os(iOS)
-        UIPasteboard.general.string = text
-        #elseif os(macOS)
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(text, forType: .string)
-        #endif
-    }
 }
 
 @MainActor
@@ -1080,80 +1370,81 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.frictionSound.enabled = controller.frictionSoundEnabled
     renderer.profileSegments = Int(controller.profileSegments)
     renderer.holeRadiusScale = controller.holeRadiusScale
-    renderer.holeTint = SIMD4<Float>(controller.holeTintR, controller.holeTintG, controller.holeTintB, controller.holeTintAmount)
+    renderer.shaderParams.holeTint = SIMD4<Float>(controller.holeTintR, controller.holeTintG, controller.holeTintB, controller.holeTintAmount)
     renderer.holeSegments = Int(controller.holeSegments)
     renderer.ropeRadiusScale = controller.ropeRadiusScale
     renderer.stretchThinning = controller.stretchThinning
-    renderer.exposure = controller.exposure
-    renderer.lightIntensity = controller.lightIntensity
+    renderer.shaderParams.exposure = controller.exposure
+    renderer.shaderParams.lightIntensity = controller.lightIntensity
     var ld = SIMD3<Float>(controller.lightDirX, controller.lightDirY, controller.lightDirZ)
     if simd_length_squared(ld) < 1e-6 { ld = SIMD3<Float>(-0.65, -0.35, 0.67) }
-    renderer.lightDir = simd_normalize(ld)
-    renderer.shadowType = controller.shadowType.rawValue
-    renderer.ambient = controller.ambient
-    renderer.shadowBias = controller.shadowBias
-    renderer.shadowDarkness = controller.shadowDarkness
-    renderer.lightSize = controller.lightSize
-    renderer.shadowsEnabled = controller.shadowsEnabled
+    renderer.shaderParams.lightDir = simd_normalize(ld)
+    renderer.shaderParams.shadowType = controller.shadowType.rawValue
+    renderer.shaderParams.ambient = controller.ambient
+    renderer.shaderParams.shadowBias = controller.shadowBias
+    renderer.shaderParams.shadowDarkness = controller.shadowDarkness
+    renderer.shaderParams.lightSize = controller.lightSize
+    renderer.shaderParams.shadowsEnabled = controller.shadowsEnabled
     renderer.shadowMapSize = controller.shadowMapSize
-    renderer.bloomEnabled = controller.bloomEnabled
-    renderer.bloomStrength = controller.bloomStrength
-    renderer.cartoonShaderEnabled = controller.cartoonShaderEnabled
-    renderer.cartoonExposure = controller.cartoonExposure
-    renderer.cartoonBloom = controller.cartoonBloom
-    renderer.cartoonEdgeStrength = controller.cartoonEdgeStrength
-    renderer.cartoonLevels = Int(controller.cartoonLevels)
-    renderer.cartoonShadowBright = controller.cartoonShadowBright
-    renderer.cartoonWrap = controller.cartoonWrap
-    renderer.cartoonEdgeSmooth = controller.cartoonEdgeSmooth
-    renderer.ropeFlatNormals = controller.ropeFlatNormals
-    renderer.pcssPenumbraScale = controller.pcssPenumbraScale
-    renderer.tableStyle = controller.tableStyle.rawValue
-    renderer.tableColor1 = SIMD3<Float>(controller.tableColor1R, controller.tableColor1G, controller.tableColor1B)
-    renderer.tableColor2 = SIMD3<Float>(controller.tableColor2R, controller.tableColor2G, controller.tableColor2B)
+    renderer.shaderParams.bloomEnabled = controller.bloomEnabled
+    renderer.shaderParams.bloomStrength = controller.bloomStrength
+    renderer.shaderParams.cartoonShaderEnabled = controller.cartoonShaderEnabled
+    renderer.shaderParams.cartoonExposure = controller.cartoonExposure
+    renderer.shaderParams.cartoonBloom = controller.cartoonBloom
+    renderer.shaderParams.cartoonEdgeStrength = controller.cartoonEdgeStrength
+    renderer.shaderParams.cartoonLevels = Int(controller.cartoonLevels)
+    renderer.shaderParams.cartoonShadowBright = controller.cartoonShadowBright
+    renderer.shaderParams.cartoonWrap = controller.cartoonWrap
+    renderer.shaderParams.cartoonEdgeSmooth = controller.cartoonEdgeSmooth
+    renderer.shaderParams.ropeFlatNormals = controller.ropeFlatNormals
+    renderer.shaderParams.pcssPenumbraScale = controller.pcssPenumbraScale
+    renderer.shaderParams.tableStyle = controller.tableStyle.rawValue
+    renderer.shaderParams.tableColor1 = SIMD3<Float>(controller.tableColor1R, controller.tableColor1G, controller.tableColor1B)
+    renderer.shaderParams.tableColor2 = SIMD3<Float>(controller.tableColor2R, controller.tableColor2G, controller.tableColor2B)
     renderer.woodSeed = controller.woodSeed
     renderer.woodBrightness = controller.woodBrightness
     renderer.woodPatternScale = controller.woodPatternScale
-    renderer.capRadiusScale = controller.capRadiusScale
-    renderer.capSegments = Int(controller.capSegments)
-    renderer.capRings = Int(controller.capRings)
-    renderer.capDarken = controller.capDarken
-    renderer.ropeMatte = controller.ropeMatte
-    renderer.ropeGloss = controller.ropeGloss
-    renderer.ropeDiffuseWrap = controller.ropeDiffuseWrap
-    renderer.ropeSubsurface = controller.ropeSubsurface
-    renderer.ropeEdgeLight = controller.ropeEdgeLight
-    renderer.ropeSaturation = controller.ropeSaturation
-    renderer.ropeMicroBump = controller.ropeMicroBump
-    renderer.ropeBumpScale = controller.ropeBumpScale
-    renderer.ropeContactAO = controller.ropeContactAO
-    renderer.ropeLiftGlow = controller.ropeLiftGlow
-    renderer.ropeStretchGloss = controller.ropeStretchGloss
-    renderer.ropeStretchSpec = controller.ropeStretchSpec
-    renderer.ropeEnvReflect = controller.ropeEnvReflect
-    renderer.ropeEnvSpread = controller.ropeEnvSpread
-    renderer.ropeEnvDebug = controller.ropeEnvDebug
-    renderer.shadowDebugMode = controller.shadowDebugMode
+    renderer.shaderParams.capRadiusScale = controller.capRadiusScale
+    renderer.shaderParams.capSegments = Int(controller.capSegments)
+    renderer.shaderParams.capRings = Int(controller.capRings)
+    renderer.shaderParams.capDarken = controller.capDarken
+    renderer.shaderParams.ropeMatte = controller.ropeMatte
+    renderer.shaderParams.ropeGloss = controller.ropeGloss
+    renderer.shaderParams.ropeDiffuseWrap = controller.ropeDiffuseWrap
+    renderer.shaderParams.ropeSubsurface = controller.ropeSubsurface
+    renderer.shaderParams.ropeEdgeLight = controller.ropeEdgeLight
+    renderer.shaderParams.ropeSaturation = controller.ropeSaturation
+    renderer.shaderParams.ropeMicroBump = controller.ropeMicroBump
+    renderer.shaderParams.ropeBumpScale = controller.ropeBumpScale
+    renderer.shaderParams.ropeContactAO = controller.ropeContactAO
+    renderer.shaderParams.ropeLiftGlow = controller.ropeLiftGlow
+    renderer.shaderParams.ropeStretchGloss = controller.ropeStretchGloss
+    renderer.shaderParams.ropeStretchSpec = controller.ropeStretchSpec
+    renderer.shaderParams.ropeEnvReflect = controller.ropeEnvReflect
+    renderer.shaderParams.ropeEnvSpread = controller.ropeEnvSpread
+    renderer.shaderParams.ropeOpacity = controller.ropeOpacity
+    renderer.shaderParams.ropeEnvDebug = controller.ropeEnvDebug
+    renderer.shaderParams.shadowDebugMode = controller.shadowDebugMode
     renderer.squareCrossSection = controller.squareCrossSection
-    renderer.wormMode = controller.wormMode
-    renderer.wormSegFreq = controller.wormSegFreq
-    renderer.wormSegBulge = controller.wormSegBulge
-    renderer.wormThickness = controller.wormThickness
-    renderer.wormTaperLen = controller.wormTaperLen
-    renderer.wormGrooveDepth = controller.wormGrooveDepth
-    renderer.wormBellyBright = controller.wormBellyBright
-    renderer.wormBackDark = controller.wormBackDark
-    renderer.wormSkinNoise = controller.wormSkinNoise
-    renderer.wormSSS = controller.wormSSS
-    renderer.wormRoughness = controller.wormRoughness
-    renderer.wormSpecular = controller.wormSpecular
-    renderer.wormRimStrength = controller.wormRimStrength
-    renderer.wormEyeSize = controller.wormEyeSize
-    renderer.wormPulseSpeed = controller.wormPulseSpeed
-    renderer.wormPulseAmp = controller.wormPulseAmp
-    renderer.wormCrawlSpeed = controller.wormCrawlSpeed
-    renderer.wormCrawlAmp = controller.wormCrawlAmp
-    renderer.wormSideAmp = controller.wormSideAmp
+    renderer.shaderParams.wormMode = controller.wormMode
+    renderer.shaderParams.wormSegFreq = controller.wormSegFreq
+    renderer.shaderParams.wormSegBulge = controller.wormSegBulge
+    renderer.shaderParams.wormThickness = controller.wormThickness
+    renderer.shaderParams.wormTaperLen = controller.wormTaperLen
+    renderer.shaderParams.wormGrooveDepth = controller.wormGrooveDepth
+    renderer.shaderParams.wormBellyBright = controller.wormBellyBright
+    renderer.shaderParams.wormBackDark = controller.wormBackDark
+    renderer.shaderParams.wormSkinNoise = controller.wormSkinNoise
+    renderer.shaderParams.wormSSS = controller.wormSSS
+    renderer.shaderParams.wormRoughness = controller.wormRoughness
+    renderer.shaderParams.wormSpecular = controller.wormSpecular
+    renderer.shaderParams.wormRimStrength = controller.wormRimStrength
+    renderer.shaderParams.wormEyeSize = controller.wormEyeSize
+    renderer.shaderParams.wormPulseSpeed = controller.wormPulseSpeed
+    renderer.shaderParams.wormPulseAmp = controller.wormPulseAmp
+    renderer.shaderParams.wormCrawlSpeed = controller.wormCrawlSpeed
+    renderer.shaderParams.wormCrawlAmp = controller.wormCrawlAmp
+    renderer.shaderParams.wormSideAmp = controller.wormSideAmp
     renderer.renderScale = controller.renderScale
 
     view.delegate = renderer
@@ -1172,10 +1463,6 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     view.onCameraSpin = { delta in
         renderer.handleCameraSpin(delta: delta)
     }
-    view.onCameraDebugToggle = {
-        renderer.cameraDebugMode.toggle()
-    }
-
     renderer.loadLevel(levelId: controller.currentLevel)
 }
 
