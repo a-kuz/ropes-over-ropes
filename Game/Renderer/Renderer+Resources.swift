@@ -11,7 +11,7 @@ extension Renderer {
             maxP = max(maxP, h)
         }
         let boardSize = max(maxP.x - minP.x, maxP.y - minP.y)
-        let padding = max(boardSize * 3.0, 10.0)
+        let padding = max(boardSize * 0.6, 4.0)
         let center = (minP + maxP) * 0.5
         let half = (maxP - minP) * 0.5 + SIMD2<Float>(padding, padding)
         woodBoundsMin = center - half

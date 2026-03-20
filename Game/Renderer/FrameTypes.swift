@@ -26,6 +26,10 @@ struct FrameUniforms {
     var wormParams3: SIMD4<Float>
     var wormParams4: SIMD4<Float>
     var ropeMatParams4: SIMD4<Float>
+    var ropeMatParams5: SIMD4<Float>
+    var ropeMatParams6: SIMD4<Float>
+    var ropeMatParams7: SIMD4<Float>
+    var ropeMatParams8: SIMD4<Float>
 }
 
 struct PostParams {

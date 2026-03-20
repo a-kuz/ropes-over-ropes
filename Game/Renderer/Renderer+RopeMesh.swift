@@ -114,33 +114,50 @@ extension Renderer {
                 }
             }
 
-            let wmp = RopeMeshBuilder.WormMeshParams(
-                segFreq: shaderParams.wormSegFreq, segBulge: shaderParams.wormSegBulge,
-                thickness: shaderParams.wormThickness, taperLen: shaderParams.wormTaperLen
-            )
-            let ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
-                RopeMeshBuilder.buildRect(
-                    points: pointsBuffer,
-                    radius: scaledRadius,
-                    color: ropeColor,
-                    twistEvents: [],
-                    tautness: 1.0,
-                    repulsors: [],
-                    stretchRatio: 1.0,
-                    oscillation: 0.0,
-                    segmentStarts: [],
-                    restLength: restLength,
-                    crossSection: cs,
-                    materialFrames: visibleFrames,
-                    profileSegments: profileSegments,
-                    ropeContactPoints: ropeContactPoints,
-                    ropeContactRadius: scaledRadius,
-                    stretchThinning: stretchThinning,
-                    wormMode: shaderParams.wormMode,
-                    wormTime: time,
-                    wormMeshParams: wmp,
-                    squareCrossSection: squareCrossSection
+            let ropeMesh: RopeMesh
+            if shaderParams.chainMode {
+                let cmp = RopeMeshBuilder.ChainMeshParams(
+                    linkLength: shaderParams.chainLinkLength,
+                    linkThickness: shaderParams.chainLinkThickness,
+                    linkWidth: shaderParams.chainLinkWidth
                 )
+                ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
+                    RopeMeshBuilder.buildChain(
+                        points: pointsBuffer,
+                        radius: scaledRadius,
+                        color: ropeColor,
+                        params: cmp
+                    )
+                }
+            } else {
+                let wmp = RopeMeshBuilder.WormMeshParams(
+                    segFreq: shaderParams.wormSegFreq, segBulge: shaderParams.wormSegBulge,
+                    thickness: shaderParams.wormThickness, taperLen: shaderParams.wormTaperLen
+                )
+                ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
+                    RopeMeshBuilder.buildRect(
+                        points: pointsBuffer,
+                        radius: scaledRadius,
+                        color: ropeColor,
+                        twistEvents: [],
+                        tautness: 1.0,
+                        repulsors: [],
+                        stretchRatio: 1.0,
+                        oscillation: 0.0,
+                        segmentStarts: [],
+                        restLength: restLength,
+                        crossSection: cs,
+                        materialFrames: visibleFrames,
+                        profileSegments: profileSegments,
+                        ropeContactPoints: ropeContactPoints,
+                        ropeContactRadius: scaledRadius,
+                        stretchThinning: stretchThinning,
+                        wormMode: shaderParams.wormMode,
+                        wormTime: time,
+                        wormMeshParams: wmp,
+                        squareCrossSection: squareCrossSection
+                    )
+                }
             }
 
             if fadeOut > 0 && band.suckHole != nil {
@@ -162,7 +179,9 @@ extension Renderer {
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
 
-            if squareCrossSection {
+            if shaderParams.chainMode {
+                // no end caps for chain mode
+            } else if squareCrossSection {
                 if visiblePoints.count >= 2 {
                     let isSucking = fadeOut > 0 && band.suckHole != nil
                     let bandHalf = scaledRadius

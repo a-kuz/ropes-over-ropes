@@ -500,6 +500,140 @@ enum RopeMeshBuilder {
         return Profile2D(positions: pos, normals: nrm, v: v)
     }
 
+    struct ChainMeshParams {
+        var linkLength: Float = 2.8
+        var linkThickness: Float = 0.35
+        var linkWidth: Float = 0.85
+        var torusSegments: Int = 10
+        var tubeSegments: Int = 6
+    }
+
+    static func buildChain(points: UnsafeBufferPointer<SIMD3<Float>>, radius: Float, color: SIMD3<Float>, params: ChainMeshParams = ChainMeshParams()) -> RopeMesh {
+        let pointCount = points.count
+        if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
+
+        var totalLen: Float = 0
+        for i in 1..<pointCount {
+            totalLen += simd_length(points[i] - points[i - 1])
+        }
+        if totalLen < 1e-6 { return RopeMesh(vertices: [], indices: []) }
+
+        let linkSpacing = radius * params.linkLength
+        let linkCount = max(1, Int(totalLen / linkSpacing))
+        let tubeR = radius * params.linkThickness
+        let majorR = radius * params.linkWidth
+
+        let torusSeg = max(6, params.torusSegments)
+        let tubeSeg = max(4, params.tubeSegments)
+
+        var vertices: [RopeVertex] = []
+        var indices: [UInt32] = []
+        let vertsPerLink = torusSeg * tubeSeg
+        vertices.reserveCapacity(linkCount * vertsPerLink)
+        indices.reserveCapacity(linkCount * torusSeg * tubeSeg * 6)
+
+        let up = SIMD3<Float>(0, 0, 1)
+        let chainParams = SIMD4<Float>(0, 0, 0, 2.0)
+
+        for linkIdx in 0..<linkCount {
+            let t = (Float(linkIdx) + 0.5) / Float(linkCount)
+            let targetDist = t * totalLen
+
+            var accum: Float = 0
+            var segIdx = 0
+            for i in 1..<pointCount {
+                let segLen = simd_length(points[i] - points[i - 1])
+                if accum + segLen >= targetDist {
+                    segIdx = i - 1
+                    break
+                }
+                accum += segLen
+                if i == pointCount - 1 { segIdx = i - 1 }
+            }
+
+            let segLen = simd_length(points[segIdx + 1] - points[segIdx])
+            let localT = segLen > 1e-6 ? (targetDist - accum) / segLen : 0.5
+            let center = points[segIdx] * (1 - localT) + points[segIdx + 1] * localT
+
+            var tangent: SIMD3<Float>
+            if segIdx == 0 && pointCount >= 2 {
+                tangent = simd_normalize(points[1] - points[0])
+            } else if segIdx >= pointCount - 2 {
+                tangent = simd_normalize(points[pointCount - 1] - points[pointCount - 2])
+            } else {
+                tangent = simd_normalize(points[segIdx + 1] - points[segIdx])
+            }
+
+            let upProj = up - tangent * simd_dot(up, tangent)
+            var binormal: SIMD3<Float>
+            var normal: SIMD3<Float>
+            if simd_length_squared(upProj) > 1e-6 {
+                binormal = simd_normalize(upProj)
+                normal = simd_normalize(simd_cross(binormal, tangent))
+            } else {
+                normal = simd_normalize(simd_cross(up, tangent))
+                if simd_length_squared(normal) < 1e-8 { normal = SIMD3<Float>(1, 0, 0) }
+                binormal = simd_normalize(simd_cross(tangent, normal))
+            }
+
+            let isAlternate = linkIdx % 2 == 1
+            let ringAxis1: SIMD3<Float>
+            let ringAxis2: SIMD3<Float>
+            let ringNormalAxis: SIMD3<Float>
+            if isAlternate {
+                ringAxis1 = tangent
+                ringAxis2 = binormal
+                ringNormalAxis = normal
+            } else {
+                ringAxis1 = tangent
+                ringAxis2 = normal
+                ringNormalAxis = binormal
+            }
+
+            let uCoord = t
+
+            let baseVert = UInt32(vertices.count)
+            for ti in 0..<torusSeg {
+                let theta = Float(ti) / Float(torusSeg) * Float.pi * 2
+                let cosTheta = cos(theta)
+                let sinTheta = sin(theta)
+                let ringCenter = center + ringAxis1 * (majorR * cosTheta) + ringAxis2 * (majorR * sinTheta)
+                let torusOutward = simd_normalize(ringCenter - center)
+
+                for pi in 0..<tubeSeg {
+                    let phi = Float(pi) / Float(tubeSeg) * Float.pi * 2
+                    let cosPhi = cos(phi)
+                    let sinPhi = sin(phi)
+                    let tubeNormal = torusOutward * cosPhi + ringNormalAxis * sinPhi
+                    let pos = ringCenter + tubeNormal * tubeR
+                    let vCoord = Float(pi) / Float(tubeSeg)
+
+                    vertices.append(RopeVertex(
+                        position: pos,
+                        normal: tubeNormal,
+                        color: color,
+                        texCoord: SIMD2<Float>(uCoord, vCoord),
+                        params: chainParams
+                    ))
+                }
+            }
+
+            for ti in 0..<torusSeg {
+                let nextTi = (ti + 1) % torusSeg
+                for pi in 0..<tubeSeg {
+                    let nextPi = (pi + 1) % tubeSeg
+                    let a = baseVert + UInt32(ti * tubeSeg + pi)
+                    let b = baseVert + UInt32(nextTi * tubeSeg + pi)
+                    let c = baseVert + UInt32(nextTi * tubeSeg + nextPi)
+                    let d = baseVert + UInt32(ti * tubeSeg + nextPi)
+                    indices.append(contentsOf: [a, b, c, a, c, d])
+                }
+            }
+        }
+
+        return RopeMesh(vertices: vertices, indices: indices)
+    }
+
     private static func circularProfile(radius: Float, segments: Int) -> Profile2D {
         let r = max(0.0005, radius)
         let seg = max(3, min(32, segments))

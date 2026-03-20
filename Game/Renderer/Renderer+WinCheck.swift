@@ -98,7 +98,7 @@ extension Renderer {
 
         let band = sim.bands[ropeIndex]
         let totalArc = band.suckSegLengths.reduce(0, +)
-        let estDuration = totalArc / max(VerletSimulator.Band.fadeOutSpeed * band.segmentLength, 1e-9)
+        let estDuration = totalArc / max(sim.fadeOutSpeed * band.segmentLength, 1e-9)
         Self.logger.info("[SUCK-START] rope=\(ropeIndex) n=\(band.positions.count) totalArc=\(String(format:"%.3f", totalArc)) estDuration=\(String(format:"%.1f", estDuration))s")
 
         let sh = ropes[ropeIndex].startHole

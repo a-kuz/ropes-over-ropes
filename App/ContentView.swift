@@ -375,21 +375,78 @@ struct ContentView: View {
                     MiniParam(label: "Drag H", value: $gameController.dragHeight, range: 0.05...1.5, format: "%.3f")
                     MiniParam(label: "Lift H", value: $gameController.liftHeight, range: 0.05...1.5, format: "%.3f")
                 }
-                ParamRow(label: "Board Z", value: $gameController.boardElevation, range: 0.02...0.5, format: "%.3f", defaultValue: 0.12)
+                HStack(spacing: 4) {
+                    MiniParam(label: "Frict", value: $gameController.frictionCoefficient, range: 0.0...2.0, format: "%.2f")
+                    MiniParam(label: "ColRs", value: $gameController.collisionResponse, range: 0.0...1.0, format: "%.2f")
+                }
+                HStack(spacing: 4) {
+                    MiniParam(label: "FrDmp", value: $gameController.frictionDampingRatio, range: 0.0...1.0, format: "%.2f")
+                    MiniParam(label: "FrCap", value: $gameController.maxFrictionCap, range: 0.0...1.0, format: "%.2f")
+                }
+                HStack(spacing: 4) {
+                    MiniParam(label: "BrdFr", value: $gameController.boardFrictionRatio, range: 0.0...1.0, format: "%.2f")
+                    MiniParam(label: "ZSep", value: $gameController.zSeparation, range: 0.0...2.0, format: "%.2f")
+                }
+                ParamRow(label: "Board Z", value: $gameController.boardElevation, range: 0.02...0.5, format: "%.3f", defaultValue: 0.257)
+                HStack(spacing: 4) {
+                    MiniParam(label: "TwStf", value: $gameController.twistStiffness, range: 0.0...1.0, format: "%.3f")
+                    MiniParam(label: "TwDmp", value: $gameController.twistDamping, range: 0.0...1.0, format: "%.2f")
+                }
+                HStack(spacing: 4) {
+                    MiniParam(label: "GrvTq", value: $gameController.gravityTorque, range: 0.0...2.0, format: "%.2f")
+                    MiniParam(label: "DrgPk", value: $gameController.dragPickupDuration, range: 0.01...0.5, format: "%.3f")
+                }
+                HStack(spacing: 4) {
+                    MiniParamInt(label: "DrgSb", value: $gameController.dragMinSubsteps, range: 1...10)
+                    MiniParam(label: "FadeS", value: $gameController.fadeOutSpeed, range: 5.0...100.0, format: "%.0f")
+                }
+                HStack(spacing: 4) {
+                    MiniParam(label: "LwrDr", value: $gameController.lowerAnimDuration, range: 0.1...2.0, format: "%.2f")
+                    MiniParam(label: "Idle", value: $gameController.idleTimeout, range: 0.5...10.0, format: "%.1f")
+                }
             }
         }
-        .frame(maxHeight: 220)
+        .frame(maxHeight: 340)
     }
 
     private var ropeTab: some View {
         ScrollView(.vertical, showsIndicators: false) {
             VStack(spacing: 3) {
+                HStack(spacing: 3) {
+                    Text("Palette")
+                        .font(.system(size: 11))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 42, alignment: .leading)
+                    ForEach(GameController.RopePalette.allCases, id: \.rawValue) { palette in
+                        let selected = gameController.ropePalette == palette
+                        Button(action: { gameController.ropePalette = palette }) {
+                            HStack(spacing: 2) {
+                                ForEach(0..<3, id: \.self) { i in
+                                    let c = palette.colors[min(i, palette.colors.count - 1)]
+                                    Circle()
+                                        .fill(Color(red: Double(c.x), green: Double(c.y), blue: Double(c.z)))
+                                        .frame(width: 7, height: 7)
+                                }
+                            }
+                            .padding(.horizontal, 3)
+                            .padding(.vertical, 3)
+                            .background(selected ? Color.white.opacity(0.3) : Color.white.opacity(0.08))
+                            .cornerRadius(5)
+                            .overlay(RoundedRectangle(cornerRadius: 5).stroke(selected ? Color.white.opacity(0.5) : Color.clear, lineWidth: 1))
+                        }
+                    }
+                }
                 HStack(spacing: 6) {
                     Text("Square")
                         .font(.system(size: 12))
                         .foregroundColor(.white.opacity(0.8))
                         .frame(width: 70, alignment: .leading)
                     Toggle("", isOn: $gameController.squareCrossSection)
+                        .labelsHidden()
+                    Text("Chain")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                    Toggle("", isOn: $gameController.chainMode)
                         .labelsHidden()
                     Text("Flat N")
                         .font(.system(size: 12))
@@ -399,6 +456,46 @@ struct ContentView: View {
                     Toggle("Env Dbg", isOn: $gameController.ropeEnvDebug)
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.7))
+                }
+                HStack(spacing: 6) {
+                    Text("Seam")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.ropeSeamEnabled)
+                        .labelsHidden()
+                }
+                if gameController.ropeSeamEnabled {
+                    HStack(spacing: 4) {
+                        MiniParam(label: "SmW", value: $gameController.ropeSeamWidth, range: 0.005...0.25, format: "%.3f")
+                        MiniParam(label: "SmDp", value: $gameController.ropeSeamDepth, range: 0.0...1.0, format: "%.2f")
+                    }
+                    HStack(spacing: 4) {
+                        MiniParam(label: "SmDk", value: $gameController.ropeSeamDarkness, range: 0.0...3.0, format: "%.2f")
+                        MiniParam(label: "SmHi", value: $gameController.ropeSeamHighlight, range: 0.0...1.0, format: "%.2f")
+                    }
+                    HStack(spacing: 4) {
+                        MiniParam(label: "SmCr", value: $gameController.ropeSeamCrackAmount, range: 0.0...1.0, format: "%.2f")
+                        MiniParam(label: "SmCs", value: $gameController.ropeSeamCrackScale, range: 2.0...80.0, format: "%.1f")
+                    }
+                    HStack(spacing: 6) {
+                        Text("Rnd Pos")
+                            .font(.system(size: 12))
+                            .foregroundColor(.white.opacity(0.8))
+                            .frame(width: 70, alignment: .leading)
+                        Toggle("", isOn: $gameController.ropeSeamRandomize)
+                            .labelsHidden()
+                    }
+                    if !gameController.ropeSeamRandomize {
+                        ParamRow(label: "Seam Pos", value: $gameController.ropeSeamPosition, range: 0.0...1.0, format: "%.2f", defaultValue: 0.5)
+                    }
+                }
+                if gameController.chainMode {
+                    HStack(spacing: 4) {
+                        MiniParam(label: "Link L", value: $gameController.chainLinkLength, range: 1.5...5.0, format: "%.1f")
+                        MiniParam(label: "Thick", value: $gameController.chainLinkThickness, range: 0.1...0.8, format: "%.2f")
+                        MiniParam(label: "Width", value: $gameController.chainLinkWidth, range: 0.3...1.5, format: "%.2f")
+                    }
                 }
                 HStack(spacing: 4) {
                     MiniParamInt(label: "Profile", value: $gameController.profileSegments, range: 3...32)
@@ -427,6 +524,21 @@ struct ContentView: View {
                 HStack(spacing: 4) {
                     MiniParam(label: "Glow", value: $gameController.ropeLiftGlow, range: 0...1, format: "%.2f")
                     MiniParam(label: "Opac", value: $gameController.ropeOpacity, range: 0.05...1, format: "%.2f")
+                }
+                HStack(spacing: 6) {
+                    Text("Cracks")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                        .frame(width: 70, alignment: .leading)
+                    Toggle("", isOn: $gameController.ropeCracksEnabled)
+                        .labelsHidden()
+                }
+                if gameController.ropeCracksEnabled {
+                    HStack(spacing: 4) {
+                        MiniParam(label: "CrAmt", value: $gameController.ropeCrackAmount, range: 0.0...1.0, format: "%.2f")
+                        MiniParam(label: "CrWdt", value: $gameController.ropeCrackWidth, range: 0.01...0.45, format: "%.3f")
+                        MiniParam(label: "CrDpt", value: $gameController.ropeCrackDepth, range: 0.0...1.0, format: "%.2f")
+                    }
                 }
                 HStack(spacing: 4) {
                     MiniParam(label: "StrGl", value: $gameController.ropeStretchGloss, range: 0...1, format: "%.2f")

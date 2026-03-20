@@ -78,6 +78,7 @@ class GameController: ObservableObject {
         let ropeEnvSpread: Float?
         let ropeOpacity: Float?
         let wormMode: Bool?
+        let chainMode: Bool?
         let squareCrossSection: Bool?
         let renderScale: Float?
         let zoomScale: Float?
@@ -147,6 +148,7 @@ class GameController: ObservableObject {
             ropeEnvSpread: Float? = nil,
             ropeOpacity: Float? = nil,
             wormMode: Bool? = nil,
+            chainMode: Bool? = nil,
             squareCrossSection: Bool? = nil,
             renderScale: Float? = nil,
             zoomScale: Float? = nil
@@ -215,6 +217,7 @@ class GameController: ObservableObject {
             self.ropeEnvSpread = ropeEnvSpread
             self.ropeOpacity = ropeOpacity
             self.wormMode = wormMode
+            self.chainMode = chainMode
             self.squareCrossSection = squareCrossSection
             self.renderScale = renderScale
             self.zoomScale = zoomScale
@@ -305,6 +308,7 @@ class GameController: ObservableObject {
             ropeEnvSpread: 0.059403844,
             ropeOpacity: 0.7696207,
             wormMode: false,
+            chainMode: false,
             squareCrossSection: false,
             renderScale: 0.6312977,
             zoomScale: 1.2382903
@@ -395,6 +399,7 @@ class GameController: ObservableObject {
         if let ropeEnvSpread = preset.ropeEnvSpread { self.ropeEnvSpread = ropeEnvSpread }
         if let ropeOpacity = preset.ropeOpacity { self.ropeOpacity = ropeOpacity }
         if let wormMode = preset.wormMode { self.wormMode = wormMode }
+        if let chainMode = preset.chainMode { self.chainMode = chainMode }
         if let squareCrossSection = preset.squareCrossSection { self.squareCrossSection = squareCrossSection }
         if let renderScale = preset.renderScale { self.renderScale = renderScale }
         if let zoomScale = preset.zoomScale { self.zoomScale = zoomScale }
@@ -414,7 +419,133 @@ class GameController: ObservableObject {
         static let dragHeight: Float = 0.35
         static let liftHeight: Float = 0.3
         static let ropeTension: Float = 0.918
+        static let frictionCoefficient: Float = 0.8
+        static let frictionDampingRatio: Float = 0.3
+        static let maxFrictionCap: Float = 0.25
+        static let boardFrictionRatio: Float = 0.5
+        static let collisionResponse: Float = 0.35
+        static let zSeparation: Float = 1.0
+        static let twistStiffness: Float = 0.15
+        static let twistDamping: Float = 0.4
+        static let gravityTorque: Float = 0.8
+        static let dragPickupDuration: Float = 0.12
+        static let dragMinSubsteps: Float = 3
+        static let fadeOutSpeed: Float = 45.0
+        static let lowerAnimDuration: Float = 0.55
+        static let idleTimeout: Float = 3.0
         static let boardElevation: Float = 0.12
+    }
+
+    enum RopePalette: Int, CaseIterable {
+        case original = 0
+        case warm
+        case cool
+        case earth
+        case candy
+        case mono
+        case random
+
+        var label: String {
+            switch self {
+            case .original: return "Original"
+            case .warm: return "Warm"
+            case .cool: return "Cool"
+            case .earth: return "Earth"
+            case .candy: return "Candy"
+            case .mono: return "Mono"
+            case .random: return "Random"
+            }
+        }
+
+        static func hsb(_ h: Float, _ s: Float, _ b: Float) -> SIMD3<Float> {
+            let c = b * s
+            let x = c * (1 - abs(fmodf(h / 60.0, 2) - 1))
+            let m = b - c
+            let r1, g1, b1: Float
+            switch Int(h / 60.0) % 6 {
+            case 0: (r1, g1, b1) = (c, x, 0)
+            case 1: (r1, g1, b1) = (x, c, 0)
+            case 2: (r1, g1, b1) = (0, c, x)
+            case 3: (r1, g1, b1) = (0, x, c)
+            case 4: (r1, g1, b1) = (x, 0, c)
+            default: (r1, g1, b1) = (c, 0, x)
+            }
+            return SIMD3<Float>(r1 + m, g1 + m, b1 + m)
+        }
+
+        var colors: [SIMD3<Float>] {
+            switch self {
+            case .original:
+                return [
+                    SIMD3<Float>(0.95, 0.30, 0.05),
+                    SIMD3<Float>(0.10, 0.35, 0.92),
+                    SIMD3<Float>(0.90, 0.12, 0.25),
+                    SIMD3<Float>(0.15, 0.75, 0.30),
+                    SIMD3<Float>(0.92, 0.78, 0.05),
+                    SIMD3<Float>(0.60, 0.10, 0.72),
+                    SIMD3<Float>(0.05, 0.65, 0.72),
+                    SIMD3<Float>(0.85, 0.15, 0.55),
+                    SIMD3<Float>(0.20, 0.55, 0.90),
+                    SIMD3<Float>(0.80, 0.50, 0.05),
+                ]
+            case .warm:
+                let hues: [(Float, Float, Float)] = [
+                    (5, 0.72, 0.88), (30, 0.70, 0.85), (50, 0.68, 0.82),
+                    (350, 0.65, 0.80), (20, 0.75, 0.78), (40, 0.60, 0.90),
+                    (10, 0.68, 0.75), (55, 0.72, 0.80), (345, 0.58, 0.85),
+                    (25, 0.65, 0.82),
+                ]
+                return hues.map { Self.hsb($0.0, $0.1, $0.2) }
+            case .cool:
+                let hues: [(Float, Float, Float)] = [
+                    (195, 0.65, 0.82), (225, 0.60, 0.80), (260, 0.55, 0.78),
+                    (175, 0.62, 0.76), (210, 0.68, 0.84), (290, 0.50, 0.75),
+                    (185, 0.58, 0.80), (240, 0.55, 0.82), (165, 0.60, 0.78),
+                    (270, 0.52, 0.80),
+                ]
+                return hues.map { Self.hsb($0.0, $0.1, $0.2) }
+            case .earth:
+                let hues: [(Float, Float, Float)] = [
+                    (25, 0.55, 0.68), (80, 0.45, 0.62), (38, 0.58, 0.72),
+                    (12, 0.50, 0.65), (95, 0.40, 0.58), (45, 0.52, 0.70),
+                    (70, 0.42, 0.60), (30, 0.60, 0.66), (8, 0.48, 0.62),
+                    (55, 0.50, 0.65),
+                ]
+                return hues.map { Self.hsb($0.0, $0.1, $0.2) }
+            case .candy:
+                let hues: [(Float, Float, Float)] = [
+                    (330, 0.55, 0.90), (190, 0.50, 0.88), (35, 0.55, 0.90),
+                    (155, 0.48, 0.85), (280, 0.45, 0.88), (60, 0.50, 0.85),
+                    (170, 0.52, 0.82), (0, 0.50, 0.92), (220, 0.45, 0.88),
+                    (90, 0.48, 0.85),
+                ]
+                return hues.map { Self.hsb($0.0, $0.1, $0.2) }
+            case .mono:
+                let vals: [Float] = [0.82, 0.52, 0.68, 0.38, 0.90, 0.28, 0.60, 0.45, 0.75, 0.33]
+                return vals.map { SIMD3<Float>($0, $0, $0) }
+            case .random:
+                return Self.generateRandom()
+            }
+        }
+
+        static func generateRandom() -> [SIMD3<Float>] {
+            let baseHue = Float.random(in: 0..<360)
+            let goldenAngle: Float = 137.508
+            return (0..<10).map { i in
+                let h = fmodf(baseHue + Float(i) * goldenAngle, 360)
+                let s = Float.random(in: 0.55...0.75)
+                let b = Float.random(in: 0.75...0.90)
+                return hsb(h, s, b)
+            }
+        }
+    }
+
+    @Published var ropePalette: RopePalette = .original {
+        didSet { applyCurrentPalette(); persist("v.rpal", Float(ropePalette.rawValue)) }
+    }
+
+    func applyCurrentPalette() {
+        renderer?.applyRopePalette(ropePalette.colors)
     }
 
     // Rope
@@ -456,6 +587,48 @@ class GameController: ObservableObject {
         didSet { renderer?.physicsRopeTension = ropeTension; persist("p.rtn", ropeTension) }
     }
 
+    @Published var frictionCoefficient: Float = Defaults.frictionCoefficient {
+        didSet { renderer?.physicsFriction = frictionCoefficient; persist("p.frc", frictionCoefficient) }
+    }
+    @Published var collisionResponse: Float = Defaults.collisionResponse {
+        didSet { renderer?.physicsCollisionResponse = collisionResponse; persist("p.crs", collisionResponse) }
+    }
+    @Published var zSeparation: Float = Defaults.zSeparation {
+        didSet { renderer?.physicsZSeparation = zSeparation; persist("p.zsep", zSeparation) }
+    }
+    @Published var frictionDampingRatio: Float = Defaults.frictionDampingRatio {
+        didSet { renderer?.physicsFrictionDampingRatio = frictionDampingRatio; persist("p.fdr", frictionDampingRatio) }
+    }
+    @Published var maxFrictionCap: Float = Defaults.maxFrictionCap {
+        didSet { renderer?.physicsMaxFrictionCap = maxFrictionCap; persist("p.mfc", maxFrictionCap) }
+    }
+    @Published var boardFrictionRatio: Float = Defaults.boardFrictionRatio {
+        didSet { renderer?.physicsBoardFrictionRatio = boardFrictionRatio; persist("p.bfr", boardFrictionRatio) }
+    }
+    @Published var twistStiffness: Float = Defaults.twistStiffness {
+        didSet { renderer?.physicsTwistStiffness = twistStiffness; persist("p.tws", twistStiffness) }
+    }
+    @Published var twistDamping: Float = Defaults.twistDamping {
+        didSet { renderer?.physicsTwistDamping = twistDamping; persist("p.twd", twistDamping) }
+    }
+    @Published var gravityTorque: Float = Defaults.gravityTorque {
+        didSet { renderer?.physicsGravityTorque = gravityTorque; persist("p.gtq", gravityTorque) }
+    }
+    @Published var dragPickupDuration: Float = Defaults.dragPickupDuration {
+        didSet { renderer?.physicsDragPickupDuration = dragPickupDuration; persist("p.dpd", dragPickupDuration) }
+    }
+    @Published var dragMinSubsteps: Float = Defaults.dragMinSubsteps {
+        didSet { renderer?.physicsDragMinSubsteps = Int(dragMinSubsteps); persist("p.dms", dragMinSubsteps) }
+    }
+    @Published var fadeOutSpeed: Float = Defaults.fadeOutSpeed {
+        didSet { renderer?.physicsFadeOutSpeed = fadeOutSpeed; persist("p.fos", fadeOutSpeed) }
+    }
+    @Published var lowerAnimDuration: Float = Defaults.lowerAnimDuration {
+        didSet { renderer?.physicsLowerAnimDuration = lowerAnimDuration; persist("p.lad", lowerAnimDuration) }
+    }
+    @Published var idleTimeout: Float = Defaults.idleTimeout {
+        didSet { renderer?.physicsIdleTimeout = idleTimeout; persist("p.ito", idleTimeout) }
+    }
     @Published var boardElevation: Float = Defaults.boardElevation {
         didSet { renderer?.boardElevation = boardElevation; persist("p.bel", boardElevation) }
     }
@@ -668,11 +841,62 @@ class GameController: ObservableObject {
     @Published var ropeOpacity: Float = 1.0 {
         didSet { renderer?.shaderParams.ropeOpacity = ropeOpacity; persist("v.ropa", ropeOpacity) }
     }
+    @Published var ropeSeamEnabled: Bool = false {
+        didSet { renderer?.shaderParams.ropeSeamEnabled = ropeSeamEnabled; persist("v.rsen", ropeSeamEnabled ? 1 : 0) }
+    }
+    @Published var ropeSeamWidth: Float = 0.06 {
+        didSet { renderer?.shaderParams.ropeSeamWidth = ropeSeamWidth; persist("v.rsw", ropeSeamWidth) }
+    }
+    @Published var ropeSeamDepth: Float = 0.45 {
+        didSet { renderer?.shaderParams.ropeSeamDepth = ropeSeamDepth; persist("v.rsd", ropeSeamDepth) }
+    }
+    @Published var ropeSeamDarkness: Float = 1.4 {
+        didSet { renderer?.shaderParams.ropeSeamDarkness = ropeSeamDarkness; persist("v.rsdk", ropeSeamDarkness) }
+    }
+    @Published var ropeSeamHighlight: Float = 0.35 {
+        didSet { renderer?.shaderParams.ropeSeamHighlight = ropeSeamHighlight; persist("v.rshl", ropeSeamHighlight) }
+    }
+    @Published var ropeSeamCrackAmount: Float = 0.45 {
+        didSet { renderer?.shaderParams.ropeSeamCrackAmount = ropeSeamCrackAmount; persist("v.rsca", ropeSeamCrackAmount) }
+    }
+    @Published var ropeSeamCrackScale: Float = 18.0 {
+        didSet { renderer?.shaderParams.ropeSeamCrackScale = ropeSeamCrackScale; persist("v.rscs", ropeSeamCrackScale) }
+    }
+    @Published var ropeSeamRandomize: Bool = true {
+        didSet { renderer?.shaderParams.ropeSeamRandomize = ropeSeamRandomize; persist("v.rsrn", ropeSeamRandomize ? 1 : 0) }
+    }
+    @Published var ropeSeamPosition: Float = 0.5 {
+        didSet { renderer?.shaderParams.ropeSeamPosition = ropeSeamPosition; persist("v.rspo", ropeSeamPosition) }
+    }
+    @Published var ropeCracksEnabled: Bool = false {
+        didSet { renderer?.shaderParams.ropeCracksEnabled = ropeCracksEnabled; persist("v.rcren", ropeCracksEnabled ? 1 : 0) }
+    }
+    @Published var ropeCrackAmount: Float = 0.45 {
+        didSet { renderer?.shaderParams.ropeCrackAmount = ropeCrackAmount; persist("v.rcra", ropeCrackAmount) }
+    }
+    @Published var ropeCrackWidth: Float = 0.16 {
+        didSet { renderer?.shaderParams.ropeCrackWidth = ropeCrackWidth; persist("v.rcrw", ropeCrackWidth) }
+    }
+    @Published var ropeCrackDepth: Float = 0.5 {
+        didSet { renderer?.shaderParams.ropeCrackDepth = ropeCrackDepth; persist("v.rcrd", ropeCrackDepth) }
+    }
     @Published var ropeEnvDebug: Bool = false {
         didSet { renderer?.shaderParams.ropeEnvDebug = ropeEnvDebug }
     }
     @Published var shadowDebugMode: Int = 0 {
         didSet { renderer?.shaderParams.shadowDebugMode = shadowDebugMode }
+    }
+    @Published var chainMode: Bool = false {
+        didSet { renderer?.shaderParams.chainMode = chainMode; persist("v.chn", chainMode ? 1 : 0) }
+    }
+    @Published var chainLinkLength: Float = 2.8 {
+        didSet { renderer?.shaderParams.chainLinkLength = chainLinkLength; persist("c.ll", chainLinkLength) }
+    }
+    @Published var chainLinkThickness: Float = 0.35 {
+        didSet { renderer?.shaderParams.chainLinkThickness = chainLinkThickness; persist("c.lt", chainLinkThickness) }
+    }
+    @Published var chainLinkWidth: Float = 0.85 {
+        didSet { renderer?.shaderParams.chainLinkWidth = chainLinkWidth; persist("c.lw", chainLinkWidth) }
     }
     @Published var wormMode: Bool = false {
         didSet { renderer?.shaderParams.wormMode = wormMode; persist("v.wrm", wormMode ? 1 : 0) }
@@ -734,7 +958,7 @@ class GameController: ObservableObject {
     @Published var squareCrossSection: Bool = false {
         didSet { renderer?.squareCrossSection = squareCrossSection; persist("v.sqcs", squareCrossSection ? 1 : 0) }
     }
-    @Published var renderScale: Float = 0.753 {
+    @Published var renderScale: Float = 1.0 {
         didSet { renderer?.renderScale = renderScale; persist("v.rsc", renderScale) }
     }
 
@@ -819,6 +1043,20 @@ class GameController: ObservableObject {
         if let v = f("p.drg") { dragHeight = v }
         if let v = f("p.lft") { liftHeight = v }
         if let v = f("p.rtn") { ropeTension = v }
+        if let v = f("p.frc") { frictionCoefficient = v }
+        if let v = f("p.crs") { collisionResponse = v }
+        if let v = f("p.zsep") { zSeparation = v }
+        if let v = f("p.fdr") { frictionDampingRatio = v }
+        if let v = f("p.mfc") { maxFrictionCap = v }
+        if let v = f("p.bfr") { boardFrictionRatio = v }
+        if let v = f("p.tws") { twistStiffness = v }
+        if let v = f("p.twd") { twistDamping = v }
+        if let v = f("p.gtq") { gravityTorque = v }
+        if let v = f("p.dpd") { dragPickupDuration = v }
+        if let v = f("p.dms") { dragMinSubsteps = v }
+        if let v = f("p.fos") { fadeOutSpeed = v }
+        if let v = f("p.lad") { lowerAnimDuration = v }
+        if let v = f("p.ito") { idleTimeout = v }
         if let v = f("p.bel") { boardElevation = v }
         if let v = f("p.snd") { frictionSoundEnabled = v > 0.5 }
         if let v = f("p.zoom"), v > 0 { zoomScale = v }
@@ -887,8 +1125,25 @@ class GameController: ObservableObject {
         if let v = f("v.renv") { ropeEnvReflect = v }
         if let v = f("v.ropa") { ropeOpacity = v }
         if let v = f("v.rens") { ropeEnvSpread = v }
+        if let v = f("v.rsen") { ropeSeamEnabled = v > 0.5 }
+        if let v = f("v.rsw") { ropeSeamWidth = v }
+        if let v = f("v.rsd") { ropeSeamDepth = v }
+        if let v = f("v.rsdk") { ropeSeamDarkness = v }
+        if let v = f("v.rshl") { ropeSeamHighlight = v }
+        if let v = f("v.rsca") { ropeSeamCrackAmount = v }
+        if let v = f("v.rscs") { ropeSeamCrackScale = v }
+        if let v = f("v.rsrn") { ropeSeamRandomize = v > 0.5 }
+        if let v = f("v.rspo") { ropeSeamPosition = v }
+        if let v = f("v.rcren") { ropeCracksEnabled = v > 0.5 }
+        if let v = f("v.rcra") { ropeCrackAmount = v }
+        if let v = f("v.rcrw") { ropeCrackWidth = v }
+        if let v = f("v.rcrd") { ropeCrackDepth = v }
         if let v = f("v.sqcs") { squareCrossSection = v > 0.5 }
         if let v = f("v.rsc"), v > 0 { renderScale = v }
+        if let v = f("v.chn") { chainMode = v > 0.5 }
+        if let v = f("c.ll") { chainLinkLength = v }
+        if let v = f("c.lt") { chainLinkThickness = v }
+        if let v = f("c.lw") { chainLinkWidth = v }
         if let v = f("v.wrm") { wormMode = v > 0.5 }
         if let v = f("w.sf") { wormSegFreq = v }
         if let v = f("w.sb") { wormSegBulge = v }
@@ -908,19 +1163,23 @@ class GameController: ObservableObject {
         if let v = f("w.cs") { wormCrawlSpeed = v }
         if let v = f("w.ca") { wormCrawlAmp = v }
         if let v = f("w.sa") { wormSideAmp = v }
+        if let v = f("v.rpal") { ropePalette = RopePalette(rawValue: Int(v)) ?? .original }
         updateHoleTint()
     }
 
     private static let allKeys = [
-        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.bcp", "p.bvc", "p.bph", "p.drg", "p.lft", "p.rtn", "p.bel", "p.snd", "p.zoom", "p.lvl",
+        "p.ptc", "p.grv", "p.dmp", "p.cit", "p.stl", "p.bcp", "p.bvc", "p.bph", "p.drg", "p.lft", "p.rtn",
+        "p.frc", "p.crs", "p.zsep", "p.fdr", "p.mfc", "p.bfr", "p.tws", "p.twd", "p.gtq", "p.dpd", "p.dms", "p.fos", "p.lad", "p.ito",
+        "p.bel", "p.snd", "p.zoom", "p.lvl",
         "v.prf", "v.hrs", "v.htr", "v.htg", "v.htb", "v.hta", "v.hsg", "v.rrs", "v.stn", "v.exp", "v.lit", "v.ldx", "v.ldy", "v.ldz",
         "v.stp", "v.amb", "v.sb", "v.sd", "v.lsz", "v.sen", "v.sms", "v.blen", "v.blm", "v.crt", "v.cex", "v.cbl", "v.ced", "v.clv", "v.csb", "v.cwp", "v.ces",
         "v.tst", "v.tc1r", "v.tc1g", "v.tc1b", "v.tc2r", "v.tc2g", "v.tc2b",
         "v.wsd", "v.wbr", "v.wps", "v.crs", "v.csg", "v.crg", "v.cdk",
         "v.rmat", "v.rgls", "v.rdwp", "v.rsss", "v.redg", "v.rsat",
-        "v.rmbp", "v.rbsc", "v.rcao", "v.rlgw", "v.rsg", "v.rss", "v.sqcs", "v.rsc", "v.wrm",
+        "v.rmbp", "v.rbsc", "v.rcao", "v.rlgw", "v.rsg", "v.rss", "v.rsen", "v.rsw", "v.rsd", "v.rsdk", "v.rshl", "v.rsca", "v.rscs", "v.rsrn", "v.rspo", "v.rcren", "v.rcra", "v.rcrw", "v.rcrd", "v.sqcs", "v.rsc", "v.wrm",
         "w.sf", "w.sb", "w.th", "w.tl", "w.gd", "w.bb", "w.bd", "w.sn",
-        "w.ss", "w.rg", "w.sp", "w.rm", "w.es", "w.ps", "w.pa", "w.cs", "w.ca", "w.sa"
+        "w.ss", "w.rg", "w.sp", "w.rm", "w.es", "w.ps", "w.pa", "w.cs", "w.ca", "w.sa",
+        "v.rpal"
     ]
 
     func resetToDefaults() {
@@ -934,6 +1193,20 @@ class GameController: ObservableObject {
         dragHeight = Defaults.dragHeight
         liftHeight = Defaults.liftHeight
         ropeTension = Defaults.ropeTension
+        frictionCoefficient = Defaults.frictionCoefficient
+        frictionDampingRatio = Defaults.frictionDampingRatio
+        maxFrictionCap = Defaults.maxFrictionCap
+        boardFrictionRatio = Defaults.boardFrictionRatio
+        collisionResponse = Defaults.collisionResponse
+        zSeparation = Defaults.zSeparation
+        twistStiffness = Defaults.twistStiffness
+        twistDamping = Defaults.twistDamping
+        gravityTorque = Defaults.gravityTorque
+        dragPickupDuration = Defaults.dragPickupDuration
+        dragMinSubsteps = Defaults.dragMinSubsteps
+        fadeOutSpeed = Defaults.fadeOutSpeed
+        lowerAnimDuration = Defaults.lowerAnimDuration
+        idleTimeout = Defaults.idleTimeout
         zoomScale = 1.0
         frictionSoundEnabled = true
         profileSegments = 10
@@ -987,6 +1260,19 @@ class GameController: ObservableObject {
         ropeStretchSpec = 0.371
         ropeEnvReflect = 0.15
         ropeEnvSpread = 0.15
+        ropeSeamEnabled = false
+        ropeSeamWidth = 0.06
+        ropeSeamDepth = 0.45
+        ropeSeamDarkness = 1.4
+        ropeSeamHighlight = 0.35
+        ropeSeamCrackAmount = 0.45
+        ropeSeamCrackScale = 18.0
+        ropeSeamRandomize = true
+        ropeSeamPosition = 0.5
+        ropeCracksEnabled = false
+        ropeCrackAmount = 0.45
+        ropeCrackWidth = 0.16
+        ropeCrackDepth = 0.5
         squareCrossSection = true
         renderScale = 1.0
         wormMode = false
@@ -995,6 +1281,7 @@ class GameController: ObservableObject {
         wormSSS = 0.25; wormRoughness = 0.25; wormSpecular = 0.8; wormRimStrength = 0.08
         wormEyeSize = 0.015; wormPulseSpeed = 2.5; wormPulseAmp = 0.02
         wormCrawlSpeed = 3.5; wormCrawlAmp = 0.012; wormSideAmp = 0.008
+        ropePalette = .original
         Self.allKeys.forEach { UserDefaults.standard.removeObject(forKey: $0) }
     }
 
@@ -1082,6 +1369,7 @@ class GameController: ObservableObject {
         guard let renderer = renderer else { return }
         renderer.loadLevel(levelId: id)
         currentLevel = id
+        if ropePalette != .original { applyCurrentPalette() }
         levelStartTime = Date()
         percentile = nil
         updateBraidTargets()
@@ -1090,6 +1378,7 @@ class GameController: ObservableObject {
     func loadLevelDefinition(_ def: LevelDefinition) {
         guard let renderer = renderer else { return }
         renderer.loadLevelDefinition(def)
+        if ropePalette != .original { applyCurrentPalette() }
         currentLevel = def.id
         levelStartTime = Date()
         percentile = nil
@@ -1108,6 +1397,20 @@ class GameController: ObservableObject {
             "dragHeight": dragHeight,
             "liftHeight": liftHeight,
             "ropeTension": ropeTension,
+            "frictionCoefficient": frictionCoefficient,
+            "frictionDampingRatio": frictionDampingRatio,
+            "maxFrictionCap": maxFrictionCap,
+            "boardFrictionRatio": boardFrictionRatio,
+            "collisionResponse": collisionResponse,
+            "zSeparation": zSeparation,
+            "twistStiffness": twistStiffness,
+            "twistDamping": twistDamping,
+            "gravityTorque": gravityTorque,
+            "dragPickupDuration": dragPickupDuration,
+            "dragMinSubsteps": Int(dragMinSubsteps),
+            "fadeOutSpeed": fadeOutSpeed,
+            "lowerAnimDuration": lowerAnimDuration,
+            "idleTimeout": idleTimeout,
             "profileSegments": Int(profileSegments),
             "holeRadiusScale": holeRadiusScale,
             "holeSegments": Int(holeSegments),
@@ -1166,9 +1469,27 @@ class GameController: ObservableObject {
             "ropeEnvReflect": ropeEnvReflect,
             "ropeEnvSpread": ropeEnvSpread,
             "ropeOpacity": ropeOpacity,
+            "ropeSeamEnabled": ropeSeamEnabled,
+            "ropeSeamWidth": ropeSeamWidth,
+            "ropeSeamDepth": ropeSeamDepth,
+            "ropeSeamDarkness": ropeSeamDarkness,
+            "ropeSeamHighlight": ropeSeamHighlight,
+            "ropeSeamCrackAmount": ropeSeamCrackAmount,
+            "ropeSeamCrackScale": ropeSeamCrackScale,
+            "ropeSeamRandomize": ropeSeamRandomize,
+            "ropeSeamPosition": ropeSeamPosition,
+            "ropeCracksEnabled": ropeCracksEnabled,
+            "ropeCrackAmount": ropeCrackAmount,
+            "ropeCrackWidth": ropeCrackWidth,
+            "ropeCrackDepth": ropeCrackDepth,
             "squareCrossSection": squareCrossSection,
+            "chainMode": chainMode,
+            "chainLinkLength": chainLinkLength,
+            "chainLinkThickness": chainLinkThickness,
+            "chainLinkWidth": chainLinkWidth,
             "wormMode": wormMode,
-            "renderScale": renderScale
+            "renderScale": renderScale,
+            "ropePalette": ropePalette.rawValue
         ]
         guard let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
               let str = String(data: data, encoding: .utf8) else { return false }
@@ -1235,6 +1556,20 @@ class GameController: ObservableObject {
         if let v = f("dragHeight") { dragHeight = v }
         if let v = f("liftHeight") { liftHeight = v }
         if let v = f("ropeTension") { ropeTension = v }
+        if let v = f("frictionCoefficient") { frictionCoefficient = v }
+        if let v = f("frictionDampingRatio") { frictionDampingRatio = v }
+        if let v = f("maxFrictionCap") { maxFrictionCap = v }
+        if let v = f("boardFrictionRatio") { boardFrictionRatio = v }
+        if let v = f("collisionResponse") { collisionResponse = v }
+        if let v = f("zSeparation") { zSeparation = v }
+        if let v = f("twistStiffness") { twistStiffness = v }
+        if let v = f("twistDamping") { twistDamping = v }
+        if let v = f("gravityTorque") { gravityTorque = v }
+        if let v = f("dragPickupDuration") { dragPickupDuration = v }
+        if let v = f("dragMinSubsteps") { dragMinSubsteps = v }
+        if let v = f("fadeOutSpeed") { fadeOutSpeed = v }
+        if let v = f("lowerAnimDuration") { lowerAnimDuration = v }
+        if let v = f("idleTimeout") { idleTimeout = v }
         if let v = f("profileSegments") { profileSegments = v }
         if let v = f("holeRadiusScale") { holeRadiusScale = v }
         if let v = f("holeSegments") { holeSegments = v }
@@ -1296,9 +1631,27 @@ class GameController: ObservableObject {
         if let v = f("ropeEnvReflect") { ropeEnvReflect = v }
         if let v = f("ropeOpacity") { ropeOpacity = v }
         if let v = f("ropeEnvSpread") { ropeEnvSpread = v }
+        if let v = b("ropeSeamEnabled") { ropeSeamEnabled = v }
+        if let v = f("ropeSeamWidth") { ropeSeamWidth = v }
+        if let v = f("ropeSeamDepth") { ropeSeamDepth = v }
+        if let v = f("ropeSeamDarkness") { ropeSeamDarkness = v }
+        if let v = f("ropeSeamHighlight") { ropeSeamHighlight = v }
+        if let v = f("ropeSeamCrackAmount") { ropeSeamCrackAmount = v }
+        if let v = f("ropeSeamCrackScale") { ropeSeamCrackScale = v }
+        if let v = b("ropeSeamRandomize") { ropeSeamRandomize = v }
+        if let v = f("ropeSeamPosition") { ropeSeamPosition = v }
+        if let v = b("ropeCracksEnabled") { ropeCracksEnabled = v }
+        if let v = f("ropeCrackAmount") { ropeCrackAmount = v }
+        if let v = f("ropeCrackWidth") { ropeCrackWidth = v }
+        if let v = f("ropeCrackDepth") { ropeCrackDepth = v }
         if let v = b("squareCrossSection") { squareCrossSection = v }
+        if let v = b("chainMode") { chainMode = v }
+        if let v = f("chainLinkLength") { chainLinkLength = v }
+        if let v = f("chainLinkThickness") { chainLinkThickness = v }
+        if let v = f("chainLinkWidth") { chainLinkWidth = v }
         if let v = b("wormMode") { wormMode = v }
         if let v = f("renderScale") { renderScale = v }
+        if let v = f("ropePalette") { ropePalette = RopePalette(rawValue: Int(v)) ?? .original }
         if let v = f("wormSegFreq") { wormSegFreq = v }
         if let v = f("wormSegBulge") { wormSegBulge = v }
         if let v = f("wormThickness") { wormThickness = v }
@@ -1366,6 +1719,20 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.dragHeight = controller.dragHeight
     renderer.physicsLiftHeight = controller.liftHeight
     renderer.physicsRopeTension = controller.ropeTension
+    renderer.physicsFriction = controller.frictionCoefficient
+    renderer.physicsFrictionDampingRatio = controller.frictionDampingRatio
+    renderer.physicsMaxFrictionCap = controller.maxFrictionCap
+    renderer.physicsBoardFrictionRatio = controller.boardFrictionRatio
+    renderer.physicsCollisionResponse = controller.collisionResponse
+    renderer.physicsZSeparation = controller.zSeparation
+    renderer.physicsTwistStiffness = controller.twistStiffness
+    renderer.physicsTwistDamping = controller.twistDamping
+    renderer.physicsGravityTorque = controller.gravityTorque
+    renderer.physicsDragPickupDuration = controller.dragPickupDuration
+    renderer.physicsDragMinSubsteps = Int(controller.dragMinSubsteps)
+    renderer.physicsFadeOutSpeed = controller.fadeOutSpeed
+    renderer.physicsLowerAnimDuration = controller.lowerAnimDuration
+    renderer.physicsIdleTimeout = controller.idleTimeout
     renderer.boardElevation = controller.boardElevation
     renderer.frictionSound.enabled = controller.frictionSoundEnabled
     renderer.profileSegments = Int(controller.profileSegments)
@@ -1423,9 +1790,26 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.shaderParams.ropeEnvReflect = controller.ropeEnvReflect
     renderer.shaderParams.ropeEnvSpread = controller.ropeEnvSpread
     renderer.shaderParams.ropeOpacity = controller.ropeOpacity
+    renderer.shaderParams.ropeSeamEnabled = controller.ropeSeamEnabled
+    renderer.shaderParams.ropeSeamWidth = controller.ropeSeamWidth
+    renderer.shaderParams.ropeSeamDepth = controller.ropeSeamDepth
+    renderer.shaderParams.ropeSeamDarkness = controller.ropeSeamDarkness
+    renderer.shaderParams.ropeSeamHighlight = controller.ropeSeamHighlight
+    renderer.shaderParams.ropeSeamCrackAmount = controller.ropeSeamCrackAmount
+    renderer.shaderParams.ropeSeamCrackScale = controller.ropeSeamCrackScale
+    renderer.shaderParams.ropeSeamRandomize = controller.ropeSeamRandomize
+    renderer.shaderParams.ropeSeamPosition = controller.ropeSeamPosition
+    renderer.shaderParams.ropeCracksEnabled = controller.ropeCracksEnabled
+    renderer.shaderParams.ropeCrackAmount = controller.ropeCrackAmount
+    renderer.shaderParams.ropeCrackWidth = controller.ropeCrackWidth
+    renderer.shaderParams.ropeCrackDepth = controller.ropeCrackDepth
     renderer.shaderParams.ropeEnvDebug = controller.ropeEnvDebug
     renderer.shaderParams.shadowDebugMode = controller.shadowDebugMode
     renderer.squareCrossSection = controller.squareCrossSection
+    renderer.shaderParams.chainMode = controller.chainMode
+    renderer.shaderParams.chainLinkLength = controller.chainLinkLength
+    renderer.shaderParams.chainLinkThickness = controller.chainLinkThickness
+    renderer.shaderParams.chainLinkWidth = controller.chainLinkWidth
     renderer.shaderParams.wormMode = controller.wormMode
     renderer.shaderParams.wormSegFreq = controller.wormSegFreq
     renderer.shaderParams.wormSegBulge = controller.wormSegBulge
@@ -1464,6 +1848,9 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
         renderer.handleCameraSpin(delta: delta)
     }
     renderer.loadLevel(levelId: controller.currentLevel)
+    if controller.ropePalette != .original {
+        controller.applyCurrentPalette()
+    }
 }
 
 final class GameViewCoordinator {

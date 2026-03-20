@@ -35,6 +35,10 @@ struct FrameUniforms {
     float4 wormParams3;
     float4 wormParams4;
     float4 ropeMatParams4;
+    float4 ropeMatParams5;
+    float4 ropeMatParams6;
+    float4 ropeMatParams7;
+    float4 ropeMatParams8;
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
@@ -436,7 +440,7 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
                               depth2d<float> shadowMap [[texture(2)]],
                               texture2d<float> woodTex [[texture(3)]],
                               texture2d<float> holeMaskTex [[texture(4)]]) {
-    constexpr sampler woodSampler(address::clamp_to_edge, filter::linear);
+    constexpr sampler woodSampler(address::clamp_to_edge, filter::nearest);
 
     float2 uv = in.uv;
     float2 ndc = uv * 2.0 - 1.0;
@@ -658,6 +662,22 @@ struct RopeOut {
     float4 params;
 };
 
+static float crackNoise1(float x) {
+    return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
+}
+
+static float crackMask(float2 uv, float amount, float width) {
+    float freq = mix(7.0, 34.0, saturate(amount));
+    float ridgePhase = sin(uv.x * freq * 6.2831853 + sin(uv.x * 13.7) * 1.9);
+    float ridgeShift = ridgePhase * (0.03 + amount * 0.07);
+    float center = abs(fract(uv.y + ridgeShift) - 0.5) * 2.0;
+    float inner = smoothstep(width, max(0.001, width * 0.22), center);
+    float shard = crackNoise1(floor(uv.x * freq * 0.55) + floor(uv.y * 6.0) * 17.0 + 1.0);
+    float gate = step(1.0 - amount * 0.9, shard);
+    float endFade = smoothstep(0.03, 0.12, uv.x) * smoothstep(0.03, 0.12, 1.0 - uv.x);
+    return inner * gate * endFade;
+}
+
 vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
                           constant FrameUniforms& frame [[buffer(1)]]) {
     RopeOut o;
@@ -666,13 +686,13 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     float dragActive = frame.timeDrag.w;
     float u = in.uv.x;
     float pinch = in.params.y;
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
 
     float w = sin(u * 3.14159265);
     w = w * w;
 
     float3 displaced;
-    if (isWorm > 0.5) {
+    if (styleMode > 0.5 && styleMode < 1.5) {
         float crawlSpeed = frame.wormParams4.x;
         float crawlAmp = frame.wormParams4.y;
         float sideAmpP = frame.wormParams4.z;
@@ -685,6 +705,16 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
         displaced = in.position;
+    }
+
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    if (cracksEnabled && styleMode < 0.5) {
+        float crackAmount = saturate(frame.ropeMatParams6.y);
+        float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+        float crackDepth = saturate(frame.ropeMatParams6.w);
+        float cMask = crackMask(in.uv, crackAmount, crackWidth);
+        float open = cMask * crackDepth * (0.012 + 0.028 * saturate(in.params.x));
+        displaced -= normalize(in.normal) * open;
     }
 
     o.worldPos = displaced;
@@ -775,6 +805,44 @@ static float3 wormShading(float3 baseColor, float3 n, float3 l, float3 v, float3
     return c;
 }
 
+static float3 chainShading(float3 baseColor, float3 n, float3 l, float3 v, float3 worldPos,
+                           float2 uv, constant FrameUniforms& frame) {
+    float nl = saturate(dot(n, l));
+    float nv = saturate(dot(n, v));
+    float3 h = normalize(l + v);
+    float nh = saturate(dot(n, h));
+    float vh = saturate(dot(v, h));
+
+    float3 metalColor = baseColor * 0.7 + float3(0.3);
+
+    float wrapDiff = saturate((nl + 0.15) / 1.15);
+    float3 diff = metalColor * (0.08 + 0.92 * wrapDiff);
+
+    float rough = 0.28;
+    float alpha = rough * rough;
+    float alpha2 = alpha * alpha;
+    float denom = nh * nh * (alpha2 - 1.0) + 1.0;
+    float D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+    float k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    float G1l = nl / (nl * (1.0 - k) + k + 1e-4);
+    float G1v = nv / (nv * (1.0 - k) + k + 1e-4);
+    float G = G1l * G1v;
+
+    float3 F0 = metalColor * 0.85 + float3(0.15);
+    float3 F = F0 + (1.0 - F0) * pow(1.0 - vh, 5.0);
+    float3 spec = D * G * F / max(4.0 * nl * nv, 0.001);
+    float3 specColor = spec * 2.5;
+
+    float fresnel = pow(1.0 - nv, 4.0);
+    float3 rim = metalColor * fresnel * 0.35;
+
+    float aniso = abs(sin(uv.y * 3.14159265 * 12.0));
+    float anisoSpec = pow(aniso, 4.0) * 0.15;
+    specColor *= (1.0 + anisoSpec);
+
+    return diff * 0.35 + specColor + rim;
+}
+
 fragment float4 ropeFragment(RopeOut in [[stage_in]],
                              constant FrameUniforms& frame [[buffer(1)]],
                              depth2d<float> shadowMap [[texture(2)]],
@@ -794,12 +862,27 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float taut = saturate(in.params.x);
     float pinch = saturate(in.params.y);
     float repel = in.params.z < 0.0 ? 0.0 : saturate(in.params.z);
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
+    bool isWorm = styleMode > 0.5 && styleMode < 1.5;
+    bool isChain = styleMode > 1.5;
 
     float microBump = frame.ropeMatParams2.z;
     float contactAOStr = frame.ropeMatParams2.w;
     float liftGlowStr = frame.ropeMatParams3.x;
     float bumpScale = max(frame.ropeMatParams3.y, 0.5);
+    bool seamEnabled = frame.ropeMatParams5.x > 0.5;
+    float seamWidth = clamp(frame.ropeMatParams5.y, 0.005, 0.3);
+    float seamDepth = saturate(frame.ropeMatParams5.z);
+    float seamDarkness = clamp(frame.ropeMatParams5.w, 0.0, 3.0);
+    float seamHighlight = saturate(frame.ropeMatParams7.x);
+    float seamCrackAmount = saturate(frame.ropeMatParams7.y);
+    float seamCrackScale = clamp(frame.ropeMatParams7.z, 2.0, 80.0);
+    bool seamRandomize = frame.ropeMatParams7.w > 0.5;
+    float seamPosition = saturate(frame.ropeMatParams8.x);
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    float crackAmount = saturate(frame.ropeMatParams6.y);
+    float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+    float crackDepth = saturate(frame.ropeMatParams6.w);
 
     float stretchDamp = 1.0 / (1.0 + taut * 2.5);
 
@@ -816,7 +899,10 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     tVec = normalize(tVec);
     float3 bVec = normalize(cross(n, tVec));
 
-    if (isWorm > 0.5) {
+    if (isChain) {
+        float chainBump = (n0 - 0.5) * 0.04;
+        n = normalize(n + tVec * chainBump);
+    } else if (isWorm) {
         float wormBumpAmp = 0.06;
         float wSegFreq = frame.wormParams3.w;
         float segBump = sin(in.uv.x * wSegFreq * 3.14159265 * 2.0);
@@ -833,6 +919,39 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
 
     float roughNoise = noiseTex.sample(noiseSampler, baseUV * 1.7 + 0.37).r;
     float rough = roughNoise + pinch * 0.06 + repel * 0.04;
+
+    float seamSeed = fract(sin(dot(in.color, float3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float seamCenter = seamRandomize ? seamSeed : seamPosition;
+    float seamV = abs(in.uv.y - seamCenter);
+    seamV = min(seamV, 1.0 - seamV);
+    float seamInner = 1.0 - smoothstep(0.0, seamWidth, seamV);
+    float seamOuter = 1.0 - smoothstep(seamWidth, seamWidth * 2.35, seamV);
+    float seamEdge = saturate(seamOuter - seamInner);
+    float seamNoiseA = noiseTex.sample(noiseSampler, float2(in.uv.x * seamCrackScale + seamSeed * 3.7, in.uv.y * 4.0 + seamSeed * 7.9)).r;
+    float seamNoiseB = noiseTex.sample(noiseSampler, float2(in.uv.x * seamCrackScale * 0.57 + 0.33 + seamSeed * 5.2, in.uv.y * 9.0 + 0.61 + seamSeed * 2.1)).r;
+    float seamNoise = seamNoiseA * 0.62 + seamNoiseB * 0.38;
+    float seamBreak = smoothstep(0.42, 0.94, seamNoise) * seamCrackAmount;
+    float seamMain = seamInner * (1.0 - seamBreak * 0.68);
+    float branchPulse = 1.0 - smoothstep(0.0, 0.26, abs(fract((in.uv.x + seamSeed * 0.37) * seamCrackScale * 0.22) - 0.5));
+    float seamBranchBand = 1.0 - smoothstep(seamWidth * 0.8, seamWidth * 3.8, seamV);
+    float seamBranches = seamBranchBand * branchPulse * seamCrackAmount * (0.4 + 0.6 * seamNoiseB);
+    if (seamEnabled && !isChain && !isWorm) {
+        float seamDarkenMask = seamMain + seamBranches * 0.45;
+        base *= 1.0 - seamDarkenMask * seamDepth * seamDarkness * 0.62;
+        rough += seamDarkenMask * seamDepth * 0.42;
+        n = normalize(n - bVec * (seamMain * 0.24 + seamBranches * 0.1) * seamDepth);
+    }
+
+    float crackInner = 0.0;
+    float crackEdge = 0.0;
+    if (cracksEnabled && !isChain && !isWorm) {
+        crackInner = crackMask(in.uv, crackAmount, crackWidth);
+        float crackOuter = crackMask(in.uv, crackAmount, min(0.48, crackWidth * 1.8));
+        crackEdge = saturate(crackOuter - crackInner);
+        base *= 1.0 - crackInner * crackDepth * 0.72;
+        rough += crackInner * crackDepth * 0.35;
+        n = normalize(n - bVec * crackInner * crackDepth * 0.18);
+    }
 
     float repelAO = smoothstep(0.0, 0.5, repel) * contactAOStr;
     float pinchAO = smoothstep(0.0, 0.3, pinch) * contactAOStr * 0.6;
@@ -870,7 +989,17 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     }
 
     float3 c;
-    if (isWorm > 0.5) {
+    if (isChain) {
+        c = chainShading(base, n, l, v, in.worldPos, in.uv, frame) * lightI;
+
+        float shadow = 1.0;
+        if (shadowMap.get_width() > 0) {
+            shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
+        }
+        shadow = pow(shadow, 2.0);
+        float ambient = frame.lightingParams.x + 0.08;
+        c *= mix(ambient, 1.0, shadow);
+    } else if (isWorm) {
         float time = frame.timeDrag.x;
         c = wormShading(base, n, l, v, in.worldPos, in.uv, time, frame) * lightI;
         c *= contactAO;
@@ -884,11 +1013,27 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
         c *= mix(ambient, 1.0, shadow);
     } else if (cartoonMode > 0.5) {
         c = celRopeShading(in.color, normalize(in.normal), l, v, cartoonLevels, frame.cartoonParams);
+        if (seamEnabled) {
+            c *= 1.0 - (seamMain + seamBranches * 0.35) * seamDepth * seamDarkness * 0.62;
+            c += float3(0.11, 0.11, 0.11) * (seamEdge + seamBranches * 0.25) * seamDepth * seamHighlight;
+        }
+        if (cracksEnabled) {
+            c *= 1.0 - crackInner * crackDepth * 0.5;
+            c += float3(0.10, 0.10, 0.10) * crackEdge * crackDepth;
+        }
     } else {
         c = rubberPBR(base, n, l, v, rough, taut, in.uv.y, cartoonMode, cartoonLevels,
                       frame.ropeMatParams, frame.ropeMatParams2,
                       frame.ropeMatParams3.z, frame.ropeMatParams3.w) * lightI;
         c *= contactAO;
+        if (seamEnabled) {
+            c += float3(0.11, 0.11, 0.11) * (seamEdge + seamBranches * 0.25) * seamDepth * seamHighlight;
+            c *= 1.0 - seamMain * seamDepth * seamDarkness * 0.18;
+        }
+        if (cracksEnabled) {
+            c += float3(0.10, 0.10, 0.10) * crackEdge * crackDepth;
+            c *= 1.0 - crackInner * crackDepth * 0.28;
+        }
 
         float liftGlow = saturate(in.worldPos.z / 0.35);
         c += float3(0.03, 0.04, 0.06) * liftGlow * liftGlowStr;
@@ -1005,12 +1150,12 @@ vertex ShadowOut ropeShadowVertex(RopeIn in [[stage_in]],
     float dragActive = frame.timeDrag.w;
     float u = in.uv.x;
     float pinch = in.params.y;
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
     float w = sin(u * 3.14159265);
     w = w * w;
 
     float3 displaced;
-    if (isWorm > 0.5) {
+    if (styleMode > 0.5 && styleMode < 1.5) {
         float crawlSpeed = frame.wormParams4.x;
         float crawlAmp = frame.wormParams4.y;
         float sideAmpP = frame.wormParams4.z;
@@ -1023,6 +1168,16 @@ vertex ShadowOut ropeShadowVertex(RopeIn in [[stage_in]],
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
         displaced = in.position;
+    }
+
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    if (cracksEnabled && styleMode < 0.5) {
+        float crackAmount = saturate(frame.ropeMatParams6.y);
+        float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+        float crackDepth = saturate(frame.ropeMatParams6.w);
+        float cMask = crackMask(in.uv, crackAmount, crackWidth);
+        float open = cMask * crackDepth * (0.012 + 0.028 * saturate(in.params.x));
+        displaced -= normalize(in.normal) * open;
     }
 
     o.position = frame.lightViewProj * float4(displaced, 1.0);
@@ -1393,11 +1548,11 @@ fragment float4 postFragment(VSOut in [[stage_in]],
                              texture2d<float> bloom [[texture(1)]],
                              depth2d<float> depthTex [[texture(2)]],
                              constant PostParams& post [[buffer(0)]]) {
-    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    constexpr sampler s(address::clamp_to_edge, filter::nearest);
     float2 uv = in.uv;
     float3 c = hdr.sample(s, uv).xyz;
     float3 b = bloom.sample(s, uv).xyz;
-    c += b * post.bloomStrength;
+    b = float3(0);
     float3 mapped = 1.0 - exp(-c * post.exposure);
     mapped = pow(saturate(mapped), float3(1.0 / 2.2));
     if (post.cartoonMode > 0.5) {

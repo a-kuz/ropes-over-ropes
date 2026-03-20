@@ -355,11 +355,13 @@ extension Renderer {
         let viewProjection = camera.viewProj(aspect: aspect)
 
         let sp = shaderParams
+        #if os(iOS)
         if let motion = motionManager.deviceMotion {
             let g = motion.gravity
             let raw = SIMD2<Float>(Float(g.x), Float(g.y))
             deviceTilt += (raw - deviceTilt) * 0.4
         }
+        #endif
         let tiltOffset = SIMD3<Float>(deviceTilt.x * sp.tiltStrength, deviceTilt.y * sp.tiltStrength, 0)
         let lightDir = simd_normalize(sp.lightDir + tiltOffset)
         let halfH = camera.orthoHalfHeight
@@ -394,7 +396,11 @@ extension Renderer {
             wormParams2: SIMD4<Float>(sp.wormSSS, sp.wormRoughness, sp.wormSpecular, sp.wormRimStrength),
             wormParams3: SIMD4<Float>(sp.wormEyeSize, sp.wormPulseSpeed, sp.wormPulseAmp, sp.wormSegFreq),
             wormParams4: SIMD4<Float>(sp.wormCrawlSpeed, sp.wormCrawlAmp, sp.wormSideAmp, 0),
-            ropeMatParams4: SIMD4<Float>(sp.ropeEnvReflect, sp.ropeEnvDebug ? 1 : 0, sp.ropeEnvSpread, Float(sp.shadowDebugMode))
+            ropeMatParams4: SIMD4<Float>(sp.ropeEnvReflect, sp.ropeEnvDebug ? 1 : 0, sp.ropeEnvSpread, Float(sp.shadowDebugMode)),
+            ropeMatParams5: SIMD4<Float>(sp.ropeSeamEnabled ? 1 : 0, sp.ropeSeamWidth, sp.ropeSeamDepth, sp.ropeSeamDarkness),
+            ropeMatParams6: SIMD4<Float>(sp.ropeCracksEnabled ? 1 : 0, sp.ropeCrackAmount, sp.ropeCrackWidth, sp.ropeCrackDepth),
+            ropeMatParams7: SIMD4<Float>(sp.ropeSeamHighlight, sp.ropeSeamCrackAmount, sp.ropeSeamCrackScale, sp.ropeSeamRandomize ? 1 : 0),
+            ropeMatParams8: SIMD4<Float>(sp.ropeSeamPosition, 0, 0, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
 

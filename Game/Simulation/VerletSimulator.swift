@@ -59,7 +59,6 @@ final class VerletSimulator {
         var suckFrame: Int = 0
         var suckSegLengths: ContiguousArray<Float> = []
         var suckOrigPositions: ContiguousArray<SIMD3<Float>> = []
-        static let fadeOutSpeed: Float = 45.0
     }
 
     // MARK: - Drag state
@@ -240,12 +239,17 @@ final class VerletSimulator {
     var currentTension: Float = 1.0
     private let tensionSpeed: Float = 0.5
     var frictionCoefficient: Float = 0.8
+    var frictionDampingRatio: Float = 0.3
+    var maxFrictionCap: Float = 0.25
+    var boardFrictionRatio: Float = 0.5
+    var collisionResponse: Float = 0.35
+    var zSeparationStrength: Float = 1.0
     var particleCount: Int = 6
     var bendCompliance: Float = 0
     var bendVelocityCoupling: Float = 0.44999998807907104
-    var twistStiffness: Float = 0.15
-    var twistDamping: Float = 0.4
-    var gravityTorqueStrength: Float = 0.8
+    var twistStiffness: Float = 0.15 { didSet { wakeUp() } }
+    var twistDamping: Float = 0.4 { didSet { wakeUp() } }
+    var gravityTorqueStrength: Float = 0.8 { didSet { wakeUp() } }
     var stretchThinning: Float = 0.5
     var squareCrossSection: Bool = false
 
@@ -260,7 +264,9 @@ final class VerletSimulator {
     var dragInfo: DragInfo?
 
     // MARK: - Idle sleep
-    private let idleTimeout: Float = 3.0
+    var fadeOutSpeed: Float = 45.0
+    var lowerAnimDuration: Float = 0.55
+    var idleTimeout: Float = 3.0
     private var idleTimer: Float = 0
     private(set) var isSleeping: Bool = false
 
@@ -437,7 +443,7 @@ final class VerletSimulator {
             let holeElev = holeSurfaceZ(hole)
             let holeBelow = SIMD3<Float>(holeXY.x, holeXY.y, holeElev - holeDepth)
 
-            let pullSpeed = Band.fadeOutSpeed * bands[i].segmentLength
+            let pullSpeed = fadeOutSpeed * bands[i].segmentLength
             bands[i].suckConsumed += pullSpeed * clampedDt
 
             let fromEnd = bands[i].suckFromEnd
@@ -634,7 +640,7 @@ final class VerletSimulator {
             }
 
             let holePos = holePosition3D(anim.targetHole)
-            let t = min(anim.timer / LowerAnimation.duration, 1.0)
+            let t = min(anim.timer / lowerAnimDuration, 1.0)
             let eased = 1.0 - (1.0 - t) * (1.0 - t)
             let pos = anim.startPos + (holePos - anim.startPos) * eased
             bands[bi].positions[idx] = pos
@@ -992,7 +998,7 @@ final class VerletSimulator {
 
         // Board friction: applied once per substep after all solving is done.
         // Uses true Verlet velocity (pos - previousPos) which is clean at this point.
-        let boardMu = frictionCoefficient * 0.5
+        let boardMu = frictionCoefficient * boardFrictionRatio
         if boardMu > 0 {
             for bi in active {
                 let n = bands[bi].positions.count
@@ -1178,8 +1184,9 @@ final class VerletSimulator {
                         guard abs(zDiff) < minDist + skin else { continue }
 
                         // Enforce Z separation, maintaining current ordering
+                        guard zSeparationStrength > 0 else { continue }
                         let sign: Float = zDiff >= 0 ? 1 : -1
-                        let correction = (minDist - abs(zDiff)) * 0.5 + 0.001
+                        let correction = ((minDist - abs(zDiff)) * 0.5 + 0.001) * zSeparationStrength
 
                         let aPinned0 = bands[bi].pinStart != nil && si == 0
                         let aPinned1 = bands[bi].pinEnd != nil && si == nA-2
@@ -1273,6 +1280,7 @@ final class VerletSimulator {
             let bPinned0 = bands[bj].pinStart != nil && sj == 0
             let bPinned1 = bands[bj].pinEnd != nil && sj == nB-2
 
+            guard zSeparationStrength > 0 else { continue }
             if t2 > 1e-6 && t2 < (1-1e-6) && u2 > 1e-6 && u2 < (1-1e-6) {
                 // Still crossing in 2D — check if Z ordering flipped
                 let zA = a0.z + (a1.z - a0.z) * t2
@@ -1281,7 +1289,7 @@ final class VerletSimulator {
                 guard aAboveNow != rec.aAboveB else { continue }
                 let zDiff = zA - zB
                 let needed = rec.aAboveB ? minDist : -minDist
-                let correction = (needed - zDiff) * 0.5
+                let correction = (needed - zDiff) * 0.5 * zSeparationStrength
                 if !aPinned0 { bands[bi].positions[si].z += correction * (1 - t2) }
                 if !aPinned1 { bands[bi].positions[si+1].z += correction * t2 }
                 if !bPinned0 { bands[bj].positions[sj].z -= correction * (1 - u2) }
@@ -1302,7 +1310,7 @@ final class VerletSimulator {
                 let zB = b0.z + (b1.z - b0.z) * pU
                 let zDiff = zA - zB
                 let needed = rec.aAboveB ? minDist : -minDist
-                let correction = (needed - zDiff) * 0.5
+                let correction = (needed - zDiff) * 0.5 * zSeparationStrength
                 if !aPinned0 { bands[bi].positions[si].z += correction * (1 - pT) }
                 if !aPinned1 { bands[bi].positions[si+1].z += correction * pT }
                 if !bPinned0 { bands[bj].positions[sj].z -= correction * (1 - pU) }
@@ -1463,7 +1471,7 @@ final class VerletSimulator {
         guard dist < minDist else { return false }
 
         let overlap = minDist - dist
-        let corr = normal * (overlap * 0.35)
+        let corr = normal * (overlap * collisionResponse)
 
         bands[bi].positions[si] += corr * (1 - s)
         bands[bi].positions[si + 1] += corr * s
@@ -1481,8 +1489,8 @@ final class VerletSimulator {
             let tangentLen = simd_length(tangent)
             let minSlide: Float = 0.0002
             if tangentLen > minSlide {
-                let maxFriction = mu * overlap * 0.25
-                let frictionMag = min(tangentLen * 0.3, maxFriction)
+                let maxFriction = mu * overlap * maxFrictionCap
+                let frictionMag = min(tangentLen * frictionDampingRatio, maxFriction)
                 let frictionDir = tangent / tangentLen
                 let velCorr = frictionDir * frictionMag
 

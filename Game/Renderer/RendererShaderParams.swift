@@ -48,6 +48,19 @@ struct RendererShaderParams {
     var ropeEnvDebug: Bool = false
     var ropeOpacity: Float = 1.0
     var ropeFlatNormals: Bool = false
+    var ropeCracksEnabled: Bool = false
+    var ropeCrackAmount: Float = 0.45
+    var ropeCrackWidth: Float = 0.16
+    var ropeCrackDepth: Float = 0.5
+    var ropeSeamEnabled: Bool = false
+    var ropeSeamWidth: Float = 0.06
+    var ropeSeamDepth: Float = 0.45
+    var ropeSeamDarkness: Float = 1.4
+    var ropeSeamHighlight: Float = 0.35
+    var ropeSeamCrackAmount: Float = 0.45
+    var ropeSeamCrackScale: Float = 18.0
+    var ropeSeamRandomize: Bool = true
+    var ropeSeamPosition: Float = 0.5
 
     // MARK: - Table / wood
     var tableStyle: Int = 0
@@ -68,6 +81,12 @@ struct RendererShaderParams {
     var capSegments: Int = 12
     var capRings: Int = 6
     var capDarken: Float = 0
+
+    // MARK: - Chain mode
+    var chainMode: Bool = false
+    var chainLinkLength: Float = 2.8
+    var chainLinkThickness: Float = 0.35
+    var chainLinkWidth: Float = 0.85
 
     // MARK: - Worm mode
     var wormMode: Bool = false

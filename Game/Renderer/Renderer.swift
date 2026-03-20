@@ -1,5 +1,7 @@
 import MetalKit
+#if os(iOS)
 import CoreMotion
+#endif
 import os.log
 
 @MainActor
@@ -168,7 +170,9 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     let frictionSound = RubberFrictionSound()
 
+    #if os(iOS)
     nonisolated(unsafe) let motionManager = CMMotionManager()
+    #endif
     var deviceTilt: SIMD2<Float> = .zero
 
     struct MeshStats: Equatable {
@@ -381,6 +385,48 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsBendVelocityCoupling: Float = 0.45 {
         didSet { simulator?.bendVelocityCoupling = physicsBendVelocityCoupling }
     }
+    var physicsFriction: Float = 0.8 {
+        didSet { simulator?.frictionCoefficient = physicsFriction }
+    }
+    var physicsCollisionResponse: Float = 0.35 {
+        didSet { simulator?.collisionResponse = physicsCollisionResponse }
+    }
+    var physicsZSeparation: Float = 1.0 {
+        didSet { simulator?.zSeparationStrength = physicsZSeparation }
+    }
+    var physicsFrictionDampingRatio: Float = 0.3 {
+        didSet { simulator?.frictionDampingRatio = physicsFrictionDampingRatio }
+    }
+    var physicsMaxFrictionCap: Float = 0.25 {
+        didSet { simulator?.maxFrictionCap = physicsMaxFrictionCap }
+    }
+    var physicsBoardFrictionRatio: Float = 0.5 {
+        didSet { simulator?.boardFrictionRatio = physicsBoardFrictionRatio }
+    }
+    var physicsTwistStiffness: Float = 0.15 {
+        didSet { simulator?.twistStiffness = physicsTwistStiffness }
+    }
+    var physicsTwistDamping: Float = 0.4 {
+        didSet { simulator?.twistDamping = physicsTwistDamping }
+    }
+    var physicsGravityTorque: Float = 0.8 {
+        didSet { simulator?.gravityTorqueStrength = physicsGravityTorque }
+    }
+    var physicsDragPickupDuration: Float = 0.12 {
+        didSet { simulator?.dragPickupDuration = physicsDragPickupDuration }
+    }
+    var physicsDragMinSubsteps: Int = 3 {
+        didSet { simulator?.dragMinSubsteps = physicsDragMinSubsteps }
+    }
+    var physicsFadeOutSpeed: Float = 45.0 {
+        didSet { simulator?.fadeOutSpeed = physicsFadeOutSpeed }
+    }
+    var physicsLowerAnimDuration: Float = 0.55 {
+        didSet { simulator?.lowerAnimDuration = physicsLowerAnimDuration }
+    }
+    var physicsIdleTimeout: Float = 3.0 {
+        didSet { simulator?.idleTimeout = physicsIdleTimeout }
+    }
     var useParticleBraid: Bool = false
     var physicsPaused: Bool = false
 
@@ -485,9 +531,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     private func startMotionUpdates() {
+        #if os(iOS)
         guard motionManager.isDeviceMotionAvailable else { return }
         motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
         motionManager.startDeviceMotionUpdates()
+        #endif
     }
 
     func loadLevelDefinition(_ def: LevelDefinition) {
@@ -598,6 +646,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.ropeTension = physicsRopeTension
         sim.bendCompliance = physicsBendCompliance
         sim.bendVelocityCoupling = physicsBendVelocityCoupling
+        sim.frictionCoefficient = physicsFriction
+        sim.collisionResponse = physicsCollisionResponse
+        sim.zSeparationStrength = physicsZSeparation
+        sim.frictionDampingRatio = physicsFrictionDampingRatio
+        sim.maxFrictionCap = physicsMaxFrictionCap
+        sim.boardFrictionRatio = physicsBoardFrictionRatio
+        sim.twistStiffness = physicsTwistStiffness
+        sim.twistDamping = physicsTwistDamping
+        sim.gravityTorqueStrength = physicsGravityTorque
+        sim.dragPickupDuration = physicsDragPickupDuration
+        sim.dragMinSubsteps = physicsDragMinSubsteps
+        sim.fadeOutSpeed = physicsFadeOutSpeed
+        sim.lowerAnimDuration = physicsLowerAnimDuration
+        sim.idleTimeout = physicsIdleTimeout
         sim.stretchThinning = stretchThinning
         sim.squareCrossSection = squareCrossSection
 
@@ -856,5 +918,12 @@ final class Renderer: NSObject, MTKViewDelegate {
                 A(type: "pin", ropeIndex: 0, endIndex: 1, holeIndex: 1),
             ],
             boards: nil, weights: nil, targets: nil, rails: nil, carts: nil, stations: nil)
+    }
+
+    func applyRopePalette(_ palette: [SIMD3<Float>]) {
+        guard !palette.isEmpty else { return }
+        for i in ropes.indices {
+            ropes[i].color = palette[i % palette.count]
+        }
     }
 }
