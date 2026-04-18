@@ -3,8 +3,8 @@ use web_time::Instant;
 use uzls_cross::celebration;
 use uzls_cross::hud::{self, render_mode_scale, HudAction, ProfilingSnapshot};
 use uzls_cross::renderer::frame_types::{
-    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, RopeVertex, TableSettings,
-    VisualSettings, WormSettings,
+    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, RopeVertex, SsrSettings,
+    TableSettings, VisualSettings, WormSettings,
 };
 use uzls_cross::renderer::rope_mesh;
 
@@ -346,6 +346,7 @@ impl App {
                 mut cartoon_settings,
                 mut cap_settings,
                 mut worm_settings,
+                mut ssr_settings,
                 mut exact_render_scale,
             ) = self
                 .renderer
@@ -359,6 +360,7 @@ impl App {
                         r.cartoon.clone(),
                         r.cap.clone(),
                         r.worm.clone(),
+                        r.ssr.clone(),
                         r.render_scale,
                     )
                 })
@@ -370,6 +372,7 @@ impl App {
                     CartoonSettings::default(),
                     CapSettings::default(),
                     WormSettings::default(),
+                    SsrSettings::default(),
                     render_mode_scale(self.render_mode),
                 ));
             let mut cel_mode_local = self.cel_mode;
@@ -399,6 +402,7 @@ impl App {
                     &mut cartoon_settings,
                     &mut cap_settings,
                     &mut worm_settings,
+                    &mut ssr_settings,
                     &mut exact_render_scale,
                     &mut sq_cross,
                     self.current_level_id,
@@ -414,6 +418,7 @@ impl App {
                 r.cartoon = cartoon_settings;
                 r.cap = cap_settings;
                 r.worm = worm_settings;
+                r.ssr = ssr_settings;
                 r.set_render_scale(exact_render_scale);
                 if let Some(level) = &self.level {
                     let hole_positions = level.hole_positions();
@@ -494,6 +499,8 @@ impl App {
                 mut table_settings,
                 mut cartoon_settings,
                 mut cap_settings,
+                mut worm_settings,
+                mut ssr_settings,
                 mut exact_render_scale,
             ) = self
                 .renderer
@@ -506,6 +513,8 @@ impl App {
                         r.table.clone(),
                         r.cartoon.clone(),
                         r.cap.clone(),
+                        r.worm.clone(),
+                        r.ssr.clone(),
                         r.render_scale,
                     )
                 })
@@ -516,6 +525,8 @@ impl App {
                     TableSettings::default(),
                     CartoonSettings::default(),
                     CapSettings::default(),
+                    WormSettings::default(),
+                    SsrSettings::default(),
                     render_mode_scale(self.render_mode),
                 ));
             let mut cel_mode_local = self.cel_mode;
@@ -544,8 +555,11 @@ impl App {
                     &mut table_settings,
                     &mut cartoon_settings,
                     &mut cap_settings,
+                    &mut worm_settings,
+                    &mut ssr_settings,
                     &mut exact_render_scale,
                     &mut sq_cross,
+                    self.current_level_id,
                     &lb_result,
                 );
             });
@@ -557,6 +571,7 @@ impl App {
                 r.table = table_settings;
                 r.cartoon = cartoon_settings;
                 r.cap = cap_settings;
+                r.ssr = ssr_settings;
                 r.set_render_scale(exact_render_scale);
                 if let Some(level) = &self.level {
                     let hole_positions = level.hole_positions();

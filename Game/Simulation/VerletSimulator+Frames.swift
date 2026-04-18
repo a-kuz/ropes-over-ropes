@@ -8,7 +8,7 @@ extension VerletSimulator {
         let n = positions.count
         guard n >= 2 else { return [] }
 
-        var frames = [MaterialFrame](repeating: MaterialFrame(tangent: .zero, d1: .zero, d2: .zero), count: n)
+        var frames = [MaterialFrame](repeating: MaterialFrame(d1: .zero, d2: .zero), count: n)
         let up = SIMD3<Float>(0, 0, 1)
 
         var tPrev = simd_normalize(positions[1] - positions[0])
@@ -59,7 +59,7 @@ extension VerletSimulator {
             let d1 = u * cosT + v * sinT
             let d2 = -u * sinT + v * cosT
 
-            frames[i] = MaterialFrame(tangent: tangent, d1: d1, d2: d2)
+            frames[i] = MaterialFrame(d1: d1, d2: d2)
 
             tPrev = tangent
             uPrev = u

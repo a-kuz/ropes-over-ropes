@@ -166,10 +166,12 @@ struct LevelDefinition: Codable {
     }
 
     struct Action: Codable {
-        let type: String       // "pin" or "drag"
+        let type: String       // "pin", "drag", or "swap"
         let ropeIndex: Int
         let endIndex: Int      // 0 = start, 1 = end
         let holeIndex: Int
+        var ropeIndex2: Int?   // for swap: second rope
+        var endIndex2: Int?    // for swap: second rope's end
     }
 
     struct WeightDef: Codable {
@@ -208,7 +210,42 @@ struct LevelDefinition: Codable {
         let cartIndex: Int
     }
 
-    /// "untangle" (default), "tension", or "rail"
+    /// Rescue mode: platform suspended by ropes
+    struct PlatformDef: Codable {
+        let width: Float
+        let height: Float
+        let mass: Float
+        /// Which rope indices are initially connected to which corner (0=TL,1=TR,2=BR,3=BL)
+        let attachments: [PlatformAttachment]
+        /// Corner indices of empty slots (multiple for multi-step rescue)
+        let emptySlots: [Int]
+        /// Rope indices of free (detached) ropes — one per empty slot
+        let freeRopeIndices: [Int]
+
+        // Legacy single-slot convenience init
+        init(width: Float, height: Float, mass: Float, attachments: [PlatformAttachment],
+             emptySlot: Int, freeRopeIndex: Int) {
+            self.width = width; self.height = height; self.mass = mass
+            self.attachments = attachments
+            self.emptySlots = [emptySlot]
+            self.freeRopeIndices = [freeRopeIndex]
+        }
+
+        init(width: Float, height: Float, mass: Float, attachments: [PlatformAttachment],
+             emptySlots: [Int], freeRopeIndices: [Int]) {
+            self.width = width; self.height = height; self.mass = mass
+            self.attachments = attachments
+            self.emptySlots = emptySlots
+            self.freeRopeIndices = freeRopeIndices
+        }
+    }
+
+    struct PlatformAttachment: Codable {
+        let ropeIndex: Int
+        let cornerIndex: Int  // 0=TL, 1=TR, 2=BR, 3=BL
+    }
+
+    /// "untangle" (default), "tension", "rail", "braid", or "rescue"
     let mode: String?
 
     let id: Int
@@ -225,7 +262,47 @@ struct LevelDefinition: Codable {
     let carts: [CartDef]?
     let stations: [StationDef]?
 
+    /// Braid mode: target bottom hole index for each rope (rope i should end at braidTargets[i])
+    let braidTargets: [Int]?
+    /// Braid mode: minimum total 2D crossing count for a valid braid
+    let braidMinCrossings: Int?
+
+    /// Explicit particle positions per rope (alternative to action-based initialization).
+    /// ropeParticles[ropeIndex] = array of Vec2 (with z) for each particle along the rope.
+    let ropeParticles: [[Vec2]]?
+
+    let platform: PlatformDef?
+
     var isTensionMode: Bool { mode == "tension" }
     var isRailMode: Bool { mode == "rail" }
+    var isBraidMode: Bool { mode == "braid" }
+    var isRescueMode: Bool { mode == "rescue" }
+
+    init(mode: String?, id: Int, holeRadius: Float, particlesPerRope: Int,
+         holes: [Vec2], ropes: [Rope], hooks: [Hook]?, actions: [Action]?,
+         boards: [Board]?, weights: [WeightDef]?, targets: [TargetDef]?,
+         rails: [RailDef]?, carts: [CartDef]?, stations: [StationDef]?,
+         braidTargets: [Int]? = nil, braidMinCrossings: Int? = nil,
+         ropeParticles: [[Vec2]]? = nil,
+         platform: PlatformDef? = nil) {
+        self.mode = mode
+        self.id = id
+        self.holeRadius = holeRadius
+        self.particlesPerRope = particlesPerRope
+        self.holes = holes
+        self.ropes = ropes
+        self.hooks = hooks
+        self.actions = actions
+        self.boards = boards
+        self.weights = weights
+        self.targets = targets
+        self.rails = rails
+        self.carts = carts
+        self.stations = stations
+        self.braidTargets = braidTargets
+        self.braidMinCrossings = braidMinCrossings
+        self.ropeParticles = ropeParticles
+        self.platform = platform
+    }
 }
 

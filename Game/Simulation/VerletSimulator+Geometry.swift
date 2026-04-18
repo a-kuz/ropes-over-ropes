@@ -5,23 +5,18 @@ extension VerletSimulator {
         guard holePositions.indices.contains(holeIndex) else { return .zero }
         let p = holePositions[holeIndex]
         let elev = holeElevations.indices.contains(holeIndex) ? holeElevations[holeIndex] : 0
+        if padMode {
+            // Rope endpoint sits on top of the pad surface
+            // padHeight must match rendered geometry: buildPad height=0.18 scaled by instance radius
+            let padHeight = holeRadius * holeRadiusScale * self.padHeight
+            return SIMD3<Float>(p.x, p.y, elev + padHeight)
+        }
         return SIMD3<Float>(p.x, p.y, elev - holeDepth)
     }
 
     func holeSurfaceZ(_ holeIndex: Int) -> Float {
         guard holeElevations.indices.contains(holeIndex) else { return 0 }
         return holeElevations[holeIndex]
-    }
-
-    @inline(__always)
-    func isInsideAnyHole(x: Float, y: Float) -> Bool {
-        let r2 = holeRadius * holeRadius
-        for hp in holePositions {
-            let dx = x - hp.x
-            let dy = y - hp.y
-            if dx * dx + dy * dy < r2 { return true }
-        }
-        return false
     }
 
     @inline(__always)

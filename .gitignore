@@ -94,7 +94,7 @@ Icon
 .Spotlight-V100
 .TemporaryItems
 .Trashes
-.VolumeIcon.icns
+.VolumeIcon.icnsв
 .com.apple.timemachine.donotpresent
 
 .AppleDB
@@ -109,7 +109,7 @@ Temporary Items
 *.ipynb
 
 # XcodeGen generated files
-UzlsFour.xcodeproj
+Strain.xcodeproj
 cross/target
 cross/node_modules
 cross/profile_*
@@ -133,3 +133,4 @@ cross/drag-after-1.png
 cross/drag-after-2.png
 cross/drag-before.png
 cross/playwright-headed-after-fix.png
+.aider*

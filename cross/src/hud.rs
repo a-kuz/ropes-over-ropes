@@ -1,7 +1,7 @@
 use crate::leaderboard::LeaderboardResult;
 use crate::renderer::frame_types::{
-    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, TableSettings,
-    VisualSettings, WormSettings,
+    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, SsrSettings,
+    TableSettings, VisualSettings, WormSettings,
 };
 use crate::renderer::gpu::GpuTimings;
 use serde_json::Value;
@@ -78,6 +78,7 @@ pub fn draw_hud(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     square_cross: &mut bool,
     current_level: usize,
@@ -767,6 +768,34 @@ pub fn draw_hud(
                                 );
                             });
 
+                        egui::CollapsingHeader::new("SSR")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.strength, 0.0..=1.0)
+                                        .text("Strength"),
+                                );
+                                let mut steps_f = ssr.max_steps as f32;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut steps_f, 4.0..=64.0)
+                                            .text("Max steps")
+                                            .step_by(1.0),
+                                    )
+                                    .changed()
+                                {
+                                    ssr.max_steps = steps_f.round().max(1.0) as u32;
+                                }
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.step_size, 0.001..=0.15)
+                                        .text("Step size"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.thickness, 0.005..=0.5)
+                                        .text("Thickness"),
+                                );
+                            });
+
                         egui::CollapsingHeader::new("Table")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -810,73 +839,141 @@ pub fn draw_hud(
                                 *lighting = LightingSettings::default();
                                 *table = TableSettings::default();
                                 *worm = WormSettings::default();
+                                *ssr = SsrSettings::default();
                                 visual.wave_energy = 0.0;
                             }
-                            let copy_id = egui::Id::new("copy_status");
-                            let copy_status: Option<f64> =
-                                ctx.data_mut(|d| d.get_temp(copy_id));
-                            let now = ctx.input(|i| i.time);
-                            let copy_active =
-                                copy_status.map_or(false, |t| now - t < 1.5);
-                            let copy_label = if copy_active {
-                                "\u{2705} Copied"
-                            } else {
-                                "\u{1F4CB} Copy settings"
-                            };
-                            if ui.button(copy_label).clicked() {
+                            let settings_editor_id = egui::Id::new("settings_editor_open");
+                            let editor_open: bool =
+                                ctx.data_mut(|d| d.get_temp(settings_editor_id).unwrap_or(false));
+                            if ui.button("Settings text\u{2026}").clicked() {
                                 let json = export_settings_to_json(
-                                    rope_mat,
-                                    lighting,
-                                    visual,
-                                    table,
-                                    cartoon,
-                                    cap,
-                                    worm,
-                                    *render_scale,
-                                    *cel_mode,
-                                    *square_cross,
-                                    current_level,
+                                    rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
+                                    *render_scale, *cel_mode, *square_cross, current_level,
                                 );
-                                write_clipboard(&json);
-                                ctx.data_mut(|d| d.insert_temp(copy_id, now));
-                            }
-                            let import_id = egui::Id::new("import_status");
-                            let status: Option<(bool, f64)> =
-                                ctx.data_mut(|d| d.get_temp(import_id));
-                            let now = ctx.input(|i| i.time);
-                            let active_status =
-                                status.and_then(
-                                    |(ok, t)| if now - t < 1.5 { Some(ok) } else { None },
-                                );
-                            let label = match active_status {
-                                Some(true) => "\u{2705} Imported",
-                                Some(false) => "\u{274C} Failed",
-                                None => "\u{1F4CB} Paste settings",
-                            };
-                            if ui.button(label).clicked() {
-                                let (ok, imported_level) = import_settings_from_clipboard(
-                                    rope_mat,
-                                    lighting,
-                                    visual,
-                                    table,
-                                    cartoon,
-                                    cap,
-                                    worm,
-                                    render_scale,
-                                    cel_mode,
-                                    square_cross,
-                                );
-                                if let Some(level) = imported_level {
-                                    action.go_to_level = Some(level);
-                                }
-                                ctx.data_mut(|d| d.insert_temp(import_id, (ok, now)));
+                                native_textarea::show(&json);
+                                ctx.data_mut(|d| d.insert_temp(settings_editor_id, true));
                             }
                         });
                     });
             });
+
+    // Settings text modal
+    let settings_editor_id = egui::Id::new("settings_editor_open");
+    let import_id = egui::Id::new("settings_import_status");
+    let editor_open: bool =
+        ctx.data_mut(|d| d.get_temp(settings_editor_id).unwrap_or(false));
+    if editor_open {
+        let now = ctx.input(|i| i.time);
+        let status: Option<(bool, f64)> = ctx.data_mut(|d| d.get_temp(import_id));
+        let active_status =
+            status.and_then(|(ok, t)| if now - t < 1.5 { Some(ok) } else { None });
+
+        let mut close = false;
+        egui::Window::new("Settings JSON")
+            .collapsible(false)
+            .resizable(false)
+            .default_width(480.0)
+            .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+            .show(ctx, |ui| {
+                ui.label("Edit JSON below, then press Load.");
+                ui.add_space(200.0); // space occupied by native textarea overlay
+                ui.separator();
+                ui.horizontal(|ui| {
+                    let load_label = match active_status {
+                        Some(true) => "\u{2705} Loaded",
+                        Some(false) => "\u{274C} Failed",
+                        None => "Load",
+                    };
+                        if ui.button(load_label).clicked() {
+                        let text = native_textarea::get_value();
+                        let ok = apply_settings_from_text(
+                            &text,
+                            rope_mat,
+                            lighting,
+                            visual,
+                            table,
+                            cartoon,
+                            cap,
+                            worm,
+                            ssr,
+                            render_scale,
+                            cel_mode,
+                            square_cross,
+                        );
+                        ctx.data_mut(|d| d.insert_temp(import_id, (ok, now)));
+                    }
+                    if ui.button("Close").clicked() {
+                        close = true;
+                        native_textarea::hide();
+                    }
+                });
+            });
+        if close {
+            ctx.data_mut(|d| d.insert_temp(settings_editor_id, false));
+        }
+    }
     }
 
     action
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+mod native_textarea {
+    pub fn show(_value: &str) {}
+    pub fn hide() {}
+    pub fn get_value() -> String { String::new() }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod native_textarea {
+    const ID: &str = "__settings_textarea__";
+
+    pub fn show(value: &str) {
+        let escaped = value.replace('\\', "\\\\").replace('`', "\\`");
+        let js = format!(
+            "(function() {{
+                var id = '{ID}';
+                var el = document.getElementById(id);
+                if (!el) {{
+                    el = document.createElement('textarea');
+                    el.id = id;
+                    el.style.cssText = 'position:fixed;left:50%;top:50%;transform:translate(-50%,-50%);' +
+                        'width:480px;height:220px;z-index:9999;font-family:monospace;font-size:12px;' +
+                        'background:#1e1e1e;color:#d4d4d4;border:1px solid #555;padding:8px;' +
+                        'resize:none;box-sizing:border-box;border-radius:4px;';
+                    document.body.appendChild(el);
+                }}
+                el.value = `{escaped}`;
+                el.style.display = 'block';
+                el.focus();
+                el.select();
+            }})()"
+        );
+        let _ = js_sys::eval(&js);
+    }
+
+    pub fn hide() {
+        let js = format!(
+            "(function() {{
+                var el = document.getElementById('{ID}');
+                if (el) el.style.display = 'none';
+            }})()"
+        );
+        let _ = js_sys::eval(&js);
+    }
+
+    pub fn get_value() -> String {
+        let js = format!(
+            "(function() {{
+                var el = document.getElementById('{ID}');
+                return el ? el.value : '';
+            }})()"
+        );
+        js_sys::eval(&js)
+            .ok()
+            .and_then(|v| v.as_string())
+            .unwrap_or_default()
+    }
 }
 
 fn read_clipboard() -> Option<String> {
@@ -886,7 +983,7 @@ fn read_clipboard() -> Option<String> {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        None
+        wasm_clipboard::take_pending()
     }
 }
 
@@ -899,7 +996,58 @@ fn write_clipboard(text: &str) {
     }
     #[cfg(target_arch = "wasm32")]
     {
-        let _ = text;
+        wasm_clipboard::write(text);
+    }
+}
+
+#[cfg(target_arch = "wasm32")]
+mod wasm_clipboard {
+    use std::cell::RefCell;
+
+    thread_local! {
+        pub static PENDING: RefCell<Option<String>> = const { RefCell::new(None) };
+    }
+
+    pub fn take_pending() -> Option<String> {
+        PENDING.with(|p| p.borrow_mut().take())
+    }
+
+    pub fn write(text: &str) {
+        // Use execCommand synchronously — must happen within user gesture
+        execcommand_copy(text);
+        // Also try modern API (fire-and-forget, updates clipboard in browsers that support it)
+        let Some(window) = web_sys::window() else { return };
+        let clipboard = window.navigator().clipboard();
+        let text_owned = text.to_string();
+        let promise = clipboard.write_text(&text_owned);
+        wasm_bindgen_futures::spawn_local(async move {
+            let _ = wasm_bindgen_futures::JsFuture::from(promise).await;
+        });
+    }
+
+    fn execcommand_copy(text: &str) {
+        // Escape text for JS string literal
+        let escaped = text.replace('\\', "\\\\").replace('`', "\\`");
+        let js = format!(
+            "(function(){{var t=document.createElement('textarea');\
+            t.style='position:fixed;opacity:0';t.value=`{escaped}`;\
+            document.body.appendChild(t);t.select();\
+            document.execCommand('copy');document.body.removeChild(t);}})()"
+        );
+        let _ = js_sys::eval(&js);
+    }
+
+    pub fn request_read() {
+        let Some(window) = web_sys::window() else { return };
+        let clipboard = window.navigator().clipboard();
+        let promise = clipboard.read_text();
+        wasm_bindgen_futures::spawn_local(async move {
+            if let Ok(val) = wasm_bindgen_futures::JsFuture::from(promise).await {
+                if let Some(s) = val.as_string() {
+                    PENDING.with(|p| *p.borrow_mut() = Some(s));
+                }
+            }
+        });
     }
 }
 
@@ -912,6 +1060,7 @@ fn export_settings_to_json(
     cartoon: &CartoonSettings,
     cap: &CapSettings,
     worm: &WormSettings,
+    ssr: &SsrSettings,
     render_scale: f32,
     cel_mode: bool,
     square_cross: bool,
@@ -999,8 +1148,37 @@ fn export_settings_to_json(
         "wormSegFreq": worm.params3[3],
         "renderScale": render_scale,
         "squareCrossSection": square_cross,
+        "ssrStrength": ssr.strength,
+        "ssrMaxSteps": ssr.max_steps,
+        "ssrStepSize": ssr.step_size,
+        "ssrThickness": ssr.thickness,
     })
     .to_string()
+}
+
+fn apply_settings_from_text(
+    text: &str,
+    rope_mat: &mut RopeMaterialSettings,
+    lighting: &mut LightingSettings,
+    visual: &mut VisualSettings,
+    table: &mut TableSettings,
+    cartoon: &mut CartoonSettings,
+    cap: &mut CapSettings,
+    worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
+    render_scale: &mut f32,
+    cel_mode: &mut bool,
+    square_cross: &mut bool,
+) -> bool {
+    let json: Value = match serde_json::from_str(text) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+    apply_settings_from_json(
+        &json, rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
+        render_scale, cel_mode, square_cross,
+    );
+    true
 }
 
 fn import_settings_from_clipboard(
@@ -1011,6 +1189,7 @@ fn import_settings_from_clipboard(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     cel_mode: &mut bool,
     square_cross: &mut bool,
@@ -1023,7 +1202,27 @@ fn import_settings_from_clipboard(
         Ok(v) => v,
         Err(_) => return (false, None),
     };
+    apply_settings_from_json(
+        &json, rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
+        render_scale, cel_mode, square_cross,
+    );
+    (true, None)
+}
 
+fn apply_settings_from_json(
+    json: &Value,
+    rope_mat: &mut RopeMaterialSettings,
+    lighting: &mut LightingSettings,
+    visual: &mut VisualSettings,
+    table: &mut TableSettings,
+    cartoon: &mut CartoonSettings,
+    cap: &mut CapSettings,
+    worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
+    render_scale: &mut f32,
+    cel_mode: &mut bool,
+    square_cross: &mut bool,
+) {
     let f = |key: &str| json.get(key).and_then(|v| v.as_f64()).map(|v| v as f32);
 
     if let Some(v) = f("ropeMatte") {
@@ -1235,11 +1434,8 @@ fn import_settings_from_clipboard(
     if let Some(v) = f("wormPulseAmp") { worm.params3[2] = v; }
     if let Some(v) = f("wormSegFreq") { worm.params3[3] = v; }
 
-    let imported_level = json
-        .get("currentLevel")
-        .and_then(|v| v.as_u64())
-        .map(|v| v as usize)
-        .filter(|&v| v >= 1);
-
-    (true, imported_level)
+    if let Some(v) = f("ssrStrength") { ssr.strength = v; }
+    if let Some(v) = f("ssrMaxSteps") { ssr.max_steps = v.round().max(1.0) as u32; }
+    if let Some(v) = f("ssrStepSize") { ssr.step_size = v; }
+    if let Some(v) = f("ssrThickness") { ssr.thickness = v; }
 }

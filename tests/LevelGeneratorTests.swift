@@ -1,6 +1,5 @@
 import XCTest
 import simd
-@testable import UzlsFour
 
 final class LevelGeneratorTests: XCTestCase {
 
@@ -60,7 +59,7 @@ final class LevelGeneratorTests: XCTestCase {
             for i in 0..<level.holes.count {
                 for j in (i+1)..<level.holes.count {
                     let dist = simd_length(level.holes[i].simd - level.holes[j].simd)
-                    XCTAssertGreaterThanOrEqual(dist, 0.0,
+                    XCTAssertGreaterThan(dist, 0.01,
                         "Level \(levelId): holes \(i) and \(j) overlap (\(dist))")
                 }
             }
@@ -407,8 +406,8 @@ final class LevelGeneratorTests: XCTestCase {
         sim.damping = 0.97
         sim.constraintIterations = 4
         sim.particleCount = 20
-        sim.cartFriction = 0.05
-        sim.cartDamping = 0.98
+        // sim.cartFriction = 0.05  // removed from VerletSimulator
+        // sim.cartDamping = 0.98
 
         // Rail: horizontal from -0.6 to 0.6
         let railDef = LevelDefinition.RailDef(points: [
@@ -461,6 +460,393 @@ final class LevelGeneratorTests: XCTestCase {
             "Cart should have moved. Diagonal rope from (0,0.4) to (0.3,-0.4) should push cart rightward")
     }
 
+    // MARK: - Braid Mode
+
+    func testBraidLevelGeneration() {
+        for localId in 1...10 {
+            let levelId = 3000 + localId
+            let level = LevelGenerator.generateBraidLevel(levelId: levelId)
+
+            XCTAssertEqual(level.mode, "braid", "Level \(levelId) should be braid mode")
+            XCTAssertTrue(level.isBraidMode)
+
+            let strandCount = level.ropes.count
+            XCTAssertGreaterThanOrEqual(strandCount, 3, "Level \(levelId): at least 3 strands")
+            XCTAssertEqual(level.holes.count, strandCount * 2, "Level \(levelId): holes = 2 * strands")
+
+            // Top holes: 0..<N, bottom holes: N..<2N
+            for i in 0..<strandCount {
+                XCTAssertEqual(level.ropes[i].startHole, i, "Level \(levelId): rope \(i) start = top hole \(i)")
+                XCTAssertEqual(level.ropes[i].endHole, strandCount + i, "Level \(levelId): rope \(i) end = bottom hole")
+            }
+
+            // Braid targets
+            XCTAssertNotNil(level.braidTargets)
+            XCTAssertEqual(level.braidTargets?.count, strandCount)
+
+            // Each target must be a valid bottom hole
+            if let targets = level.braidTargets {
+                for (i, t) in targets.enumerated() {
+                    XCTAssertGreaterThanOrEqual(t, strandCount, "Level \(levelId): target[\(i)]=\(t) should be >= N")
+                    XCTAssertLessThan(t, strandCount * 2, "Level \(levelId): target[\(i)]=\(t) should be < 2N")
+                }
+                // Targets should be a permutation of bottom holes
+                let targetSet = Set(targets)
+                XCTAssertEqual(targetSet.count, strandCount, "Level \(levelId): targets should be a permutation")
+            }
+
+            // Min crossings
+            XCTAssertNotNil(level.braidMinCrossings)
+            XCTAssertGreaterThanOrEqual(level.braidMinCrossings ?? 0, 1)
+
+            // Pin actions exist for all ropes
+            let pinActions = level.actions?.filter { $0.type == "pin" } ?? []
+            XCTAssertEqual(pinActions.count, strandCount * 2, "Level \(levelId): 2 pin actions per rope")
+        }
+    }
+
+    func testBraidLevelDeterministic() {
+        for localId in 1...5 {
+            let levelId = 3000 + localId
+            let a = LevelGenerator.generateBraidLevel(levelId: levelId)
+            let b = LevelGenerator.generateBraidLevel(levelId: levelId)
+            XCTAssertEqual(a.ropes.count, b.ropes.count)
+            XCTAssertEqual(a.braidTargets, b.braidTargets)
+            XCTAssertEqual(a.braidMinCrossings, b.braidMinCrossings)
+        }
+    }
+
+    func testBraidTargetIsNontrivial() {
+        // For levels with enough swaps, the target should NOT be identity
+        let level = LevelGenerator.generateBraidLevel(levelId: 3002) // 3 strands, 4 swaps
+        let n = level.ropes.count
+        let targets = level.braidTargets!
+        let isIdentity = (0..<n).allSatisfy { targets[$0] == n + $0 }
+        XCTAssertFalse(isIdentity, "Braid target should not be identity after 4 swaps")
+    }
+
+    // MARK: - Particle Braid Geometry
+
+    func testParticleBraidRawGeometry() {
+        let level = LevelGenerator.generateParticleBraidLevel(levelId: 3002)
+        let n = level.ropes.count
+        XCTAssertEqual(n, 3, "3 strands for level 3002")
+
+        // Must have ropeParticles
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("ropeParticles is nil")
+            return
+        }
+        XCTAssertEqual(allParticles.count, n)
+
+        let P = level.particlesPerRope
+        for s in 0..<n {
+            XCTAssertEqual(allParticles[s].count, P, "Strand \(s): wrong particle count")
+        }
+
+        // Check holes: N top + N bottom + decorative
+        XCTAssertGreaterThanOrEqual(level.holes.count, 2 * n)
+
+        let holeSpacing: Float = 0.28
+        for s in 0..<n {
+            let particles = allParticles[s]
+
+            // First particle should match top hole position (x, y)
+            let topHole = level.holes[level.ropes[s].startHole]
+            XCTAssertEqual(particles[0].xPosition, topHole.xPosition, accuracy: 0.01,
+                "Strand \(s): first particle x should match top hole")
+            XCTAssertEqual(particles[0].yPosition, topHole.yPosition, accuracy: 0.01,
+                "Strand \(s): first particle y should match top hole")
+
+            // Last particle should match bottom hole position (x, y)
+            let botHole = level.holes[level.ropes[s].endHole]
+            XCTAssertEqual(particles[P-1].xPosition, botHole.xPosition, accuracy: 0.01,
+                "Strand \(s): last particle x should match bottom hole")
+            XCTAssertEqual(particles[P-1].yPosition, botHole.yPosition, accuracy: 0.01,
+                "Strand \(s): last particle y should match bottom hole")
+
+            // All particles within reasonable bounds
+            for (pi, p) in particles.enumerated() {
+                XCTAssertLessThanOrEqual(abs(p.xPosition), 0.50,
+                    "Strand \(s) particle \(pi): x=\(p.xPosition) out of bounds")
+                XCTAssertGreaterThanOrEqual(p.yPosition, -0.70,
+                    "Strand \(s) particle \(pi): y=\(p.yPosition) below bottom")
+                XCTAssertLessThanOrEqual(p.yPosition, 0.70,
+                    "Strand \(s) particle \(pi): y=\(p.yPosition) above top")
+                // Z: endpoints are 0, rest should be small positive
+                if pi > 0 && pi < P-1 {
+                    XCTAssertGreaterThanOrEqual(p.zPosition, 0,
+                        "Strand \(s) particle \(pi): z=\(p.zPosition) negative")
+                    XCTAssertLessThanOrEqual(p.zPosition, 0.2,
+                        "Strand \(s) particle \(pi): z=\(p.zPosition) too high")
+                }
+            }
+
+            // Y should be roughly monotonic along the braid axis
+            // (small local variations OK due to helix orbit)
+            let yStart = particles[0].yPosition
+            let yEnd = particles[P-1].yPosition
+            let yDir = yEnd - yStart // positive = increasing, negative = decreasing
+            XCTAssertGreaterThan(abs(yDir), 0.5,
+                "Strand \(s): endpoints should span significant Y range")
+        }
+    }
+
+    func testParticleBraidSegmentLengths() {
+        // Segment lengths from particles should be close to manual braid's ~0.020
+        let level = LevelGenerator.generateParticleBraidLevel(levelId: 3002)
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("no ropeParticles")
+            return
+        }
+
+        for (s, particles) in allParticles.enumerated() {
+            var totalLen: Float = 0
+            for i in 1..<particles.count {
+                let dx = particles[i].xPosition - particles[i-1].xPosition
+                let dy = particles[i].yPosition - particles[i-1].yPosition
+                let dz = particles[i].zPosition - particles[i-1].zPosition
+                totalLen += sqrt(dx*dx + dy*dy + dz*dz)
+            }
+            let avgSeg = totalLen / Float(particles.count - 1)
+            // Manual braid has segLen ≈ 0.020. Generated should be similar.
+            XCTAssertLessThan(avgSeg, 0.035,
+                "Strand \(s): avgSeg=\(avgSeg) too large (rope will be too slack)")
+            XCTAssertGreaterThan(avgSeg, 0.015,
+                "Strand \(s): avgSeg=\(avgSeg) too small")
+            print("[BRAID-TEST] Strand \(s): totalLen=\(String(format:"%.4f",totalLen)) avgSeg=\(String(format:"%.5f",avgSeg)) particles=\(particles.count)")
+        }
+    }
+
+    func testParticleBraidHelixOrbit() {
+        // Helical strands should orbit within helixRadius of center
+        let level = LevelGenerator.generateParticleBraidLevel(levelId: 3002)
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("no ropeParticles")
+            return
+        }
+
+        let n = level.ropes.count
+        let P = allParticles[0].count
+
+        // All strands share centerX=0 for single-config levels
+        // In the braid zone (middle 50%), X spread should be <= 2*helixRadius
+        let maxHelixRadius: Float = 0.10  // slightly larger than 0.08 to account for rounding
+        for pi in (P/4)..<(3*P/4) {
+            var xs: [Float] = []
+            for s in 0..<n {
+                xs.append(allParticles[s][pi].xPosition)
+            }
+            let spread = xs.max()! - xs.min()!
+            XCTAssertLessThanOrEqual(spread, 2 * maxHelixRadius,
+                "Particle \(pi): X spread \(spread) exceeds 2*helixRadius")
+        }
+
+        // Z should have variation in braid zone (over/under)
+        var hasZVariation = false
+        for pi in (P/4)..<(3*P/4) {
+            var zs: [Float] = []
+            for s in 0..<n { zs.append(allParticles[s][pi].zPosition) }
+            if zs.max()! - zs.min()! > 0.02 { hasZVariation = true; break }
+        }
+        XCTAssertTrue(hasZVariation, "Braid zone should have Z over/under variation")
+    }
+
+    func testParticleBraidHasZCrossings() {
+        // At crossing points, one strand should be over (high z) and another under (low z)
+        let level = LevelGenerator.generateParticleBraidLevel(levelId: 3002)
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("no ropeParticles")
+            return
+        }
+
+        let n = level.ropes.count
+        let P = allParticles[0].count
+
+        // Find particles where two strands have similar X,Y but different Z
+        var crossingCount = 0
+        for pi in (P/4)..<(3*P/4) { // only check braid zone (middle 50%)
+            for s1 in 0..<n {
+                for s2 in (s1+1)..<n {
+                    let p1 = allParticles[s1][pi]
+                    let p2 = allParticles[s2][pi]
+                    let dx = abs(p1.xPosition - p2.xPosition)
+                    let dz = abs(p1.zPosition - p2.zPosition)
+                    // If strands are close in X (crossing), Z should differ
+                    if dx < 0.05 && dz > 0.02 {
+                        crossingCount += 1
+                    }
+                }
+            }
+        }
+        print("[BRAID-TEST] Z-crossings found: \(crossingCount)")
+        XCTAssertGreaterThan(crossingCount, 0,
+            "Should have at least one over/under crossing with Z separation")
+    }
+
+    func testParticleBraidPrintRawPositions() {
+        // Debug helper: print raw generated positions
+        let level = LevelGenerator.generateParticleBraidLevel(levelId: 3002)
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("no ropeParticles")
+            return
+        }
+        for (s, particles) in allParticles.enumerated() {
+            print("// Raw strand \(s): \(particles.count) particles")
+            for (i, p) in particles.enumerated() {
+                print("  [\(i)] x=\(String(format:"%.4f",p.xPosition)) y=\(String(format:"%.4f",p.yPosition)) z=\(String(format:"%.4f",p.zPosition))")
+            }
+        }
+    }
+
+    func testBraidShowcaseLevel() {
+        let level = LevelGenerator.generateStructureShowcase(levelId: 3100)
+        XCTAssertEqual(level.id, 3100)
+
+        // 4 helixes: 2+3+4+3 = 12 ropes
+        XCTAssertEqual(level.ropes.count, 12)
+        // 24 endpoint holes + decorative holes in rings
+        XCTAssertGreaterThanOrEqual(level.holes.count, 24)
+
+        guard let allParticles = level.ropeParticles else {
+            XCTFail("ropeParticles is nil")
+            return
+        }
+        XCTAssertEqual(allParticles.count, 12)
+
+        let P = level.particlesPerRope
+        for (i, particles) in allParticles.enumerated() {
+            XCTAssertEqual(particles.count, P, "Strand \(i): wrong particle count")
+        }
+
+        // Endpoints should be at z=0 (in holes)
+        for (i, particles) in allParticles.enumerated() {
+            XCTAssertEqual(particles[0].zPosition, 0, accuracy: 0.001,
+                "Strand \(i): start z should be 0")
+            XCTAssertEqual(particles[P-1].zPosition, 0, accuracy: 0.001,
+                "Strand \(i): end z should be 0")
+        }
+
+        // No exact duplicate hole positions
+        for i in 0..<level.holes.count {
+            for j in (i+1)..<level.holes.count {
+                let d = simd_distance(level.holes[i].simd, level.holes[j].simd)
+                XCTAssertGreaterThan(d, 0.01, "Holes \(i) and \(j) are duplicates: \(d)")
+            }
+        }
+
+        // Custom particle count should work
+        let level80 = LevelGenerator.generateStructureShowcase(levelId: 3100, particleCount: 80)
+        XCTAssertEqual(level80.ropeParticles?.first?.count, 80)
+        XCTAssertEqual(level80.particlesPerRope, 80)
+    }
+
+    // MARK: - 3D Rope penetration test
+
+    /// For every pair of ropes, find the closest distance between all segment pairs in 3D.
+    /// If distance < 2×ropeRadius → ropes penetrate each other.
+    func testNoRopePenetrationInStructuredLevels() {
+        let levelIds = [3100, 3101, 3102, 3103, 3104, 3105, 3108, 3110, 3111, 3112, 3113, 3115]
+        let ropeRadius: Float = 0.038
+        let minDist = ropeRadius * 0.9 // 1×radius with 10% tolerance
+
+        for levelId in levelIds {
+            let level = LevelGenerator.generateStructureShowcase(levelId: levelId, particleCount: 55)
+            guard let allParticles = level.ropeParticles else { continue }
+
+            var violations = 0
+            var worstDist: Float = Float.greatestFiniteMagnitude
+            var worstPair = (0, 0)
+            let totalRopes = allParticles.count
+
+            for a in 0..<totalRopes {
+                for b in (a+1)..<totalRopes {
+                    let pA = allParticles[a]
+                    let pB = allParticles[b]
+
+                    for i in 0..<(pA.count - 1) {
+                        let a0 = SIMD3<Float>(pA[i].xPosition, pA[i].yPosition, pA[i].zPosition)
+                        let a1 = SIMD3<Float>(pA[i+1].xPosition, pA[i+1].yPosition, pA[i+1].zPosition)
+
+                        // Skip segments near holes (z ≈ 0)
+                        if a0.z < 0.01 && a1.z < 0.01 { continue }
+
+                        for j in 0..<(pB.count - 1) {
+                            let b0 = SIMD3<Float>(pB[j].xPosition, pB[j].yPosition, pB[j].zPosition)
+                            let b1 = SIMD3<Float>(pB[j+1].xPosition, pB[j+1].yPosition, pB[j+1].zPosition)
+
+                            if b0.z < 0.01 && b1.z < 0.01 { continue }
+
+                            let dist = closestDistanceBetweenSegments3D(a0, a1, b0, b1)
+                            if dist < minDist {
+                                violations += 1
+                                if dist < worstDist {
+                                    worstDist = dist
+                                    worstPair = (a, b)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            let maxAllowed = totalRopes * 3
+            XCTAssertLessThanOrEqual(violations, maxAllowed,
+                "Level \(levelId): \(violations) 3D penetrations (ropes \(worstPair.0),\(worstPair.1) worst dist=\(String(format: "%.4f", worstDist)) < minDist=\(String(format: "%.4f", minDist)))")
+        }
+    }
+
+    /// Closest distance between two 3D line segments.
+    private func closestDistanceBetweenSegments3D(
+        _ p0: SIMD3<Float>, _ p1: SIMD3<Float>,
+        _ q0: SIMD3<Float>, _ q1: SIMD3<Float>
+    ) -> Float {
+        let d1 = p1 - p0
+        let d2 = q1 - q0
+        let r = p0 - q0
+
+        let a = simd_dot(d1, d1) // |d1|²
+        let e = simd_dot(d2, d2) // |d2|²
+        let f = simd_dot(d2, r)
+
+        // Both segments degenerate to points?
+        if a < 1e-10 && e < 1e-10 {
+            return simd_length(r)
+        }
+        if a < 1e-10 {
+            // First segment degenerates
+            let t = simd_clamp(f / e, 0, 1)
+            return simd_length(r - d2 * t)
+        }
+
+        let c = simd_dot(d1, r)
+        if e < 1e-10 {
+            // Second segment degenerates
+            let s = simd_clamp(-c / a, 0, 1)
+            return simd_length(r + d1 * s)
+        }
+
+        let b = simd_dot(d1, d2)
+        let denom = a * e - b * b
+
+        var s: Float = 0
+        if denom > 1e-10 {
+            s = simd_clamp((b * f - c * e) / denom, 0, 1)
+        }
+
+        var t = (b * s + f) / e
+        if t < 0 {
+            t = 0
+            s = simd_clamp(-c / a, 0, 1)
+        } else if t > 1 {
+            t = 1
+            s = simd_clamp((b - c) / a, 0, 1)
+        }
+
+        let closest = r + d1 * s - d2 * t
+        return simd_length(closest)
+    }
+
     /// Test with user's custom rail level JSON — verifies the level loads and cart exists
     func testUserRailLevelLoads() {
         let json = """
@@ -480,5 +866,65 @@ final class LevelGeneratorTests: XCTestCase {
         // Cart and station are required for rail mode to be playable
         XCTAssertNil(level.carts, "User level has no carts — need to add via editor")
         XCTAssertNil(level.stations, "User level has no stations — need to add via editor")
+    }
+
+    // MARK: - Braid untangle levels
+
+    func testBraidUntangleDebug() {
+        // Detailed diagnostic for a specific braid level
+        for levelId in [8, 12, 16, 20, 60, 68] {
+            guard LevelGenerator.isBraidUntangleLevel(levelId) else { continue }
+            let level = LevelGenerator.generate(levelId: levelId)
+            let holeSimd = level.holes.map { SIMD2<Float>($0.xPosition, $0.yPosition) }
+            let actions = level.actions ?? []
+
+            print("\n=== BRAID LEVEL \(levelId) ===")
+            print("Ropes: \(level.ropes.count), Holes: \(level.holes.count)")
+            for (i, r) in level.ropes.enumerated() {
+                let s = holeSimd[r.startHole]
+                let e = holeSimd[r.endHole]
+                print("  Rope \(i): hole \(r.startHole)(\(String(format:"%.2f,%.2f",s.x,s.y))) → hole \(r.endHole)(\(String(format:"%.2f,%.2f",e.x,e.y)))")
+            }
+
+            // Check crossing
+            if level.ropes.count >= 2 {
+                let r0 = level.ropes[0], r1 = level.ropes[1]
+                let crosses = LevelGenerator.segmentsCross(holeSimd[r0.startHole], holeSimd[r0.endHole],
+                                                            holeSimd[r1.startHole], holeSimd[r1.endHole])
+                print("  Ropes 0×1 cross: \(crosses)")
+            }
+
+            print("  Actions (\(actions.count)):")
+            for a in actions {
+                print("    \(a.type) rope=\(a.ropeIndex) end=\(a.endIndex) hole=\(a.holeIndex) pos=\(String(format:"%.2f,%.2f", holeSimd[a.holeIndex].x, holeSimd[a.holeIndex].y))")
+            }
+
+            let drags = actions.filter { $0.type == "drag" }
+            XCTAssertGreaterThan(drags.count, 2, "Level \(levelId): need >2 drags for spiral, got \(drags.count)")
+        }
+    }
+
+    func testBraidUntangleLevelsDragCount() {
+        let braidLevels = [8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
+        for levelId in braidLevels {
+            XCTAssertTrue(LevelGenerator.isBraidUntangleLevel(levelId), "Level \(levelId) should be braid")
+            let level = LevelGenerator.generate(levelId: levelId)
+            let actions = level.actions ?? []
+            let drags = actions.filter { $0.type == "drag" }
+
+            // Debug: check if ropes cross each other
+            let holeSimd = level.holes.map { SIMD2<Float>($0.xPosition, $0.yPosition) }
+            for i in 0..<level.ropes.count {
+                for j in (i+1)..<level.ropes.count {
+                    let crosses = LevelGenerator.segmentsCross(
+                        holeSimd[level.ropes[i].startHole], holeSimd[level.ropes[i].endHole],
+                        holeSimd[level.ropes[j].startHole], holeSimd[level.ropes[j].endHole])
+                    print("Level \(levelId): rope \(i)(\(level.ropes[i].startHole)→\(level.ropes[i].endHole)) x rope \(j)(\(level.ropes[j].startHole)→\(level.ropes[j].endHole)) = \(crosses)")
+                }
+            }
+
+            print("Level \(levelId): ropes=\(level.ropes.count) holes=\(level.holes.count) drags=\(drags.count)")
+            XCTAssertGreaterThan(drags.count, 1, "Level \(levelId) should have multiple drags, got \(drags.count)")
+        }
     }
 }

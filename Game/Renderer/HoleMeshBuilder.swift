@@ -155,6 +155,128 @@ enum HoleMeshBuilder {
         return HoleMesh(vertices: vertices, indices: indices)
     }
 
+    /// Magnetic pad — raised disc instead of a hole (trypophobia-friendly mode).
+    /// Geometry: base ring on the board, cylindrical wall going UP, flat top cap.
+    static func buildPad(segments: Int = 48, radius: Float = 1.0, height: Float = 0.18, bevelRadius: Float = 0.06) -> HoleMesh {
+        let segCount = max(12, min(128, segments))
+        let r = max(0.05, radius)
+        let h = max(0.02, height)
+        let bevel = min(bevelRadius, min(r * 0.3, h * 0.5))
+        let bevelSteps = 6
+
+        var vertices: [HoleVertex] = []
+        var indices: [UInt16] = []
+
+        func ringPoint(rad: Float, angle: Float, z: Float) -> SIMD3<Float> {
+            SIMD3<Float>(cos(angle) * rad, sin(angle) * rad, z)
+        }
+
+        // 1. Base ring (annulus at z=0, from outerR=radius down to wallR)
+        let wallR = r * 0.85
+        for segIndex in 0..<segCount {
+            let a0 = (Float(segIndex) / Float(segCount)) * (Float.pi * 2)
+            let a1 = (Float(segIndex + 1) / Float(segCount)) * (Float.pi * 2)
+
+            let o0 = ringPoint(rad: r, angle: a0, z: 0)
+            let o1 = ringPoint(rad: r, angle: a1, z: 0)
+            let i0 = ringPoint(rad: wallR, angle: a0, z: 0)
+            let i1 = ringPoint(rad: wallR, angle: a1, z: 0)
+
+            let base = UInt16(vertices.count)
+            vertices.append(HoleVertex(position: o0, normal: SIMD3<Float>(0, 0, 1)))
+            vertices.append(HoleVertex(position: o1, normal: SIMD3<Float>(0, 0, 1)))
+            vertices.append(HoleVertex(position: i0, normal: SIMD3<Float>(0, 0, 1)))
+            vertices.append(HoleVertex(position: i1, normal: SIMD3<Float>(0, 0, 1)))
+
+            indices.append(contentsOf: [base, base + 2, base + 1, base + 1, base + 2, base + 3])
+        }
+
+        // 2. Cylindrical wall (z=0 to z=h-bevel)
+        let wallTop = h - bevel
+        for segIndex in 0..<segCount {
+            let a0 = (Float(segIndex) / Float(segCount)) * (Float.pi * 2)
+            let a1 = (Float(segIndex + 1) / Float(segCount)) * (Float.pi * 2)
+
+            let bot0 = ringPoint(rad: wallR, angle: a0, z: 0)
+            let bot1 = ringPoint(rad: wallR, angle: a1, z: 0)
+            let top0 = ringPoint(rad: wallR, angle: a0, z: wallTop)
+            let top1 = ringPoint(rad: wallR, angle: a1, z: wallTop)
+
+            let n0 = simd_normalize(SIMD3<Float>(cos(a0), sin(a0), 0))
+            let n1 = simd_normalize(SIMD3<Float>(cos(a1), sin(a1), 0))
+
+            let base = UInt16(vertices.count)
+            vertices.append(HoleVertex(position: bot0, normal: n0))
+            vertices.append(HoleVertex(position: top0, normal: n0))
+            vertices.append(HoleVertex(position: bot1, normal: n1))
+            vertices.append(HoleVertex(position: top1, normal: n1))
+
+            indices.append(contentsOf: [base, base + 1, base + 2, base + 2, base + 1, base + 3])
+        }
+
+        // 3. Bevel (rounded edge from wall to top)
+        for step in 0..<bevelSteps {
+            let t0 = Float(step) / Float(bevelSteps)
+            let t1 = Float(step + 1) / Float(bevelSteps)
+            let angle0 = t0 * (Float.pi * 0.5)
+            let angle1 = t1 * (Float.pi * 0.5)
+
+            let r0 = wallR - bevel + bevel * cos(angle0)
+            let r1 = wallR - bevel + bevel * cos(angle1)
+            let z0 = wallTop + bevel * sin(angle0)
+            let z1 = wallTop + bevel * sin(angle1)
+
+            let nz0 = sin(angle0)
+            let nz1 = sin(angle1)
+            let nr0 = cos(angle0)
+            let nr1 = cos(angle1)
+
+            for segIndex in 0..<segCount {
+                let a0 = (Float(segIndex) / Float(segCount)) * (Float.pi * 2)
+                let a1 = (Float(segIndex + 1) / Float(segCount)) * (Float.pi * 2)
+
+                let p00 = ringPoint(rad: r0, angle: a0, z: z0)
+                let p01 = ringPoint(rad: r0, angle: a1, z: z0)
+                let p10 = ringPoint(rad: r1, angle: a0, z: z1)
+                let p11 = ringPoint(rad: r1, angle: a1, z: z1)
+
+                let n00 = simd_normalize(SIMD3<Float>(cos(a0) * nr0, sin(a0) * nr0, nz0))
+                let n01 = simd_normalize(SIMD3<Float>(cos(a1) * nr0, sin(a1) * nr0, nz0))
+                let n10 = simd_normalize(SIMD3<Float>(cos(a0) * nr1, sin(a0) * nr1, nz1))
+                let n11 = simd_normalize(SIMD3<Float>(cos(a1) * nr1, sin(a1) * nr1, nz1))
+
+                let base = UInt16(vertices.count)
+                vertices.append(HoleVertex(position: p00, normal: n00))
+                vertices.append(HoleVertex(position: p10, normal: n10))
+                vertices.append(HoleVertex(position: p01, normal: n01))
+                vertices.append(HoleVertex(position: p11, normal: n11))
+
+                indices.append(contentsOf: [base, base + 1, base + 2, base + 2, base + 1, base + 3])
+            }
+        }
+
+        // 4. Top cap (flat disc at z=h, radius = wallR - bevel)
+        let topR = wallR - bevel
+        let topZ = h
+        let centerIdx = UInt16(vertices.count)
+        vertices.append(HoleVertex(position: SIMD3<Float>(0, 0, topZ), normal: SIMD3<Float>(0, 0, 1)))
+        for segIndex in 0..<segCount {
+            let a0 = (Float(segIndex) / Float(segCount)) * (Float.pi * 2)
+            let a1 = (Float(segIndex + 1) / Float(segCount)) * (Float.pi * 2)
+
+            let p0 = ringPoint(rad: topR, angle: a0, z: topZ)
+            let p1 = ringPoint(rad: topR, angle: a1, z: topZ)
+
+            let base = UInt16(vertices.count)
+            vertices.append(HoleVertex(position: p0, normal: SIMD3<Float>(0, 0, 1)))
+            vertices.append(HoleVertex(position: p1, normal: SIMD3<Float>(0, 0, 1)))
+
+            indices.append(contentsOf: [centerIdx, base, base + 1])
+        }
+
+        return HoleMesh(vertices: vertices, indices: indices)
+    }
+
     static func buildSquare(innerHalf: Float = 0.76, outerHalf: Float = 1.0, depth: Float = 1.25, ringHeight: Float = 0.1) -> HoleMesh {
         let ih = max(0.05, innerHalf)
         let oh = max(ih + 0.01, outerHalf)

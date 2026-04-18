@@ -27,6 +27,7 @@ struct FrameUniforms {
     wormParams3: vec4<f32>,
     wormParams4: vec4<f32>,
     ropeMatParams4: vec4<f32>,
+    ssrParams: vec4<f32>,
 };
 
 struct HoleInstance {
@@ -591,11 +592,9 @@ fn otavioWoodTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
 
 fn woodTexture(worldXY: vec2<f32>, seed: f32) -> vec3<f32> {
     let style = fract(seed * 0.3819);
-    if (style < 0.20) {
+    if (style < 0.25) {
         return woodSolidTexture(worldXY, seed);
-    } else if (style < 0.40) {
-        return plankWoodTexture(worldXY, seed);
-    } else if (style < 0.60) {
+    } else if (style < 0.50) {
         return gradientTexture(worldXY, seed);
     } else {
         return otavioWoodTexture(worldXY, seed);
@@ -666,7 +665,7 @@ fn rubberPBR(baseColor: vec3<f32>, n: vec3<f32>, l: vec3<f32>, v: vec3<f32>,
     let nh = clamp(dot(n, h), 0.0, 1.0);
     let vh = clamp(dot(v, h), 0.0, 1.0);
 
-    let radial = abs(vCoord - 0.5) * 2.0;
+    let radial = 1.0 - nv;
     let coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount);
     let edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount);
     var albedo = baseColor * coreDarken + vec3<f32>(edgeBrighten);
@@ -1574,6 +1573,92 @@ fn fireworks(uv_raw: vec2<f32>, time: f32, victoryTime: f32, aspect: f32) -> vec
     return c * appear * fadeOut;
 }
 
+fn ssrReconstructWorld(uv: vec2<f32>, depth: f32) -> vec4<f32> {
+    let ndcX = uv.x * 2.0 - 1.0;
+    let ndcY = 1.0 - uv.y * 2.0;
+    let ndc = vec4<f32>(ndcX, ndcY, depth, 1.0);
+    var w4 = frame.invViewProj * ndc;
+    w4 /= w4.w;
+    return w4;
+}
+
+fn estimateNormal(uv: vec2<f32>, worldPos: vec3<f32>, depth: f32) -> vec3<f32> {
+    let dtex = textureDimensions(depth_texture);
+    let px = vec2<f32>(1.5 / f32(dtex.x), 0.0);
+    let py = vec2<f32>(0.0, 1.5 / f32(dtex.y));
+
+    let dR = textureSample(depth_texture, depth_sampler, uv + px);
+    let dL = textureSample(depth_texture, depth_sampler, uv - px);
+    let dU = textureSample(depth_texture, depth_sampler, uv - py);
+    let dD = textureSample(depth_texture, depth_sampler, uv + py);
+
+    var dPdx: vec3<f32>;
+    var dPdy: vec3<f32>;
+
+    let useR = (dR < 0.9999) && (abs(dR - depth) <= abs(dL - depth));
+    let useU = (dU < 0.9999) && (abs(dU - depth) <= abs(dD - depth));
+
+    if (useR) {
+        dPdx = ssrReconstructWorld(uv + px, dR).xyz - worldPos;
+    } else if (dL < 0.9999) {
+        dPdx = worldPos - ssrReconstructWorld(uv - px, dL).xyz;
+    } else {
+        dPdx = vec3<f32>(1.0, 0.0, 0.0);
+    }
+
+    if (useU) {
+        dPdy = ssrReconstructWorld(uv - py, dU).xyz - worldPos;
+    } else if (dD < 0.9999) {
+        dPdy = worldPos - ssrReconstructWorld(uv + py, dD).xyz;
+    } else {
+        dPdy = vec3<f32>(0.0, 1.0, 0.0);
+    }
+
+    let n = normalize(cross(dPdx, dPdy));
+    let camDir = normalize(frame.cameraPos.xyz - worldPos);
+    return select(-n, n, dot(n, camDir) > 0.0);
+}
+
+fn computeSSR(uv: vec2<f32>, worldPos: vec3<f32>, n: vec3<f32>) -> vec3<f32> {
+    let camPos = frame.cameraPos.xyz;
+    let viewDir = normalize(worldPos - camPos);
+    let reflDir = reflect(viewDir, n);
+
+    let maxSteps = i32(max(frame.ssrParams.y, 1.0));
+    let stepSize = frame.ssrParams.z;
+    let thickness = frame.ssrParams.w;
+
+    var rayPos = worldPos + reflDir * stepSize;
+
+    for (var i = 0; i < 64; i++) {
+        if (i >= maxSteps) { break; }
+
+        let clip = frame.viewProj * vec4<f32>(rayPos, 1.0);
+        if (clip.w < 0.0001) { break; }
+        let ndcXY = clip.xy / clip.w;
+        let sampleUV = ndcXY * vec2<f32>(0.5, -0.5) + vec2<f32>(0.5);
+
+        if (sampleUV.x < 0.01 || sampleUV.x > 0.99 ||
+            sampleUV.y < 0.01 || sampleUV.y > 0.99) { break; }
+
+        let sceneDepth = textureSample(depth_texture, depth_sampler, sampleUV);
+        let rayDepth = clip.z / clip.w;
+
+        if (sceneDepth < 0.9999 && rayDepth > sceneDepth && (rayDepth - sceneDepth) < thickness) {
+            let hitColor = textureSample(hdr_texture, linear_sampler, sampleUV).rgb;
+            let edgeFade = smoothstep(0.0, 0.06,
+                min(min(sampleUV.x, 1.0 - sampleUV.x),
+                    min(sampleUV.y, 1.0 - sampleUV.y)));
+            let stepFade = 1.0 - f32(i) / f32(maxSteps);
+            return hitColor * edgeFade * stepFade;
+        }
+
+        rayPos += reflDir * stepSize;
+    }
+
+    return vec3<f32>(0.0);
+}
+
 fn loadDepth(coord: vec2<i32>, dims: vec2<u32>) -> f32 {
     let cc = clamp(coord, vec2<i32>(0), vec2<i32>(i32(dims.x) - 1, i32(dims.y) - 1));
     return textureLoad(depth_texture, cc, 0);
@@ -1606,8 +1691,30 @@ fn post_fragment(in: FullscreenVSOut) -> @location(0) vec4<f32> {
     let uv = in.uv;
     let cartoonMode = frame.visualParams.z > 0.5;
 
-    let c = textureSample(hdr_texture, linear_sampler, uv).xyz;
+    var c = textureSample(hdr_texture, linear_sampler, uv).xyz;
     let b = textureSample(bloom_texture, linear_sampler, uv).xyz;
+
+    let ssrStr = frame.ssrParams.x;
+    if (ssrStr > 0.001 && !cartoonMode) {
+        let depth = textureSample(depth_texture, depth_sampler, uv);
+        if (depth < 0.9999) {
+            let worldPos4 = ssrReconstructWorld(uv, depth);
+            let worldPos = worldPos4.xyz;
+            let isTable = abs(worldPos.z) < 0.06;
+            if (isTable) {
+                let ssrColor = computeSSR(uv, worldPos, vec3<f32>(0.0, 0.0, 1.0));
+                c += ssrColor * ssrStr;
+            } else {
+                let envRefl = frame.ropeMatParams4.x;
+                if (envRefl > 0.001) {
+                    let surfN = estimateNormal(uv, worldPos, depth);
+                    let ssrColor = computeSSR(uv, worldPos, surfN);
+                    c += ssrColor * ssrStr * envRefl;
+                }
+            }
+        }
+    }
+
     let combined = c + b * frame.visualParams.y;
     let exposure = max(frame.visualParams.x, 0.001);
     var mapped = vec3<f32>(1.0) - exp(-combined * exposure);

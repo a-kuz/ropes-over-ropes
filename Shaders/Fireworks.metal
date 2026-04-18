@@ -44,8 +44,8 @@ static float2 fw_dir(float id) {
     return h.x * float2(cos(h.y), sin(h.y));
 }
 
-#define PARTICLES_MIN 20.0f
-#define PARTICLES_MAX 200.0f
+#define PARTICLES_MIN 15.0f
+#define PARTICLES_MAX 80.0f
 #define FW_EXT        0.25f
 #define FW_DURATION   2.2f
 #define NUM_ROCKETS   3.0f
@@ -154,7 +154,7 @@ static float vnoise3_s2(float3 p) {
 }
 
 static float fbm3_s2(float3 p) {
-    return vnoise3_s2(p) + vnoise3_s2(p*2.0f)/2.0f + vnoise3_s2(p*4.0f)/4.0f;
+    return vnoise3_s2(p) + vnoise3_s2(p*2.0f)/2.0f;
 }
 
 static float windows_s2(float2 uv, float offset, float iTime) {
@@ -195,16 +195,16 @@ static float stars_s2(float2 st, float2 fragCoord, float2 resolution, float iTim
     return h.x * h.y * (twinkle * 0.5f + 0.5f) * 1.5f;
 }
 
-#define FW2_COUNT      6
+#define FW2_COUNT      4
 #define FW2_DURATION   8.5f
 #define FW2_LOW        0.75f
 #define FW2_HIGH       1.05f
-#define FW2_ROCKET_N   16
+#define FW2_ROCKET_N   12
 #define FW2_ROCKET_DUR 1.5f
 #define FW2_FLASH_DUR  1.7f    // ROCKET_DURATION + 0.2
 #define FW2_THRUST_SPD 0.25f
 #define FW2_EXP_STR    0.025f
-#define FW2_EXP_N      128
+#define FW2_EXP_N      48
 
 static float3 fireworks_s2(float2 st, float iTime) {
     float3 finalCol = float3(0.0f);
@@ -230,7 +230,8 @@ static float3 fireworks_s2(float2 st, float iTime) {
                 partPos = float2(radius*cos(theta), radius*sin(theta));
                 partPos.y -= max(1e-4f, pow(length(partPos)-0.05f, 2.0f)*1.25f);
                 partPos.y -= pow(radius/radiusScale, 3.0f) * 4e-5f;
-                float spark = 3e-4f / pow(length(st - partPos - fwPos), 1.7f);
+                float ld = length(st - partPos - fwPos);
+                float spark = 3e-4f / (ld * sqrt(ld));
                 float sdist = 2.0f * length(fwPos - partPos);
                 float shimmer = max(0.0f, sqrt(sdist)
                     * sin((iTime*max(1.3f,fwHash.z*2.0f) + ph.y*6.283185f) * 18.0f));
@@ -241,7 +242,8 @@ static float3 fireworks_s2(float2 st, float iTime) {
                     * fade * fwCol;
             }
             if (time < FW2_FLASH_DUR) {
-                float flashSpark = 3e-4f / pow(length(st - fwPos), 1.7f);
+                float fld = length(st - fwPos);
+                float flashSpark = 3e-4f / (fld * sqrt(fld));
                 finalCol += flashSpark / (0.01f + fmod(time, FW2_ROCKET_DUR));
             }
         } else {
@@ -254,7 +256,8 @@ static float3 fireworks_s2(float2 st, float iTime) {
                 float radius = fmod(time+ph.y, FW2_THRUST_SPD)/FW2_THRUST_SPD * ph.z * 0.1f;
                 float theta  = remap_s2(ph.x, 0.0f, 1.0f, 0.0f, M_PI_F*0.1f) + M_PI_F*1.45f;
                 partPos = float2(radius*cos(theta), radius*sin(theta));
-                finalCol += 8e-5f / pow(length(st-partPos-fwPos), 1.1f)
+                float rld = length(st-partPos-fwPos);
+                finalCol += 8e-5f / (rld * sqrt(sqrt(rld)))
                     * mix(float3(1.4f,0.7f,0.2f), float3(1.4f), radius*16.0f);
             }
         }
@@ -389,7 +392,7 @@ static float3 skyCol_d(float3 ro, float3 rd, float tCur) {
     } else {
         float3 rds = floor(2000.0f * rdRot);
         rds = 0.00015f * rds + 0.1f * noisefv3_d(0.0005f * rds.yzx);
-        for (int j = 0; j < 19; j++) rds = abs(rds)/dot(rds,rds) - 0.9f;
+        for (int j = 0; j < 10; j++) rds = abs(rds)/dot(rds,rds) - 0.9f;
         col += 0.5f * smoothstep(0.01f, 0.04f, rdRot.y) * float3(0.8f, 0.8f, 0.6f)
             * min(1.0f, 0.5e-3f * pow(min(6.0f, length(rds)), 5.0f));
     }
@@ -402,10 +405,10 @@ static float3 showScene_d(float3 ro, float3 rd, float tCur, float dstFar) {
     float nCyc = floor(tCur / tCyc) + 1.0f;
     float hm   = 0.2f * max(hashff_d(17.0f * nCyc) - 0.2f, 0.0f);
     float hr   = 0.8f * min(2.0f * hashff_d(27.0f * nCyc), 1.0f);
-    float iFib = 500.0f + floor(6000.0f * hashff_d(37.0f * nCyc));
+    float iFib = 500.0f + floor(3000.0f * hashff_d(37.0f * nCyc));
     float3 col = skyCol_d(ro, rd, tCur);
     bool isBg  = true;
-    for (int k = 0; k < 40; k++) {
+    for (int k = 0; k < 16; k++) {
         float fk  = float(k);
         float phs = fract(tCur / tCyc) - 0.005f * fk;
         float3 bPos = float3(0.0f);
@@ -437,6 +440,176 @@ static float3 showScene_d(float3 ro, float3 rd, float tCur, float dstFar) {
     }
     return clamp(col, 0.0f, 1.0f);
 }
+
+// ============================================================
+// MARK: - SHADER 4  (Animated shapes with SDF)
+// Inspired by David Gallardo - xjorma/2020
+// License: Creative Commons Attribution-NonCommercial-ShareAlike 3.0
+// Original: https://www.shadertoy.com/view/...
+// Adapted: buffer-based polygon vertices replaced with procedural shapes
+// ============================================================
+
+static float hash12_s4(float2 p) {
+    float3 p3 = fract(float3(p.xyx) * 0.1031f);
+    p3 += dot(p3, p3.yzx + 33.33f);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+static float hash13_s4(float3 p) {
+    p = fract(p * 0.1031f);
+    p += dot(p, p.zyx + 31.32f);
+    return fract((p.x + p.y) * p.z);
+}
+
+// Polygon SDF by IQ (https://www.shadertoy.com/view/wdBXRW)
+static float sdPolyS4(thread float2* v, float2 p, int num) {
+    float d = dot(p - v[0], p - v[0]);
+    float s = 1.0f;
+    for (int i = 0, j = num - 1; i < num; j = i, i++) {
+        float2 e = v[j] - v[i];
+        float2 w = p - v[i];
+        float2 b = w - e * clamp(dot(w, e) / dot(e, e), 0.0f, 1.0f);
+        d = min(d, dot(b, b));
+        // winding number from http://geomalgorithms.com/a03-_inclusion.html
+        if ((p.y >= v[i].y && p.y < v[j].y && e.x * w.y > e.y * w.x) ||
+            (p.y <  v[i].y && p.y >= v[j].y && e.x * w.y <= e.y * w.x))
+            s *= -1.0f;
+    }
+    return s * sqrt(d);
+}
+
+static void genStar_s4(thread float2* v, int points, float r, float ir, float rot) {
+    for (int i = 0; i < points * 2; i++) {
+        float a = rot + float(i) * M_PI_F / float(points);
+        float radius = (i % 2 == 0) ? r : ir;
+        v[i] = radius * float2(cos(a), sin(a));
+    }
+}
+
+static void genBlob_s4(thread float2* v, int n, float r, float t) {
+    for (int i = 0; i < n; i++) {
+        float a = float(i) * 2.0f * M_PI_F / float(n);
+        float radius = r * (0.7f + 0.3f * sin(a * 3.0f + t) * cos(a * 2.0f - t * 0.7f));
+        v[i] = radius * float2(cos(a), sin(a));
+    }
+}
+
+static float distFilter_s4(float v, float res_y) {
+    return smoothstep(3.0f / res_y, 0.0f, v);
+}
+
+static float triangleSignal_s4(float x, float f) {
+    f = 1.0f / f;
+    return (abs((f * x - 4.0f * floor(0.25f * f * x)) - 2.0f) - 1.0f) / f;
+}
+
+static float3 circle_s4(float2 p, float tp, float tc) {
+    float v0 = distFilter_s4(abs(triangleSignal_s4(
+        length(p - float2(sin(tp*0.5f+1.2f), sin(tp*0.7f+3.2f))), 0.01f)), 300.0f);
+    float v1 = distFilter_s4(abs(triangleSignal_s4(
+        length(p - float2(sin(tp*0.6f+0.3f), sin(tp*0.83f+2.7f))), 0.01f)), 300.0f);
+    float3 cb = float3(sin(tc*0.41f+1.3f), sin(tc*0.52f+2.4f), sin(tc*0.57f+1.25f)) * 0.5f + 0.5f;
+    float3 c0 = float3(sin(tc*0.37f+2.7f), sin(tc*0.39f+3.9f), sin(tc*0.29f+5.36f)) * 0.5f + 0.5f;
+    float3 c1 = float3(sin(tc*0.39f+1.6f), sin(tc*0.43f+4.5f), sin(tc*0.47f+6.23f)) * 0.5f + 0.5f;
+    return mix(mix(cb, c0, v0), c1, v1);
+}
+
+static float3 noisyCircle_s4(float2 p, float t) {
+    float h = hash13_s4(float3(floor(p * 100.0f), floor(t * 10.0f)));
+    float3 cb = float3(sin(t*0.28f+5.3f), sin(t*0.48f+2.4f), sin(t*0.43f+2.25f)) * 0.5f + 0.5f;
+    float3 c0 = float3(sin(t*0.31f+2.7f), sin(t*0.58f+3.9f), sin(t*0.47f+4.36f)) * 0.5f + 0.5f;
+    float v = distFilter_s4(abs(triangleSignal_s4(length(p) - t, 0.1f) - 0.05f), 300.0f);
+    return h * v > 0.5f ? cb : c0;
+}
+
+fragment float4 fireworks4_fragment(FWVertexOut in [[stage_in]],
+                                     constant FWUniforms& u [[buffer(0)]])
+{
+    float2 fragCoord = float2(in.position.x, u.resolution.y - in.position.y);
+    float2 p = (2.0f * fragCoord - u.resolution) / u.resolution.y;
+
+    float seqLength = 2.0f;
+    float seqId = floor(u.time / seqLength);
+    float t = u.time;
+
+    // Generate animated shape
+    thread float2 verts[20];
+    int shapeSelect = int(hash12_s4(float2(seqId, 0.0f)) * 3.0f);
+    float shapeDist;
+    float rot = t * 0.5f;
+
+    switch (shapeSelect) {
+        case 0: {
+            genStar_s4(verts, 5, 0.6f + 0.1f * sin(t), 0.25f + 0.05f * cos(t * 1.3f), rot);
+            shapeDist = sdPolyS4(verts, p, 10);
+            break;
+        }
+        case 1: {
+            genBlob_s4(verts, 16, 0.5f, t * 2.0f);
+            shapeDist = sdPolyS4(verts, p, 16);
+            break;
+        }
+        default: {
+            genStar_s4(verts, 6, 0.55f + 0.1f * sin(t * 0.8f), 0.3f + 0.05f * cos(t), rot * 0.7f);
+            shapeDist = sdPolyS4(verts, p, 12);
+            break;
+        }
+    }
+
+    // Select shape effect
+    int effectSelect = int(hash12_s4(float2(seqId, 1.0f)) * 3.0f);
+    float shapeMask;
+    switch (effectSelect) {
+        case 0:
+            shapeMask = distFilter_s4(shapeDist, u.resolution.y);
+            break;
+        case 1:
+            shapeMask = distFilter_s4(abs(shapeDist) - 0.01f, u.resolution.y);
+            break;
+        default:
+            shapeMask = max(distFilter_s4(shapeDist, u.resolution.y),
+                       max(distFilter_s4(abs(shapeDist - 0.05f) - 0.003f, u.resolution.y) * 0.75f,
+                           distFilter_s4(abs(shapeDist - 0.10f) - 0.003f, u.resolution.y) * 0.50f));
+            break;
+    }
+
+    // Select background
+    float3 backCol;
+    int bgSelect = int(hash12_s4(float2(seqId, 2.0f)) * 3.0f);
+    switch (bgSelect) {
+        case 0:
+            backCol = circle_s4(p, t, t);
+            break;
+        case 1:
+            backCol = 0.5f + 0.5f * cos(t + float3(p.x, p.y, p.x) + float3(0.0f, 2.0f, 4.0f));
+            break;
+        default:
+            backCol = noisyCircle_s4(p, t);
+            break;
+    }
+
+    // Select foreground
+    float3 foreCol;
+    int fgSelect = int(hash12_s4(float2(seqId, 3.0f)) * 3.0f);
+    switch (fgSelect) {
+        case 0:
+            foreCol = float3(0.0f);
+            break;
+        case 1:
+            foreCol = float3(1.0f);
+            break;
+        default:
+            foreCol = circle_s4(p, t, t + 22.3f);
+            break;
+    }
+
+    float3 col = mix(backCol, foreCol, shapeMask);
+    return float4(col, 1.0f);
+}
+
+// ============================================================
+// MARK: - SHADER 5  (dr2 "Fireworks 3d")
+// ============================================================
 
 fragment float4 fireworks3_fragment(FWVertexOut in [[stage_in]],
                                     constant FWUniforms& u [[buffer(0)]])

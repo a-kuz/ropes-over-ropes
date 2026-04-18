@@ -139,6 +139,7 @@ pub struct GpuRenderer {
     pub cartoon: CartoonSettings,
     pub cap: CapSettings,
     pub worm: WormSettings,
+    pub ssr: SsrSettings,
     width: u32,
     height: u32,
 
@@ -1432,6 +1433,7 @@ impl GpuRenderer {
             cartoon: CartoonSettings::default(),
             cap: CapSettings::default(),
             worm: WormSettings::default(),
+            ssr: SsrSettings::default(),
             width,
             height,
 
@@ -2021,6 +2023,7 @@ impl GpuRenderer {
             &self.table,
             &self.cartoon,
             &self.worm,
+            &self.ssr,
         );
         self.queue.write_buffer(
             &self.frame_uniforms_buffer,

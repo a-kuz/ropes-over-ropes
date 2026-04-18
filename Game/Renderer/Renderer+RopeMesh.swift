@@ -114,36 +114,62 @@ extension Renderer {
                 }
             }
 
-            let wmp = RopeMeshBuilder.WormMeshParams(
-                segFreq: wormSegFreq, segBulge: wormSegBulge,
-                thickness: wormThickness, taperLen: wormTaperLen
-            )
-            let ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
-                RopeMeshBuilder.buildRect(
-                    points: pointsBuffer,
-                    radius: scaledRadius,
-                    color: ropeColor,
-                    twistEvents: [],
-                    tautness: 1.0,
-                    repulsors: [],
-                    stretchRatio: 1.0,
-                    oscillation: 0.0,
-                    segmentStarts: [],
-                    restLength: restLength,
-                    crossSection: cs,
-                    materialFrames: visibleFrames,
-                    profileSegments: profileSegments,
-                    ropeContactPoints: ropeContactPoints,
-                    ropeContactRadius: scaledRadius,
-                    stretchThinning: stretchThinning,
-                    wormMode: wormMode,
-                    wormTime: time,
-                    wormMeshParams: wmp,
-                    squareCrossSection: squareCrossSection
+            let ropeMesh: RopeMesh
+            if shaderParams.chainMode {
+                let cmp = RopeMeshBuilder.ChainMeshParams(
+                    linkLength: shaderParams.chainLinkLength,
+                    linkThickness: shaderParams.chainLinkThickness,
+                    linkWidth: shaderParams.chainLinkWidth
                 )
+                ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
+                    RopeMeshBuilder.buildChain(
+                        points: pointsBuffer,
+                        radius: scaledRadius,
+                        color: ropeColor,
+                        params: cmp
+                    )
+                }
+            } else {
+                let wmp = RopeMeshBuilder.WormMeshParams(
+                    segFreq: shaderParams.wormSegFreq, segBulge: shaderParams.wormSegBulge,
+                    thickness: shaderParams.wormThickness, taperLen: shaderParams.wormTaperLen
+                )
+                ropeMesh = visiblePoints.withUnsafeBufferPointer { pointsBuffer in
+                    RopeMeshBuilder.buildRect(
+                        points: pointsBuffer,
+                        radius: scaledRadius,
+                        color: ropeColor,
+                        twistEvents: [],
+                        tautness: 1.0,
+                        repulsors: [],
+                        stretchRatio: 1.0,
+                        oscillation: 0.0,
+                        segmentStarts: [],
+                        restLength: restLength,
+                        crossSection: cs,
+                        materialFrames: visibleFrames,
+                        profileSegments: profileSegments,
+                        ropeContactPoints: ropeContactPoints,
+                        ropeContactRadius: scaledRadius,
+                        stretchThinning: stretchThinning,
+                        wormMode: shaderParams.wormMode,
+                        wormTime: time,
+                        wormMeshParams: wmp,
+                        squareCrossSection: squareCrossSection
+                    )
+                }
             }
 
-            if fadeOut > 0 && band.suckHole != nil {
+            if fadeOut > 0 && shaderParams.padMode {
+                // Pad mode: uniform fade-to-white (release glow)
+                let alpha = 1.0 - fadeOut
+                var modifiedVerts = ropeMesh.vertices
+                let glow = fadeOut * 0.3
+                for vi in modifiedVerts.indices {
+                    modifiedVerts[vi].color = modifiedVerts[vi].color * alpha + SIMD3<Float>(glow, glow, glow)
+                }
+                allVertices.append(contentsOf: modifiedVerts)
+            } else if fadeOut > 0 && band.suckHole != nil {
                 let suckEnd = band.suckFromEnd
                 let pulse = 0.85 + 0.15 * sin(time * 14.0)
                 let fadeEdge = min(fadeOut * 1.8, 0.95)
@@ -162,7 +188,51 @@ extension Renderer {
             allIndices.append(contentsOf: ropeMesh.indices.map { $0 + baseVertex })
             baseVertex += UInt32(ropeMesh.vertices.count)
 
-            if squareCrossSection {
+            if shaderParams.chainMode {
+                // no end caps for chain mode
+            } else if shaderParams.padMode {
+                // Pad mode: flat rubber discs instead of hemispheres/swivels
+                // Skip discs during fade-out (rope is contracting/disappearing)
+                let discRadius = holeRadius * holeRadiusScale * shaderParams.capRadiusScale * 1.3
+                if visiblePoints.count >= 2 && fadeOut == 0 {
+                    let isSucking = false
+                    let suckFromEnd = band.suckFromEnd
+                    let drawStart = !isSucking || suckFromEnd == 0
+                    let drawEnd = !isSucking || suckFromEnd == 1
+                    let faceUp = SIMD3<Float>(0, 0, 1)
+
+                    if drawStart {
+                        let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                        let pinned = band.pinStart != nil
+                        let disc = RopeMeshBuilder.buildDisc(
+                            center: visiblePoints[0], radius: discRadius,
+                            facing: pinned ? faceUp : -startTangent,
+                            color: ropeColor, segments: max(12, shaderParams.capSegments),
+                            ropeRadius: scaledRadius,
+                            ropeTangent: pinned ? startTangent : nil
+                        )
+                        allVertices.append(contentsOf: disc.vertices)
+                        allIndices.append(contentsOf: disc.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(disc.vertices.count)
+                    }
+
+                    if drawEnd {
+                        let lastIdx = visiblePoints.count - 1
+                        let endTangent = simd_normalize(visiblePoints[lastIdx] - visiblePoints[lastIdx - 1])
+                        let pinned = band.pinEnd != nil
+                        let disc = RopeMeshBuilder.buildDisc(
+                            center: visiblePoints[lastIdx], radius: discRadius,
+                            facing: pinned ? faceUp : endTangent,
+                            color: ropeColor, segments: max(12, shaderParams.capSegments),
+                            ropeRadius: scaledRadius,
+                            ropeTangent: pinned ? -endTangent : nil
+                        )
+                        allVertices.append(contentsOf: disc.vertices)
+                        allIndices.append(contentsOf: disc.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(disc.vertices.count)
+                    }
+                }
+            } else if squareCrossSection {
                 if visiblePoints.count >= 2 {
                     let isSucking = fadeOut > 0 && band.suckHole != nil
                     let bandHalf = scaledRadius
@@ -220,7 +290,7 @@ extension Renderer {
                     }
                 }
             } else {
-                let sphereRadius = holeRadius * holeRadiusScale * capRadiusScale
+                let sphereRadius = holeRadius * holeRadiusScale * shaderParams.capRadiusScale
                 if visiblePoints.count >= 2 {
                     let isSucking = fadeOut > 0 && band.suckHole != nil
                     let suckFromEnd = band.suckFromEnd
@@ -232,7 +302,7 @@ extension Renderer {
                         let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
                         let startCap = RopeMeshBuilder.buildHemisphere(
                             center: startPos, radius: sphereRadius, facing: -startTangent,
-                            color: ropeColor, segments: capSegments, rings: capRings, darken: capDarken, wormMode: wormMode
+                            color: ropeColor, segments: shaderParams.capSegments, rings: shaderParams.capRings, darken: shaderParams.capDarken, wormMode: shaderParams.wormMode
                         )
                         allVertices.append(contentsOf: startCap.vertices)
                         allIndices.append(contentsOf: startCap.indices.map { $0 + baseVertex })
@@ -244,7 +314,7 @@ extension Renderer {
                         let endTangent = simd_normalize(visiblePoints[visiblePoints.count - 1] - visiblePoints[visiblePoints.count - 2])
                         let endCap = RopeMeshBuilder.buildHemisphere(
                             center: endPos, radius: sphereRadius, facing: endTangent,
-                            color: ropeColor, segments: capSegments, rings: capRings, darken: capDarken, wormMode: wormMode
+                            color: ropeColor, segments: shaderParams.capSegments, rings: shaderParams.capRings, darken: shaderParams.capDarken, wormMode: shaderParams.wormMode
                         )
                         allVertices.append(contentsOf: endCap.vertices)
                         allIndices.append(contentsOf: endCap.indices.map { $0 + baseVertex })

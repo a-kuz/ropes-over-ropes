@@ -1,4 +1,7 @@
 import MetalKit
+#if os(iOS)
+import CoreMotion
+#endif
 import os.log
 
 @MainActor
@@ -18,28 +21,38 @@ final class Renderer: NSObject, MTKViewDelegate {
     let bloomThreshold: MTLComputePipelineState
     let bloomBlurH: MTLComputePipelineState
     let bloomBlurV: MTLComputePipelineState
+    let copyDepthPipeline: MTLComputePipelineState
     let bakeWoodPipeline: MTLComputePipelineState
     let bakeBoardWoodVolumePipeline: MTLComputePipelineState
+    let debug2DPipeline: MTLRenderPipelineState
 
     var depthStateScene: MTLDepthStencilState
     var depthStateBackground: MTLDepthStencilState
     var depthStateShadow: MTLDepthStencilState
 
     var shadowDepthTex: MTLTexture?
-    let shadowMapSize: Int = 2048
+    var shadowMapSize: Int = 2048 {
+        didSet { if oldValue != shadowMapSize { resizeShadowTexture() } }
+    }
 
     var camera = Camera()
     var cameraZoomScale: Float = 0.95764452219009399
     var cameraBaseOrthoHalfHeight: Float = 2.05
-    var cameraDebugMode = false
-    var cameraDebugTouchStart: CGPoint?
     var cameraDragActive = false
     var cameraDragStart: CGPoint?
     var time: Float = 0
-    var dragVisualEnergy: Float = 0
     var lastDeltaTime: Float = 1.0 / 60.0
     var lastDrawTime: Double = 0
     var currentFPS: Float = 0
+    var potentialFPS: Float = 0
+
+    func updatePotentialFPS(_ fps: Float) {
+        if potentialFPS == 0 {
+            potentialFPS = fps
+        } else {
+            potentialFPS = potentialFPS * 0.95 + fps * 0.05
+        }
+    }
 
 
     var frameUniforms: MTLBuffer?
@@ -54,89 +67,60 @@ final class Renderer: NSObject, MTKViewDelegate {
     var holeRadius: Float = 0.105
     var holeOccupied: [Bool] = []
     var profileSegments: Int = 10
-    var holeRadiusScale: Float = 0.73367023468017578 { didSet { rebuildHoleInstancesIfNeeded() } }
-    var holeTint: SIMD4<Float> = SIMD4<Float>(1, 0.90870898962020874, 1, 1)
+    var holeRadiusScale: Float = 0.73367023468017578 {
+        didSet {
+            simulator?.holeRadiusScale = holeRadiusScale
+            rebuildHoleInstancesIfNeeded()
+            if levelLoaded { bakeHoleMaskTexture() }
+        }
+    }
     var holeSegments: Int = 19 { didSet { rebuildHoleMeshIfNeeded() } }
     var ropeRadiusScale: Float = 1.0618677139282227
     var squareCrossSection: Bool = false {
         didSet {
             rebuildHoleMeshIfNeeded()
             simulator?.squareCrossSection = squareCrossSection
+            if levelLoaded { bakeHoleMaskTexture() }
+        }
+    }
+    var padMode: Bool = false {
+        didSet {
+            shaderParams.padMode = padMode
+            rebuildHoleMeshIfNeeded()
+            simulator?.padMode = padMode
         }
     }
     var stretchThinning: Float = 0.5 {
         didSet { simulator?.stretchThinning = stretchThinning }
     }
-    var exposure: Float = 0.5
-    var lightIntensity: Float = 0.40238875150680542
-    var lightDir: SIMD3<Float> = SIMD3<Float>(-0.029445827007293701, -0.22127896547317505, 0.87485504150390625)
-    var bloomStrength: Float = 0
-    var ambient: Float = 0.10394008457660675
-    var shadowBias: Float = 0.0013682411517947912
-    var shadowDarkness: Float = 0.15453849732875824
-    var lightSize: Float = 0.073253527283668518
-    var shadowsEnabled: Bool = true
-    var shadowType: Int = 2
-    var cartoonShaderEnabled: Bool = true
-    var cartoonExposure: Float = 1.3291559219360352
-    var cartoonBloom: Float = 0
-    var cartoonEdgeStrength: Float = 1
-    var cartoonLevels: Int = 2
-    var cartoonShadowBright: Float = 0.38
-    var cartoonWrap: Float = 0.15
-    var cartoonEdgeSmooth: Float = 0.5
-    var tableStyle: Int = 0
-    var tableColor1: SIMD3<Float> = SIMD3<Float>(0.079999998211860657, 0.090000003576278687, 0.12999999523162842)
-    var tableColor2: SIMD3<Float> = SIMD3<Float>(0.11999999731779099, 0.12999999523162842, 0.20000000298023224)
-    var woodSeed: Float = 0.045950364321470261 { didSet { bakeWoodTexture() } }
-    var woodBrightness: Float = 1.0 { didSet { bakeWoodTexture() } }
-    var woodPatternScale: Float = 1.7154961824417114 { didSet { bakeWoodTexture() } }
+
+    // MARK: - Shader / visual parameters (extracted)
+    var shaderParams = RendererShaderParams()
+
+    // Forwarding properties for params with side effects
+    var woodSeed: Float {
+        get { shaderParams.woodSeed }
+        set { shaderParams.woodSeed = newValue; bakeWoodTexture() }
+    }
+    var woodBrightness: Float {
+        get { shaderParams.woodBrightness }
+        set { shaderParams.woodBrightness = newValue; bakeWoodTexture() }
+    }
+    var woodPatternScale: Float {
+        get { shaderParams.woodPatternScale }
+        set { shaderParams.woodPatternScale = newValue; bakeWoodTexture() }
+    }
+
     var boardElevation: Float = 0.12 {
         didSet {
             if levelLoaded { loadLevel(levelId: currentLevelId) }
         }
     }
     private var levelLoaded = false
-    var capRadiusScale: Float = 0.90614998340606689
-    var capSegments: Int = 12
-    var capRings: Int = 6
-    var capDarken: Float = 0
-    var wormMode: Bool = false
-    var wormSegFreq: Float = 28.0
-    var wormSegBulge: Float = 0.12
-    var wormThickness: Float = 1.35
-    var wormTaperLen: Float = 0.12
-    var wormGrooveDepth: Float = 0.35
-    var wormBellyBright: Float = 1.15
-    var wormBackDark: Float = 0.7
-    var wormSkinNoise: Float = 0.08
-    var wormSSS: Float = 0.25
-    var wormRoughness: Float = 0.25
-    var wormSpecular: Float = 0.8
-    var wormRimStrength: Float = 0.08
-    var wormEyeSize: Float = 0.015
-    var wormPulseSpeed: Float = 2.5
-    var wormPulseAmp: Float = 0.02
-    var wormCrawlSpeed: Float = 3.5
-    var wormCrawlAmp: Float = 0.012
-    var wormSideAmp: Float = 0.008
-
-    var ropeMatte: Float = 0.33392396569252014
-    var ropeGloss: Float = 0.69268685579299927
-    var ropeDiffuseWrap: Float = 0.0080702323466539383
-    var ropeSubsurface: Float = 0.33765289187431335
-    var ropeEdgeLight: Float = 0.41452157497406006
-    var ropeSaturation: Float = 1.35732102394104
-    var ropeMicroBump: Float = 0.142847940325737
-    var ropeBumpScale: Float = 3.0
-    var ropeContactAO: Float = 1
-    var ropeLiftGlow: Float = 0.97152864933013916
-    var ropeStretchGloss: Float = 0.7
-    var ropeStretchSpec: Float = 1.0
-    var ropeEnvReflect: Float = 0.15
-    var ropeEnvSpread: Float = 0.15
-    var ropeEnvDebug: Bool = false
-    var shadowDebugMode: Int = 0
+    var debug2DOverlay: Bool = false
+    var debug2DLineVB: MTLBuffer?
+    var debug2DLineCount: Int = 0
+    var lastDebug2DLogTime: Double = 0
     struct RopeEndpoints {
         var startHole: Int
         var endHole: Int
@@ -146,10 +130,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     }
 
     var ropes: [RopeEndpoints] = []
-    var topology: TopologyEngine?
     var simulator: VerletSimulator?
     var lastDragWorld: SIMD2<Float> = .zero
-    var dragStartWorld: SIMD2<Float> = .zero
+    var dragInputResponse: Float = 20.0
 
     struct DragState {
         var ropeIndex: Int
@@ -168,10 +151,16 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var hdrTex: MTLTexture?
     var envTex: MTLTexture?
+    var envDepthTex: MTLTexture?
+    var envDisabledTex: MTLTexture
+    var woodDebugTex: MTLTexture
+    var holeMaskDisabledTex: MTLTexture
+    var boardWoodVolumeDisabledTex: MTLTexture
     var sceneDepthTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
     var bakedWoodTex: MTLTexture?
+    var bakedHoleMaskTex: MTLTexture?
     var bakedBoardWoodVolumeTex: MTLTexture?
     var noiseTexture: MTLTexture?
     var woodBoundsMin: SIMD2<Float> = .zero
@@ -188,8 +177,17 @@ final class Renderer: NSObject, MTKViewDelegate {
     var boardMeshIB: MTLBuffer?
     var boardMeshIndexCount: Int = 0
 
-    var lastPhysicsLogTime: Double = 0
+    // Platform rendering (rescue mode)
+    var platformVB: MTLBuffer?
+    var platformIB: MTLBuffer?
+    var platformIndexCount: Int = 0
+
     let frictionSound = RubberFrictionSound()
+
+    #if os(iOS)
+    nonisolated(unsafe) let motionManager = CMMotionManager()
+    #endif
+    var deviceTilt: SIMD2<Float> = .zero
 
     struct MeshStats: Equatable {
         let vertices: Int
@@ -200,6 +198,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
     var currentLevelId: Int = 1
     var moveCount: Int = 0
+
+    // Recording: captures drag actions for braid development
+    var isRecording: Bool = false
+    var recordedActions: [(ropeIndex: Int, endIndex: Int, fromHole: Int, toHole: Int)] = []
     var isTensionMode: Bool = false
     var tensionLevelCompleted: Bool = false
 
@@ -224,9 +226,45 @@ final class Renderer: NSObject, MTKViewDelegate {
     var targetIB: MTLBuffer?
     var targetIndexCount: Int = 0
 
+    // Braid mode
+    var isBraidMode: Bool = false
+    var braidLevelCompleted: Bool = false
+    var braidTargets: [Int] = []        // braidTargets[ropeIndex] = target bottom hole index
+    var braidMinCrossings: Int = 0
+    var braidBottomHoleStart: Int = 0   // index of first bottom hole
+    var braidStrandCount: Int = 0
+
+    // Slow braid replay: execute drag actions one at a time so the user can watch
+    var pendingBraidDrags: [VerletSimulator.LevelAction] = []
+    var braidDragTimer: Float = 0
+    let braidDragInterval: Float = 0.3  // seconds pause between drags
+
+    // Animated drag state machine
+    enum BraidDragPhase { case idle, lift, traverse, lower, settle }
+    var braidDragPhase: BraidDragPhase = .idle
+    var braidDragStep: Int = 0
+    var braidDragAction: VerletSimulator.LevelAction?
+    var braidDragFromPos: SIMD3<Float> = .zero
+    var braidDragLiftFrom: SIMD3<Float> = .zero
+    var braidDragLiftTo: SIMD3<Float> = .zero
+    var braidDragToPos: SIMD3<Float> = .zero
+    var braidDragIdx: Int = 0 // particle index (0 or last)
+
+    // Runtime braid computation: computes drag targets from actual particle positions
+    var braidRemainingCrossings: Int = 0
+    // isLower[ropeIndex][endIndex] — true = this end is under the other rope
+    var braidIsLower: [[Bool]] = [[false, false], [true, true]]
+
     // Rail mode rendering
     var isRailMode: Bool = false
     var railLevelCompleted: Bool = false
+
+    // Rescue mode
+    var isRescueMode: Bool = false
+    var rescueLevelCompleted: Bool = false
+    var rescueBreakTimer: Float = 0
+    let rescueBreakDelay: Float = 1.5  // seconds before ropes break
+    var rescueRopesDetached: Bool = false
     struct RailRenderInfo {
         var points: [SIMD2<Float>]
     }
@@ -253,6 +291,45 @@ final class Renderer: NSObject, MTKViewDelegate {
     var stationVB: MTLBuffer?
     var stationIB: MTLBuffer?
     var stationIndexCount: Int = 0
+
+    // Victory camera orbit
+    var victoryOrbitActive: Bool = false
+    var victoryOrbitTime: Float = 0
+    let victoryOrbitDuration: Float = 5.0        // orbit duration (UI shown immediately, this is just visual)
+    var victoryOrbitSavedCamera: Camera?
+
+    // Victory replay
+    struct ReplayMove {
+        var ropeIndex: Int
+        var endIndex: Int
+        var fromHole: Int
+        var toHole: Int
+    }
+    var moveHistory: [ReplayMove] = []
+    var victoryReplayPending: Bool = false
+    var victoryReplayMovesBuffer: [ReplayMove] = []
+    var victoryReplayActive: Bool = false
+    var victoryReplayMoves: [ReplayMove] = []
+    var victoryReplayMoveIndex: Int = 0
+    enum ReplayPhase { case pause, lift, traverse, lower, settle, done }
+    var victoryReplayPhase: ReplayPhase = .done
+    var victoryReplayStep: Int = 0
+    var victoryReplayFromPos: SIMD3<Float> = .zero
+    var victoryReplayLiftFrom: SIMD3<Float> = .zero
+    var victoryReplayLiftTo: SIMD3<Float> = .zero
+    var victoryReplayToPos: SIMD3<Float> = .zero
+    var victoryReplayParticleIdx: Int = 0
+    let replayPauseFrames: Int = 15
+    let replayLiftFrames: Int = 30
+    let replayTraverseFrames: Int = 70
+    let replayLowerFrames: Int = 11
+    let replaySettleFrames: Int = 30
+    // ropeIndex → moveHistory.count at moment of vanish (recorded during gameplay)
+    var replayVanishRecords: [Int: Int] = [:]
+    // copy used during active replay
+    var victoryReplayVanishAtMove: [Int: Int] = [:]
+    // waiting for suck animation to finish before starting replay
+    var victoryWaitingForSuck: Bool = false
 
     var onLevelComplete: (() -> Void)?
     var onMoveCountChanged: ((Int) -> Void)?
@@ -308,6 +385,9 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsConstraintIterations: Int = 8 {
         didSet { simulator?.constraintIterations = physicsConstraintIterations }
     }
+    var physicsBroadphaseInterval: Int = 3 {
+        didSet { simulator?.broadphaseRebuildInterval = physicsBroadphaseInterval }
+    }
     var physicsParticleCount: Int = 60 {
         didSet { simulator?.particleCount = physicsParticleCount }
     }
@@ -326,6 +406,88 @@ final class Renderer: NSObject, MTKViewDelegate {
     var physicsBendVelocityCoupling: Float = 0.45 {
         didSet { simulator?.bendVelocityCoupling = physicsBendVelocityCoupling }
     }
+    var physicsFriction: Float = 0.8 {
+        didSet { simulator?.frictionCoefficient = physicsFriction }
+    }
+    var physicsCollisionResponse: Float = 0.35 {
+        didSet { simulator?.collisionResponse = physicsCollisionResponse }
+    }
+    var physicsZSeparation: Float = 1.0 {
+        didSet { simulator?.zSeparationStrength = physicsZSeparation }
+    }
+    var physicsFrictionDampingRatio: Float = 0.3 {
+        didSet { simulator?.frictionDampingRatio = physicsFrictionDampingRatio }
+    }
+    var physicsMaxFrictionCap: Float = 0.25 {
+        didSet { simulator?.maxFrictionCap = physicsMaxFrictionCap }
+    }
+    var physicsBoardFrictionRatio: Float = 0.5 {
+        didSet { simulator?.boardFrictionRatio = physicsBoardFrictionRatio }
+    }
+    var physicsTwistStiffness: Float = 0.15 {
+        didSet { simulator?.twistStiffness = physicsTwistStiffness }
+    }
+    var physicsTwistDamping: Float = 0.4 {
+        didSet { simulator?.twistDamping = physicsTwistDamping }
+    }
+    var physicsGravityTorque: Float = 0.8 {
+        didSet { simulator?.gravityTorqueStrength = physicsGravityTorque }
+    }
+    var physicsDragPickupDuration: Float = 0.12 {
+        didSet { simulator?.dragPickupDuration = physicsDragPickupDuration }
+    }
+    var physicsDragMinSubsteps: Int = 3 {
+        didSet { simulator?.dragMinSubsteps = physicsDragMinSubsteps }
+    }
+    var physicsFadeOutSpeed: Float = 45.0 {
+        didSet { simulator?.fadeOutSpeed = physicsFadeOutSpeed }
+    }
+    var physicsLowerAnimDuration: Float = 0.55 {
+        didSet { simulator?.lowerAnimDuration = physicsLowerAnimDuration }
+    }
+    var physicsIdleTimeout: Float = 3.0 {
+        didSet { simulator?.idleTimeout = physicsIdleTimeout }
+    }
+    var useParticleBraid: Bool = false
+    var physicsPaused: Bool = false
+
+    // Auto-drag test (level 998)
+    var autoDragActive: Bool = false
+    var autoDragStep: Int = 0
+    var autoDragTotalSteps: Int = 600
+    var autoDragStart: SIMD2<Float> = .zero
+    var autoDragEnd: SIMD2<Float> = .zero
+    var autoDragBand: Int = 0
+    var autoDragEndIdx: Int = 0
+    var autoDragPrevCrossings: Int = -1
+
+    // Animated level init: replay drag actions visually (always on)
+    var slowInitVisualization: Bool = true
+    var pendingInitDrags: [VerletSimulator.LevelAction] = []
+
+    // Snapshot of bands after slowInit completes, keyed by levelId
+    var postInitBandsSnapshot: (levelId: Int, bands: [VerletSimulator.Band])? = nil
+
+    // Per-drag/swap animation state
+    enum SlowDragPhase { case idle, lift, traverse, lower, settle }
+    var slowDragPhase: SlowDragPhase = .idle
+    var slowDragStep: Int = 0
+    var slowDragIsSwap: Bool = false
+    // Band A (primary, or only for drag)
+    var slowDragBandIdx: Int = 0
+    var slowDragParticleIdx: Int = 0
+    var slowDragFromPos: SIMD3<Float> = .zero
+    var slowDragLiftFrom: SIMD3<Float> = .zero
+    var slowDragLiftTo: SIMD3<Float> = .zero
+    var slowDragToPos: SIMD3<Float> = .zero
+    // Band B (for swap only)
+    var slowDragBandIdx2: Int = 0
+    var slowDragParticleIdx2: Int = 0
+    var slowDragFromPos2: SIMD3<Float> = .zero
+    var slowDragLiftFrom2: SIMD3<Float> = .zero
+    var slowDragLiftTo2: SIMD3<Float> = .zero
+    var slowDragToPos2: SIMD3<Float> = .zero
+    var slowDragSettleCount: Int = 0
 
     init(view: MTKView) {
         guard let device = view.device else { fatalError("Metal device is required") }
@@ -347,17 +509,65 @@ final class Renderer: NSObject, MTKViewDelegate {
         self.shadowHolePipeline = Self.makeShadowHolePipeline(device: device, library: library)
         self.shadowBoardPipeline = Self.makeShadowBoardPipeline(device: device, library: library)
         (self.bloomThreshold, self.bloomBlurH, self.bloomBlurV) = Self.makeBloomPipelines(device: device, library: library)
+        self.copyDepthPipeline = Self.makeComputePipeline(device: device, function: library.makeFunction(name: "copyDepthKernel")!)
         self.bakeWoodPipeline = Self.makeComputePipeline(device: device, function: library.makeFunction(name: "bakeWoodKernel")!)
         self.bakeBoardWoodVolumePipeline = Self.makeComputePipeline(device: device, function: library.makeFunction(name: "bakeBoardWoodVolumeKernel")!)
+        self.debug2DPipeline = Self.makeDebug2DPipeline(device: device, view: view, library: library)
         (self.depthStateScene, self.depthStateBackground, self.depthStateShadow) = Self.makeDepthStates(device: device)
 
         self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
         self.postParamsBuffer = device.makeBuffer(length: MemoryLayout<PostParams>.stride, options: [.storageModeShared])
-        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
+        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, padMode: shaderParams.padMode, padHeight: shaderParams.padHeight, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
+        let envDisabledDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        envDisabledDesc.usage = .shaderRead
+        guard let envDisabledTex = device.makeTexture(descriptor: envDisabledDesc) else {
+            fatalError("Failed to create disabled env texture")
+        }
+        let woodDebugDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
+        woodDebugDesc.usage = .shaderRead
+        guard let woodDebugTex = device.makeTexture(descriptor: woodDebugDesc) else {
+            fatalError("Failed to create debug wood texture")
+        }
+        let holeMaskDisabledDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .r8Unorm, width: 1, height: 1, mipmapped: false)
+        holeMaskDisabledDesc.usage = .shaderRead
+        guard let holeMaskDisabledTex = device.makeTexture(descriptor: holeMaskDisabledDesc) else {
+            fatalError("Failed to create disabled hole mask texture")
+        }
+        let boardWoodVolumeDisabledDesc = MTLTextureDescriptor()
+        boardWoodVolumeDisabledDesc.textureType = .type3D
+        boardWoodVolumeDisabledDesc.pixelFormat = .rgba16Float
+        boardWoodVolumeDisabledDesc.width = 1
+        boardWoodVolumeDisabledDesc.height = 1
+        boardWoodVolumeDisabledDesc.depth = 1
+        boardWoodVolumeDisabledDesc.usage = .shaderRead
+        guard let boardWoodVolumeDisabledTex = device.makeTexture(descriptor: boardWoodVolumeDisabledDesc) else {
+            fatalError("Failed to create disabled board wood volume texture")
+        }
+        self.envDisabledTex = envDisabledTex
+        self.woodDebugTex = woodDebugTex
+        self.holeMaskDisabledTex = holeMaskDisabledTex
+        self.boardWoodVolumeDisabledTex = boardWoodVolumeDisabledTex
+
+        var envDisabledPixel = [UInt16](repeating: 0, count: 4)
+        envDisabledTex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &envDisabledPixel, bytesPerRow: MemoryLayout<UInt16>.stride * 4)
+        var woodDebugPixel = [UInt16](arrayLiteral: 0, 15360, 0, 15360)
+        woodDebugTex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &woodDebugPixel, bytesPerRow: MemoryLayout<UInt16>.stride * 4)
+        var holeMaskDisabledPixel = [UInt8](repeating: 0, count: 1)
+        holeMaskDisabledTex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &holeMaskDisabledPixel, bytesPerRow: 1)
 
         self.noiseTexture = Self.generateNoiseTexture(device: device, size: 2048)
 
         super.init()
+
+        startMotionUpdates()
+    }
+
+    private func startMotionUpdates() {
+        #if os(iOS)
+        guard motionManager.isDeviceMotionAvailable else { return }
+        motionManager.deviceMotionUpdateInterval = 1.0 / 60.0
+        motionManager.startDeviceMotionUpdates()
+        #endif
     }
 
     func loadLevelDefinition(_ def: LevelDefinition) {
@@ -375,6 +585,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         dragState = nil
         dragWorld = .zero
         simulator = nil
+        pendingBraidDrags = []
+        braidDragTimer = 0
+        victoryOrbitActive = false
+        victoryOrbitTime = 0
+        victoryOrbitSavedCamera = nil
+        victoryReplayActive = false
+        victoryReplayPending = false
+        victoryReplayPhase = .done
+        victoryWaitingForSuck = false
+        replayVanishRecords = [:]
+        victoryReplayVanishAtMove = [:]
+        moveHistory.removeAll()
         undoStore.clear()
         levelFlow.clearAll()
         moveCount = 0
@@ -386,18 +608,38 @@ final class Renderer: NSObject, MTKViewDelegate {
         if let pending = _pendingLevelDef {
             level = pending
             _pendingLevelDef = nil
+        } else if levelId == 998 {
+            Self.logger.info("Level 998: tunneling test")
+            level = Self.makeTunnelingTestLevel()
+        } else if levelId == 2 {
+            Self.logger.info("Level 2: central knot showcase")
+            level = LevelGenerator.generateStructureShowcase(levelId: 3115, particleCount: physicsParticleCount)
         } else if let jsonLevel = LevelLoader.load(levelId: levelId) {
             Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
             level = jsonLevel
+        } else if levelId >= 4001 {
+            Self.logger.info("Level \(levelId) generated as rescue mode")
+            level = LevelGenerator.generateRescueLevel(levelId: levelId, particleCount: physicsParticleCount)
+        } else if levelId >= 3100 {
+            Self.logger.info("Level \(levelId): structure showcase")
+            level = LevelGenerator.generateStructureShowcase(levelId: levelId, particleCount: physicsParticleCount)
+        } else if levelId >= 3001 {
+            if useParticleBraid {
+                Self.logger.info("Level \(levelId) generated as particle braid")
+                level = LevelGenerator.generateParticleBraidLevel(levelId: levelId, particleCount: physicsParticleCount)
+            } else {
+                Self.logger.info("Level \(levelId) generated as braid mode")
+                level = LevelGenerator.generateBraidLevel(levelId: levelId, particleCount: physicsParticleCount)
+            }
         } else if levelId >= 2001 {
             Self.logger.info("Level \(levelId) generated as rail mode")
-            level = LevelGenerator.generateRailLevel(levelId: levelId)
+            level = LevelGenerator.generateRailLevel(levelId: levelId, particleCount: physicsParticleCount)
         } else if levelId >= 1001 {
             Self.logger.info("Level \(levelId) generated as tension mode")
-            level = LevelGenerator.generateTensionLevel(levelId: levelId)
+            level = LevelGenerator.generateTensionLevel(levelId: levelId, particleCount: physicsParticleCount)
         } else {
             Self.logger.info("Level \(levelId) generated procedurally")
-            level = LevelGenerator.generate(levelId: levelId, boardElevation: boardElevation)
+            level = LevelGenerator.generate(levelId: levelId, boardElevation: boardElevation, particleCount: physicsParticleCount)
         }
         let tGenerate = CACurrentMediaTime()
 
@@ -409,7 +651,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         let validatedRopes = level.ropes.filter { rope in
             guard rope.startHole >= 0 && rope.startHole <= maxValidIndex else { return false }
             guard rope.endHole >= 0 && rope.endHole <= maxValidIndex else { return false }
-            return rope.startHole != rope.endHole
+            // Rescue mode: ropes have startHole == endHole (only top end is pinned)
+            if !level.isRescueMode {
+                guard rope.startHole != rope.endHole else { return false }
+            }
+            return true
         }
 
         holePositions = levelHoles
@@ -426,39 +672,38 @@ final class Renderer: NSObject, MTKViewDelegate {
             RopeEndpoints(startHole: rope.startHole, endHole: rope.endHole, color: rope.color.simd, radius: rope.radius, crossSection: rope.crossSection)
         }
 
-        let ropeConfigs = ropes.map { rope in
-            (startHole: rope.startHole, endHole: rope.endHole, color: rope.color)
-        }
-        let hookDefs: [TopologyEngine.HookDefinition]? = level.hooks.flatMap { jsonHooks in
-            jsonHooks.compactMap { hook -> TopologyEngine.HookDefinition? in
-                guard let ropeAIdx = Self.resolveRopeRef(hook.ropeA, hooks: jsonHooks),
-                      let ropeBIdx = Self.resolveRopeRef(hook.ropeB, hooks: jsonHooks) else {
-                    Self.logger.warning("Failed to resolve hook rope references")
-                    return nil
-                }
-                return TopologyEngine.HookDefinition(
-                    ropeA: ropeAIdx,
-                    ropeB: ropeBIdx,
-                    N: hook.N,
-                    ropeAStartIsOver: hook.ropeAStartIsOver
-                )
-            }
-        }
-        topology = TopologyEngine(holePositions: levelHoles, ropeConfigs: ropeConfigs, hookDefinitions: hookDefs)
         let tTopology = CACurrentMediaTime()
 
         let sim = VerletSimulator(holePositions: levelHoles, holeElevations: levelHoleElevations, holeRadius: levelHoleRadius, boards: boards)
         sim.gravity = physicsGravity
         sim.damping = physicsDamping
         sim.constraintIterations = physicsConstraintIterations
+        sim.broadphaseRebuildInterval = physicsBroadphaseInterval
         sim.particleCount = physicsParticleCount
         sim.settleSteps = physicsSettleSteps
         sim.liftHeight = physicsLiftHeight
         sim.ropeTension = physicsRopeTension
         sim.bendCompliance = physicsBendCompliance
         sim.bendVelocityCoupling = physicsBendVelocityCoupling
+        sim.frictionCoefficient = physicsFriction
+        sim.collisionResponse = physicsCollisionResponse
+        sim.zSeparationStrength = physicsZSeparation
+        sim.frictionDampingRatio = physicsFrictionDampingRatio
+        sim.maxFrictionCap = physicsMaxFrictionCap
+        sim.boardFrictionRatio = physicsBoardFrictionRatio
+        sim.twistStiffness = physicsTwistStiffness
+        sim.twistDamping = physicsTwistDamping
+        sim.gravityTorqueStrength = physicsGravityTorque
+        sim.dragPickupDuration = physicsDragPickupDuration
+        sim.dragMinSubsteps = physicsDragMinSubsteps
+        sim.fadeOutSpeed = physicsFadeOutSpeed
+        sim.lowerAnimDuration = physicsLowerAnimDuration
+        sim.idleTimeout = physicsIdleTimeout
         sim.stretchThinning = stretchThinning
         sim.squareCrossSection = squareCrossSection
+        sim.padMode = padMode
+        sim.padHeight = shaderParams.padHeight
+        sim.holeRadiusScale = holeRadiusScale
 
         let simRopeConfigs = ropes.map { rope in
             VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius, crossSection: rope.crossSection)
@@ -466,7 +711,10 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         let simActions: [VerletSimulator.LevelAction] = level.actions?.compactMap { action in
             guard let actionType = VerletSimulator.LevelAction.ActionType(rawValue: action.type) else { return nil }
-            return VerletSimulator.LevelAction(type: actionType, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
+            var la = VerletSimulator.LevelAction(type: actionType, ropeIndex: action.ropeIndex, endIndex: action.endIndex, holeIndex: action.holeIndex)
+            la.ropeIndex2 = action.ropeIndex2 ?? 0
+            la.endIndex2 = action.endIndex2 ?? 0
+            return la
         } ?? []
 
         // Tension mode setup
@@ -501,6 +749,21 @@ final class Renderer: NSObject, MTKViewDelegate {
             targetRenderInfos = []
         }
 
+        // Braid mode setup
+        isBraidMode = level.isBraidMode
+        braidLevelCompleted = false
+        if isBraidMode, let targets = level.braidTargets {
+            braidTargets = targets
+            braidMinCrossings = level.braidMinCrossings ?? 1
+            braidStrandCount = level.ropes.count
+            braidBottomHoleStart = braidStrandCount // bottom holes start after top holes
+        } else {
+            braidTargets = []
+            braidMinCrossings = 0
+            braidStrandCount = 0
+            braidBottomHoleStart = 0
+        }
+
         // Rail mode setup
         isRailMode = level.isRailMode
         railLevelCompleted = false
@@ -527,8 +790,40 @@ final class Renderer: NSObject, MTKViewDelegate {
             stationRenderInfos = []
         }
 
+        // Rescue mode setup
+        isRescueMode = level.isRescueMode
+        rescueLevelCompleted = false
+        rescueBreakTimer = 0
+        rescueRopesDetached = false
+        sim.isRescueMode = isRescueMode
+
+        let simParticles: [[SIMD3<Float>]]? = level.ropeParticles.map { ropes in
+            ropes.map { particles in particles.map { $0.simd3 } }
+        }
+
         t0 = CACurrentMediaTime()
-        sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions)
+        if let snapshot = postInitBandsSnapshot, snapshot.levelId == levelId {
+            // Restore from snapshot — skip slowInit entirely
+            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions.filter { $0.type == .pin }, ropeParticles: simParticles)
+            sim.bands = snapshot.bands
+            pendingInitDrags = []
+        } else if slowInitVisualization {
+            // Split actions: run pins immediately, queue drags for per-frame replay
+            let pinActions = simActions.filter { $0.type == .pin }
+            let dragActions = simActions.filter { $0.type == .drag || $0.type == .swap }
+            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: pinActions, ropeParticles: simParticles)
+            pendingInitDrags = dragActions
+        } else {
+            sim.initializeLevel(ropeConfigs: simRopeConfigs, actions: simActions, ropeParticles: simParticles)
+            pendingInitDrags = []
+        }
+        pendingBraidDrags = []
+        braidRemainingCrossings = 0
+
+        // Rescue mode: initialize platform after bands are set up
+        if isRescueMode, let platformDef = level.platform {
+            sim.initializePlatform(platformDef)
+        }
 
         let tPhysics = CACurrentMediaTime()
         self.simulator = sim
@@ -567,13 +862,18 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let aspect = Float(lastViewSize.width / max(1, lastViewSize.height))
-        let maxElev = holeElevations.max() ?? 0
-        camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        if isRescueMode {
+            setupRescueCamera(aspect: aspect)
+        } else {
+            let maxElev = holeElevations.max() ?? 0
+            camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        }
         cameraBaseOrthoHalfHeight = camera.orthoHalfHeight
         camera.orthoHalfHeight = cameraBaseOrthoHalfHeight / cameraZoomScale
 
         let tCamera = CACurrentMediaTime()
         bakeWoodTexture()
+        bakeHoleMaskTexture()
         bakeBoardWoodVolumeTexture()
         let tWood = CACurrentMediaTime()
 
@@ -585,6 +885,17 @@ final class Renderer: NSObject, MTKViewDelegate {
             TOTAL=\(ms(loadStart, tWood))ms
             """)
         levelLoaded = true
+
+        // Auto-drag test: after level 998 loads, start dragging rope 1 end across rope 0
+        if levelId == 998 {
+            autoDragActive = true
+            autoDragStep = 0
+            autoDragTotalSteps = 18000  // 30x slower
+            autoDragBand = 1       // blue rope (under)
+            autoDragEndIdx = 1
+            autoDragStart = holePositions[3]  // (0.25, 0.4)
+            autoDragEnd = SIMD2<Float>(-7.75, -12.6)  // ~x30 stretch through red rope
+        }
     }
 
     /// Resolves a HookRopeRef to a rope index.
@@ -613,4 +924,64 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
     }
 
+    func autoDragCountCrossings(_ sim: VerletSimulator) -> Int {
+        guard sim.bands.count >= 2 else { return 0 }
+        let posA = sim.bands[0].positions
+        let posB = sim.bands[1].positions
+        let skip = 3
+        var count = 0
+        for si in skip..<max(skip, posA.count-1-skip) {
+            let a0 = SIMD2<Float>(posA[si].x, posA[si].y)
+            let a1 = SIMD2<Float>(posA[si+1].x, posA[si+1].y)
+            for sj in skip..<max(skip, posB.count-1-skip) {
+                let b0 = SIMD2<Float>(posB[sj].x, posB[sj].y)
+                let b1 = SIMD2<Float>(posB[sj+1].x, posB[sj+1].y)
+                let d1 = a1 - a0, d2 = b1 - b0
+                let cross = d1.x * d2.y - d1.y * d2.x
+                if abs(cross) < 1e-9 { continue }
+                let d = b0 - a0
+                let t = (d.x * d2.y - d.y * d2.x) / cross
+                let u = (d.x * d1.y - d.y * d1.x) / cross
+                if t > 1e-6 && t < (1-1e-6) && u > 1e-6 && u < (1-1e-6) { count += 1 }
+            }
+        }
+        return count
+    }
+
+    private static func makeTunnelingTestLevel() -> LevelDefinition {
+        typealias V = LevelDefinition.Vec2
+        typealias C = LevelDefinition.Color
+        typealias R = LevelDefinition.Rope
+        typealias A = LevelDefinition.Action
+        let particlesPerRope = 15
+        // Rope 0 (red): diagonal \  — pinned first, so it lies ON TOP
+        // Rope 1 (blue): diagonal / — pinned second + dragged across, so it goes UNDER
+        return LevelDefinition(
+            mode: nil, id: 998, holeRadius: 0.08, particlesPerRope: particlesPerRope,
+            holes: [
+                V(xPosition: -0.4, yPosition:  0.25),  // 0
+                V(xPosition:  0.4, yPosition: -0.25),  // 1
+                V(xPosition: -0.25, yPosition: -0.4),  // 2
+                V(xPosition:  0.25, yPosition:  0.4),  // 3
+            ],
+            ropes: [
+                R(startHole: 0, endHole: 1, color: C(redChannel: 0.9, greenChannel: 0.2, blueChannel: 0.2), radius: 0.04),
+                R(startHole: 2, endHole: 3, color: C(redChannel: 0.2, greenChannel: 0.4, blueChannel: 0.9), radius: 0.04),
+            ],
+            hooks: nil,
+            actions: [
+                A(type: "pin", ropeIndex: 1, endIndex: 0, holeIndex: 2),
+                A(type: "pin", ropeIndex: 1, endIndex: 1, holeIndex: 3),
+                A(type: "pin", ropeIndex: 0, endIndex: 0, holeIndex: 0),
+                A(type: "pin", ropeIndex: 0, endIndex: 1, holeIndex: 1),
+            ],
+            boards: nil, weights: nil, targets: nil, rails: nil, carts: nil, stations: nil)
+    }
+
+    func applyRopePalette(_ palette: [SIMD3<Float>]) {
+        guard !palette.isEmpty else { return }
+        for i in ropes.indices {
+            ropes[i].color = palette[i % palette.count]
+        }
+    }
 }

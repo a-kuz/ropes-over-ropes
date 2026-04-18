@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "UzlsFour"
+rootProject.name = "Strain"
 include(":app")

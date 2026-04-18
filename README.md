@@ -1,8 +1,8 @@
-# UzlsFour
+# Strain
 
 iOS-игра-головоломка про распутывание резинок между отверстиями на доске.
 
-![UzlsFour Album](docs/images/album.png)
+![Strain Album](docs/images/album.png)
 
 ## Что это
 

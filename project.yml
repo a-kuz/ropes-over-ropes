@@ -1,4 +1,4 @@
-name: UzlsFour
+name: Strain
 options:
   developmentLanguage: en
   generateEmptyDirectories: true
@@ -6,8 +6,8 @@ settings:
   base:
     SDKROOT: auto
     SUPPORTED_PLATFORMS: "iphoneos iphonesimulator macosx"
-    IPHONEOS_DEPLOYMENT_TARGET: "17.0"
-    MACOSX_DEPLOYMENT_TARGET: "14.0"
+    IPHONEOS_DEPLOYMENT_TARGET: "26.0"
+    MACOSX_DEPLOYMENT_TARGET: "26.0"
   configs:
     Debug:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
@@ -17,7 +17,7 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
       SWIFT_COMPILATION_MODE: wholemodule
 targets:
-  UzlsFour26:
+  Strain:
     type: application
     platform: iOS
     deploymentTarget:
@@ -30,11 +30,11 @@ targets:
       base:
         DEVELOPMENT_TEAM: NW2CSMF97Y
         CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: ""
         PRODUCT_BUNDLE_IDENTIFIER: com.uzls.four
         MARKETING_VERSION: 1.0.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 6.0
+        PRODUCT_MODULE_NAME: Strain
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -48,32 +48,31 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         UIFileSharingEnabled: YES
         LSSupportsOpeningDocumentsInPlace: YES
-  UzlsFourTests:
+  StrainTests:
     type: bundle.unit-test
-    platform: [iOS, macOS]
+    platform: iOS
     deploymentTarget:
-      iOS: "17.0"
-      macOS: "14.0"
+      iOS: "26.0"
     sources:
       - path: Tests
-    dependencies:
-      - target: UzlsFour26
+      - path: Game
     settings:
       base:
         SWIFT_VERSION: 6.0
         GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: ""
+        BUNDLE_LOADER: ""
 schemes:
-  UzlsFour26:
+  Strain:
     build:
       targets:
-        UzlsFour26: all
+        Strain: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - UzlsFourTests_iOS
-        - UzlsFourTests_macOS
+        - StrainTests
     profile:
       config: Release
     analyze:

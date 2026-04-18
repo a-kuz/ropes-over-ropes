@@ -110,7 +110,11 @@ extension Renderer {
         descriptor.vertexFunction = library.makeFunction(name: "ropeVertex")
         descriptor.fragmentFunction = library.makeFunction(name: "ropeFragment")
         descriptor.colorAttachments[0].pixelFormat = .rgba16Float
-        descriptor.colorAttachments[0].isBlendingEnabled = false
+        descriptor.colorAttachments[0].isBlendingEnabled = true
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        descriptor.colorAttachments[0].sourceAlphaBlendFactor = .sourceAlpha
+        descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
         descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
         descriptor.vertexDescriptor = makeRopeVertexDescriptor()
@@ -227,7 +231,38 @@ extension Renderer {
         descriptor.attributes[4].format = .float4
         descriptor.attributes[4].offset = MemoryLayout<RopeVertex>.offset(of: \.params) ?? 0
         descriptor.attributes[4].bufferIndex = 0
+        descriptor.attributes[5].format = .float
+        descriptor.attributes[5].offset = MemoryLayout<RopeVertex>.offset(of: \.ropeSeed) ?? 0
+        descriptor.attributes[5].bufferIndex = 0
         descriptor.layouts[0].stride = MemoryLayout<RopeVertex>.stride
+        return descriptor
+    }
+
+    static func makeDebug2DPipeline(device: MTLDevice, view: MTKView, library: MTLLibrary) -> MTLRenderPipelineState {
+        let descriptor = MTLRenderPipelineDescriptor()
+        descriptor.vertexFunction = library.makeFunction(name: "debug2DVertex")
+        descriptor.fragmentFunction = library.makeFunction(name: "debug2DFragment")
+        descriptor.colorAttachments[0].pixelFormat = view.colorPixelFormat
+        descriptor.colorAttachments[0].isBlendingEnabled = true
+        descriptor.colorAttachments[0].sourceRGBBlendFactor = .sourceAlpha
+        descriptor.colorAttachments[0].destinationRGBBlendFactor = .oneMinusSourceAlpha
+        descriptor.colorAttachments[0].sourceAlphaBlendFactor = .one
+        descriptor.colorAttachments[0].destinationAlphaBlendFactor = .oneMinusSourceAlpha
+        descriptor.depthAttachmentPixelFormat = view.depthStencilPixelFormat
+        descriptor.stencilAttachmentPixelFormat = view.depthStencilPixelFormat
+        descriptor.vertexDescriptor = makeDebug2DVertexDescriptor()
+        return makePipeline(device: device, descriptor: descriptor)
+    }
+
+    static func makeDebug2DVertexDescriptor() -> MTLVertexDescriptor {
+        let descriptor = MTLVertexDescriptor()
+        descriptor.attributes[0].format = .float2
+        descriptor.attributes[0].offset = 0
+        descriptor.attributes[0].bufferIndex = 0
+        descriptor.attributes[1].format = .float4
+        descriptor.attributes[1].offset = MemoryLayout<Debug2DVertexData>.offset(of: \.color)!
+        descriptor.attributes[1].bufferIndex = 0
+        descriptor.layouts[0].stride = MemoryLayout<Debug2DVertexData>.stride
         return descriptor
     }
 
@@ -243,8 +278,15 @@ extension Renderer {
         return descriptor
     }
 
-    static func buildHoleMeshBuffers(device: MTLDevice, segments: Int, square: Bool = false, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
-        let mesh = square ? HoleMeshBuilder.buildSquare() : HoleMeshBuilder.build(segments: segments)
+    static func buildHoleMeshBuffers(device: MTLDevice, segments: Int, square: Bool = false, padMode: Bool = false, padHeight: Float = 0.18, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
+        let mesh: HoleMesh
+        if padMode {
+            mesh = HoleMeshBuilder.buildPad(segments: segments, height: padHeight)
+        } else if square {
+            mesh = HoleMeshBuilder.buildSquare()
+        } else {
+            mesh = HoleMeshBuilder.build(segments: segments)
+        }
         indexCount = mesh.indices.count
         vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
         indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])

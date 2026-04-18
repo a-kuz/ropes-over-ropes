@@ -35,9 +35,16 @@ struct FrameUniforms {
     float4 wormParams3;
     float4 wormParams4;
     float4 ropeMatParams4;
+    float4 ropeMatParams5;
+    float4 ropeMatParams6;
+    float4 ropeMatParams7;
+    float4 ropeMatParams8;
+    float4 padParams1;   // r, g, b, metallic
+    float4 padParams2;   // roughness, ropeTint, height, unused
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
+static float tableShadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
 
 static float3 woodSolidTexture(float2 worldXY, float seed) {
     float seedAngle = seed * 2.399;
@@ -216,11 +223,9 @@ static float3 gradientTexture(float2 worldXY, float seed) {
 
 static float3 woodTexture(float2 uv, float2 worldXY, float seed) {
     float style = fract(seed * 0.3819);
-    if (style < 0.20) {
+    if (style < 0.25) {
         return woodSolidTexture(worldXY, seed);
-    } else if (style < 0.40) {
-        return plankWoodTexture(worldXY, seed);
-    } else if (style < 0.60) {
+    } else if (style < 0.50) {
         return gradientTexture(worldXY, seed);
     } else {
         return otavioWoodTexture(worldXY, seed);
@@ -277,7 +282,8 @@ static float3 celHoleShading(float3 baseColor, float3 n, float3 l, int levels, f
 
 static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
                         float roughness, float taut, float vCoord, float cartoonMode, int cartoonLevels,
-                        float4 matP, float4 matP2, float stretchGloss, float stretchSpec) {
+                        float4 matP, float4 matP2, float stretchGloss, float stretchSpec,
+                        float4 matP2Extra) {
     float matteAmount = matP.x;
     float glossAmount = matP.y;
     float diffuseWrap = matP.z;
@@ -291,9 +297,10 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
     float nh = saturate(dot(n, h));
     float vh = saturate(dot(v, h));
 
-    float radial = abs(vCoord - 0.5) * 2.0;
-    float coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount);
-    float edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount);
+    float coreDarkenAmount = matP2Extra.w;
+    float radial = 1.0 - nv;
+    float coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount) * coreDarkenAmount;
+    float edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount) * coreDarkenAmount;
     float3 albedo = baseColor * coreDarken + float3(edgeBrighten);
 
     float grey = dot(albedo, float3(0.299, 0.587, 0.114));
@@ -302,12 +309,14 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
     float wrapDiff = saturate((nl + diffuseWrap) / (1.0 + diffuseWrap));
     if (cartoonMode > 0.5) wrapDiff = toonStep(wrapDiff, cartoonLevels);
 
-    float sssBackNL = saturate(dot(-n, l));
-    float sssBackWrap = saturate((sssBackNL + 0.5) / 1.5);
-    float sssForwardWrap = saturate((-nl + 0.8) / 1.8);
-    float sssViewEdge = pow(1.0 - nv, 2.0);
-    float sssContrib = (sssBackWrap * 0.5 + sssForwardWrap * 0.35 + sssViewEdge * 0.15) * subsurface;
-    float3 sssTint = albedo * float3(1.25, 0.85, 0.7);
+    float opticalThickness = sqrt(saturate(1.0 - radial * radial));
+    float opticalDepth = opticalThickness * mix(3.4, 2.1, taut);
+    float transmittance = exp2(-opticalDepth);
+    float sssBack = pow(saturate(dot(-n, l)), 1.25) * (0.35 + 0.65 * transmittance);
+    float sssWrap = pow(saturate(1.0 - nl), 1.8) * transmittance;
+    float sssEdge = pow(1.0 - nv, 2.5) * (0.2 + 0.8 * transmittance);
+    float sssContrib = (sssBack * 0.75 + sssWrap * 0.4 + sssEdge * 0.25) * subsurface;
+    float3 sssTint = mix(albedo, albedo * float3(1.45, 0.78, 0.58), 0.65);
 
     float ambientBase = mix(0.20, 0.45, matteAmount);
     float3 diff = albedo * (ambientBase + (1.0 - ambientBase) * wrapDiff) + sssTint * sssContrib;
@@ -344,6 +353,7 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
 
 struct HoleInstance {
     float4 position_radius;
+    float4 tintColor;
 };
 
 struct SceneVSOut {
@@ -430,11 +440,10 @@ kernel void bakeBoardWoodVolumeKernel(texture3d<float, access::write> dst [[text
 
 fragment TableOut tableFragment(VSOut in [[stage_in]],
                               constant FrameUniforms& frame [[buffer(1)]],
-                              constant HoleCountBuf& holeCounts [[buffer(3)]],
-                              const device HoleInstance* holes [[buffer(4)]],
                               depth2d<float> shadowMap [[texture(2)]],
-                              texture2d<float> woodTex [[texture(3)]]) {
-    constexpr sampler woodSampler(address::clamp_to_edge, filter::linear);
+                              texture2d<float> woodTex [[texture(3)]],
+                              texture2d<float> holeMaskTex [[texture(4)]]) {
+    constexpr sampler woodSampler(address::clamp_to_edge, filter::nearest);
 
     float2 uv = in.uv;
     float2 ndc = uv * 2.0 - 1.0;
@@ -452,18 +461,10 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
     float4 clipPos = frame.viewProj * float4(worldPos, 1.0);
     float tableDepth = clipPos.z / clipPos.w + 0.0004;
 
-    float squareHoles = frame.tableParams2.w;
-    for (uint i = 0; i < holeCounts.count; i++) {
-        float holeElev = holes[i].position_radius.z;
-        if (holeElev > 0.01) continue;
-        float2 holeCenter = holes[i].position_radius.xy;
-        float holeR = holes[i].position_radius.w * 0.76;
-        float2 d = abs(worldXY - holeCenter);
-        float dist = squareHoles > 0.5 ? max(d.x, d.y) : length(worldXY - holeCenter);
-        if (dist < holeR) {
-            tableDepth = 1.0;
-            break;
-        }
+    float2 holeUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
+    float holeMask = holeMaskTex.sample(woodSampler, holeUV).r;
+    if (holeMask > 0.5) {
+        tableDepth = 1.0;
     }
 
     float3 worldN = float3(0.0, 0.0, 1.0);
@@ -471,15 +472,8 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
     float tableStyle = frame.tableParams.x;
     float3 baseColor;
     if (tableStyle < 0.5) {
-        if (woodTex.get_width() > 1) {
-            float2 woodUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
-            baseColor = woodTex.sample(woodSampler, woodUV).rgb;
-        } else {
-            float levelSeed = frame.timeDrag.z;
-            baseColor = woodTexture(uv, worldXY, levelSeed);
-        }
-
-        baseColor = saturate(baseColor);
+        float2 woodUV = (worldXY - frame.woodBoundsMin.xy) / (frame.woodBoundsMax.xy - frame.woodBoundsMin.xy);
+        baseColor = woodTex.sample(woodSampler, woodUV).rgb;
     } else if (tableStyle < 1.5) {
         float3 c1 = frame.tableParams.yzw;
         float3 c2 = frame.tableParams2.xyz;
@@ -524,7 +518,7 @@ fragment TableOut tableFragment(VSOut in [[stage_in]],
 
         float shadow = 1.0;
         if (shadowMap.get_width() > 0) {
-            shadow = shadowVisibility(worldPos, worldN, frame, shadowMap);
+            shadow = tableShadowVisibility(worldPos, worldN, frame, shadowMap);
         }
         shadow = pow(shadow, 2.2);
         float shadowDark = frame.lightingParams.y;
@@ -551,6 +545,8 @@ struct HoleOut {
     float3 worldPos;
     float highlight;
     float holeId;
+    float localZ;
+    float4 tintColor;
 };
 
 vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
@@ -573,6 +569,8 @@ vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
     o.normal = normalize(vertices[vid].normal);
     o.highlight = isHighlight;
     o.holeId = float(iid);
+    o.localZ = vertices[vid].position.z;
+    o.tintColor = inst.tintColor;
     return o;
 }
 
@@ -583,15 +581,50 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
 
-    float3 baseCol = float3(0.12, 0.13, 0.15);
-    float3 topCol = float3(0.18, 0.19, 0.22);
-    float specPower = 120.0;
-    float specStrength = 0.55;
+    float isPadMode = frame.woodBoundsMax.w;
 
-    float3 col = mix(baseCol, topCol, smoothstep(0.15, 0.75, n.z));
-    float3 tint = frame.holeTint.xyz;
-    float tintAmt = frame.holeTint.w;
-    col = mix(col, col * tint, tintAmt);
+    float depthFade = saturate(-in.localZ * 1.2);
+    float metalMask = 1.0 - depthFade * depthFade;
+
+    float metallic;
+    float roughness;
+    float3 col;
+
+    if (isPadMode > 0.5) {
+        // Pad mode: tunable rubber material
+        float3 padCol = frame.padParams1.xyz;
+        metallic = frame.padParams1.w;
+        roughness = frame.padParams2.x;
+        float ropeTintStr = frame.padParams2.y;
+        float3 darkCol = padCol * 0.65;
+        col = mix(darkCol, padCol, smoothstep(0.0, 0.6, n.z));
+
+        float perHoleTintAmt = in.tintColor.w;
+        if (perHoleTintAmt > 0.001) {
+            float3 ropeCol = in.tintColor.xyz;
+            col = mix(col, ropeCol * 0.6, perHoleTintAmt * ropeTintStr);
+        }
+    } else {
+        // Standard hole: metallic chrome
+        metallic = 0.85;
+        roughness = 0.28;
+        float3 baseCol = float3(0.75, 0.76, 0.78);
+        float3 darkCol = float3(0.45, 0.46, 0.50);
+        col = mix(darkCol, baseCol, smoothstep(0.1, 0.8, n.z));
+        col *= metalMask;
+
+        float perHoleTintAmt = in.tintColor.w;
+        if (perHoleTintAmt > 0.001) {
+            float3 ropeCol = in.tintColor.xyz;
+            col = mix(col, ropeCol, perHoleTintAmt * 0.5);
+        }
+    }
+
+    if (isPadMode < 0.5) {
+        float3 tint = frame.holeTint.xyz;
+        float tintAmt = frame.holeTint.w;
+        col = mix(col, col * tint, tintAmt);
+    }
 
     if (in.highlight > 0.5) {
         float3 hlCol = float3(0.55, 0.85, 1.0);
@@ -610,10 +643,28 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
         float3 h = normalize(l + v);
         float ndh = saturate(dot(n, h));
         float nv = saturate(dot(n, v));
-        float fresnel = pow(1.0 - nv, 4.0);
-        float spec = pow(ndh, specPower) * specStrength * (0.3 + 0.7 * fresnel);
-        float3 specCol = mix(col, float3(1.0), 0.5) * spec * lightI;
-        lit = col * (0.22 + 0.78 * ndl) * lightI + specCol;
+
+        float alpha = roughness * roughness;
+        float alpha2 = alpha * alpha;
+        float denom = ndh * ndh * (alpha2 - 1.0) + 1.0;
+        float D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+        float k = (roughness + 1.0) * (roughness + 1.0) / 8.0;
+        float Gl = ndl / (ndl * (1.0 - k) + k + 1e-5);
+        float Gv = nv / (nv * (1.0 - k) + k + 1e-5);
+        float G = Gl * Gv;
+
+        float3 F0 = mix(float3(0.04), col, metallic);
+        float3 F = F0 + (1.0 - F0) * pow(1.0 - saturate(dot(h, v)), 5.0);
+
+        float3 spec = D * G * F / (4.0 * max(ndl, 0.001) * max(nv, 0.001) + 1e-5);
+        float3 diffuse = col * (1.0 - metallic) * (1.0 - F) / 3.14159265;
+
+        lit = (diffuse + spec) * ndl * lightI;
+        lit += col * 0.08;
+
+        float rimPow = pow(1.0 - nv, 5.0);
+        float rimMask = (isPadMode > 0.5) ? 1.0 : metalMask;
+        lit += F0 * rimPow * 0.4 * lightI * rimMask;
 
         float shadow = 1.0;
         if (shadowMap.get_width() > 0) {
@@ -637,6 +688,7 @@ struct RopeIn {
     float3 color [[attribute(2)]];
     float2 uv [[attribute(3)]];
     float4 params [[attribute(4)]];
+    float ropeSeed [[attribute(5)]];
 };
 
 struct RopeOut {
@@ -646,7 +698,26 @@ struct RopeOut {
     float3 worldPos;
     float2 uv;
     float4 params;
+    float ropeSeed;
 };
+
+static float crackNoise1(float x) {
+    return fract(sin(x * 12.9898 + 78.233) * 43758.5453);
+}
+
+static float crackMask(float2 uv, float amount, float width) {
+    float freq = mix(7.0, 34.0, saturate(amount));
+    float segX = floor(uv.x * freq * 0.55);
+    float angularOffset = crackNoise1(segX * 5.7 + 3.1);
+    float ridgePhase = sin(uv.x * freq * 6.2831853 + sin(uv.x * 13.7) * 1.9);
+    float ridgeShift = ridgePhase * (0.03 + amount * 0.07);
+    float center = abs(fract(uv.y - angularOffset + ridgeShift) - 0.5) * 2.0;
+    float inner = smoothstep(width, max(0.001, width * 0.22), center);
+    float shard = crackNoise1(segX + floor(uv.y * 6.0) * 17.0 + 1.0);
+    float gate = step(1.0 - amount * 0.9, shard);
+    float endFade = smoothstep(0.03, 0.12, uv.x) * smoothstep(0.03, 0.12, 1.0 - uv.x);
+    return inner * gate * endFade;
+}
 
 vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
                           constant FrameUniforms& frame [[buffer(1)]]) {
@@ -656,13 +727,13 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     float dragActive = frame.timeDrag.w;
     float u = in.uv.x;
     float pinch = in.params.y;
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
 
     float w = sin(u * 3.14159265);
     w = w * w;
 
     float3 displaced;
-    if (isWorm > 0.5) {
+    if (styleMode > 0.5 && styleMode < 1.5) {
         float crawlSpeed = frame.wormParams4.x;
         float crawlAmp = frame.wormParams4.y;
         float sideAmpP = frame.wormParams4.z;
@@ -674,9 +745,17 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
         sideDir = normalize(sideDir);
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
-        float amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
-        float wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
-        displaced = in.position + normalize(in.normal) * (wave * amp);
+        displaced = in.position;
+    }
+
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    if (cracksEnabled && styleMode < 0.5) {
+        float crackAmount = saturate(frame.ropeMatParams6.y);
+        float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+        float crackDepth = saturate(frame.ropeMatParams6.w);
+        float cMask = crackMask(in.uv, crackAmount, crackWidth);
+        float open = cMask * crackDepth * (0.012 + 0.028 * saturate(in.params.x));
+        displaced -= normalize(in.normal) * open;
     }
 
     o.worldPos = displaced;
@@ -685,6 +764,7 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     o.color = in.color;
     o.uv = in.uv;
     o.params = in.params;
+    o.ropeSeed = in.ropeSeed;
     return o;
 }
 
@@ -767,24 +847,86 @@ static float3 wormShading(float3 baseColor, float3 n, float3 l, float3 v, float3
     return c;
 }
 
+static float3 chainShading(float3 baseColor, float3 n, float3 l, float3 v, float3 worldPos,
+                           float2 uv, constant FrameUniforms& frame) {
+    float nl = saturate(dot(n, l));
+    float nv = saturate(dot(n, v));
+    float3 h = normalize(l + v);
+    float nh = saturate(dot(n, h));
+    float vh = saturate(dot(v, h));
+
+    float3 metalColor = baseColor * 0.7 + float3(0.3);
+
+    float wrapDiff = saturate((nl + 0.15) / 1.15);
+    float3 diff = metalColor * (0.08 + 0.92 * wrapDiff);
+
+    float rough = 0.28;
+    float alpha = rough * rough;
+    float alpha2 = alpha * alpha;
+    float denom = nh * nh * (alpha2 - 1.0) + 1.0;
+    float D = alpha2 / (3.14159265 * denom * denom + 1e-5);
+    float k = (rough + 1.0) * (rough + 1.0) / 8.0;
+    float G1l = nl / (nl * (1.0 - k) + k + 1e-4);
+    float G1v = nv / (nv * (1.0 - k) + k + 1e-4);
+    float G = G1l * G1v;
+
+    float3 F0 = metalColor * 0.85 + float3(0.15);
+    float3 F = F0 + (1.0 - F0) * pow(1.0 - vh, 5.0);
+    float3 spec = D * G * F / max(4.0 * nl * nv, 0.001);
+    float3 specColor = spec * 2.5;
+
+    float fresnel = pow(1.0 - nv, 4.0);
+    float3 rim = metalColor * fresnel * 0.35;
+
+    float aniso = abs(sin(uv.y * 3.14159265 * 12.0));
+    float anisoSpec = pow(aniso, 4.0) * 0.15;
+    specColor *= (1.0 + anisoSpec);
+
+    return diff * 0.35 + specColor + rim;
+}
+
 fragment float4 ropeFragment(RopeOut in [[stage_in]],
                              constant FrameUniforms& frame [[buffer(1)]],
                              depth2d<float> shadowMap [[texture(2)]],
                              texture2d<float> noiseTex [[texture(3)]],
-                             texture2d<float> envTex [[texture(4)]]) {
+                             texture2d<float> envTex [[texture(4)]],
+                             texture2d<float> envDepthTex [[texture(5)]]) {
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float lightI = frame.lightDir_intensity.w;
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
-    float3 n = normalize(in.normal);
+    float3 n;
+    if (frame.cartoonParams.w > 0.5) {
+        float3 gn = normalize(cross(dfdx(in.worldPos), dfdy(in.worldPos)));
+        n = dot(gn, v) > 0.0 ? gn : -gn;
+    } else {
+        n = normalize(in.normal);
+    }
     float taut = saturate(in.params.x);
     float pinch = saturate(in.params.y);
     float repel = in.params.z < 0.0 ? 0.0 : saturate(in.params.z);
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
+    bool isWorm = styleMode > 0.5 && styleMode < 1.5;
+    bool isChain = styleMode > 1.5;
 
     float microBump = frame.ropeMatParams2.z;
     float contactAOStr = frame.ropeMatParams2.w;
     float liftGlowStr = frame.ropeMatParams3.x;
     float bumpScale = max(frame.ropeMatParams3.y, 0.5);
+    float bumpContrast = max(frame.ropeMatParams8.y, 0.05);
+    float bumpAniso = frame.ropeMatParams8.z;
+    bool seamEnabled = frame.ropeMatParams5.x > 0.5;
+    float seamWidth = clamp(frame.ropeMatParams5.y, 0.005, 0.3);
+    float seamDepth = saturate(frame.ropeMatParams5.z);
+    float seamDarkness = clamp(frame.ropeMatParams5.w, 0.0, 3.0);
+    float seamHighlight = saturate(frame.ropeMatParams7.x);
+    float seamCrackAmount = saturate(frame.ropeMatParams7.y);
+    float seamCrackScale = clamp(frame.ropeMatParams7.z, 2.0, 80.0);
+    bool seamRandomize = frame.ropeMatParams7.w > 0.5;
+    float seamPosition = saturate(frame.ropeMatParams8.x);
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    float crackAmount = saturate(frame.ropeMatParams6.y);
+    float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+    float crackDepth = saturate(frame.ropeMatParams6.w);
 
     float stretchDamp = 1.0 / (1.0 + taut * 2.5);
 
@@ -801,23 +943,62 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     tVec = normalize(tVec);
     float3 bVec = normalize(cross(n, tVec));
 
-    if (isWorm > 0.5) {
+    float n0c = saturate(0.5 + (n0 - 0.5) * bumpContrast);
+    float n1c = saturate(0.5 + (n1 - 0.5) * bumpContrast);
+
+    if (isChain) {
+        float chainBump = (n0c - 0.5) * 0.04;
+        n = normalize(n + tVec * chainBump);
+    } else if (isWorm) {
         float wormBumpAmp = 0.06;
         float wSegFreq = frame.wormParams3.w;
         float segBump = sin(in.uv.x * wSegFreq * 3.14159265 * 2.0);
-        n = normalize(n + tVec * segBump * wormBumpAmp + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * 0.03);
+        n = normalize(n + tVec * segBump * wormBumpAmp + (tVec * (n0c - 0.5) + bVec * (n1c - 0.5)) * 0.03);
     } else {
         float microAmp = (microBump + pinch * 0.12) * stretchDamp;
-        n = normalize(n + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * microAmp);
+        n = normalize(n + (tVec * (n0c - 0.5) * bumpAniso + bVec * (n1c - 0.5)) * microAmp);
     }
 
     float3 base = in.color;
-    float microAO = (n0 + n1 - 1.0) * microBump * stretchDamp * 3.0;
+    float microAO = (n0c + n1c - 1.0) * microBump * stretchDamp * 3.0 * saturate(bumpContrast * 0.7);
     base *= 1.0 + microAO;
     base = mix(base, base * 1.3, pinch * 0.15);
 
     float roughNoise = noiseTex.sample(noiseSampler, baseUV * 1.7 + 0.37).r;
     float rough = roughNoise + pinch * 0.06 + repel * 0.04;
+
+    float seamSeed = in.ropeSeed;
+    float seamCenter = seamRandomize ? seamSeed : seamPosition;
+    float seamV = abs(in.uv.y - seamCenter);
+    seamV = min(seamV, 1.0 - seamV);
+    float seamInner = 1.0 - smoothstep(0.0, seamWidth, seamV);
+    float seamOuter = 1.0 - smoothstep(seamWidth, seamWidth * 2.35, seamV);
+    float seamEdge = saturate(seamOuter - seamInner);
+    float seamNoiseA = noiseTex.sample(noiseSampler, float2(in.uv.x * seamCrackScale + seamSeed * 3.7, in.uv.y * 4.0 + seamSeed * 7.9)).r;
+    float seamNoiseB = noiseTex.sample(noiseSampler, float2(in.uv.x * seamCrackScale * 0.57 + 0.33 + seamSeed * 5.2, in.uv.y * 9.0 + 0.61 + seamSeed * 2.1)).r;
+    float seamNoise = seamNoiseA * 0.62 + seamNoiseB * 0.38;
+    float seamBreak = smoothstep(0.42, 0.94, seamNoise) * seamCrackAmount;
+    float seamMain = seamInner * (1.0 - seamBreak * 0.68);
+    float branchPulse = 1.0 - smoothstep(0.0, 0.26, abs(fract((in.uv.x + seamSeed * 0.37) * seamCrackScale * 0.22) - 0.5));
+    float seamBranchBand = 1.0 - smoothstep(seamWidth * 0.8, seamWidth * 3.8, seamV);
+    float seamBranches = seamBranchBand * branchPulse * seamCrackAmount * (0.4 + 0.6 * seamNoiseB);
+    if (seamEnabled && !isChain && !isWorm) {
+        float seamDarkenMask = seamMain + seamBranches * 0.45;
+        base *= 1.0 - seamDarkenMask * seamDepth * seamDarkness * 0.62;
+        rough += seamDarkenMask * seamDepth * 0.42;
+        n = normalize(n - bVec * (seamMain * 0.24 + seamBranches * 0.1) * seamDepth);
+    }
+
+    float crackInner = 0.0;
+    float crackEdge = 0.0;
+    if (cracksEnabled && !isChain && !isWorm) {
+        crackInner = crackMask(in.uv, crackAmount, crackWidth);
+        float crackOuter = crackMask(in.uv, crackAmount, min(0.48, crackWidth * 1.8));
+        crackEdge = saturate(crackOuter - crackInner);
+        base *= 1.0 - crackInner * crackDepth * 0.72;
+        rough += crackInner * crackDepth * 0.35;
+        n = normalize(n - bVec * crackInner * crackDepth * 0.18);
+    }
 
     float repelAO = smoothstep(0.0, 0.5, repel) * contactAOStr;
     float pinchAO = smoothstep(0.0, 0.3, pinch) * contactAOStr * 0.6;
@@ -855,7 +1036,17 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     }
 
     float3 c;
-    if (isWorm > 0.5) {
+    if (isChain) {
+        c = chainShading(base, n, l, v, in.worldPos, in.uv, frame) * lightI;
+
+        float shadow = 1.0;
+        if (shadowMap.get_width() > 0) {
+            shadow = shadowVisibility(in.worldPos, n, frame, shadowMap);
+        }
+        shadow = pow(shadow, 2.0);
+        float ambient = frame.lightingParams.x + 0.08;
+        c *= mix(ambient, 1.0, shadow);
+    } else if (isWorm) {
         float time = frame.timeDrag.x;
         c = wormShading(base, n, l, v, in.worldPos, in.uv, time, frame) * lightI;
         c *= contactAO;
@@ -869,11 +1060,28 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
         c *= mix(ambient, 1.0, shadow);
     } else if (cartoonMode > 0.5) {
         c = celRopeShading(in.color, normalize(in.normal), l, v, cartoonLevels, frame.cartoonParams);
+        if (seamEnabled) {
+            c *= 1.0 - (seamMain + seamBranches * 0.35) * seamDepth * seamDarkness * 0.62;
+            c += float3(0.11, 0.11, 0.11) * (seamEdge + seamBranches * 0.25) * seamDepth * seamHighlight;
+        }
+        if (cracksEnabled) {
+            c *= 1.0 - crackInner * crackDepth * 0.5;
+            c += float3(0.10, 0.10, 0.10) * crackEdge * crackDepth;
+        }
     } else {
         c = rubberPBR(base, n, l, v, rough, taut, in.uv.y, cartoonMode, cartoonLevels,
                       frame.ropeMatParams, frame.ropeMatParams2,
-                      frame.ropeMatParams3.z, frame.ropeMatParams3.w) * lightI;
+                      frame.ropeMatParams3.z, frame.ropeMatParams3.w,
+                      frame.ropeMatParams8) * lightI;
         c *= contactAO;
+        if (seamEnabled) {
+            c += float3(0.11, 0.11, 0.11) * (seamEdge + seamBranches * 0.25) * seamDepth * seamHighlight;
+            c *= 1.0 - seamMain * seamDepth * seamDarkness * 0.18;
+        }
+        if (cracksEnabled) {
+            c += float3(0.10, 0.10, 0.10) * crackEdge * crackDepth;
+            c *= 1.0 - crackInner * crackDepth * 0.28;
+        }
 
         float liftGlow = saturate(in.worldPos.z / 0.35);
         c += float3(0.03, 0.04, 0.06) * liftGlow * liftGlowStr;
@@ -889,33 +1097,93 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
         float envReflect = frame.ropeMatParams4.x;
         float subsurfaceAtten = 1.0 - frame.ropeMatParams.w * 0.7;
         float envSpread = max(0.01, frame.ropeMatParams4.z);
-        if (envReflect > 0.001 && envTex.get_width() > 1) {
+        if (envReflect > 0.001 && envTex.get_width() > 1 && envDepthTex.get_width() > 1) {
             constexpr sampler envSampler(address::clamp_to_edge, filter::linear);
-            float2 screenUV = in.position.xy / float2(envTex.get_width(), envTex.get_height());
-            float nv2 = saturate(dot(n, v));
+            float3 geomN = normalize(in.normal);
+            float nv2 = saturate(dot(geomN, v));
             float envFresnel = pow(1.0 - nv2, 2.5);
 
-            float3 r = reflect(-v, n);
-            float2 offset = r.xy * envSpread;
+            float3 r = reflect(-v, geomN);
 
-            float2 envUV = screenUV + offset;
-            float3 envSample = envTex.sample(envSampler, envUV).rgb;
+            float4 startClip = frame.viewProj * float4(in.worldPos, 1.0);
+            float3 startNDC = startClip.xyz / startClip.w;
+            float2 startUV = float2(startNDC.x * 0.5 + 0.5, 0.5 - startNDC.y * 0.5);
+
+            float3 endWorld = in.worldPos + r * envSpread;
+            float4 endClip = frame.viewProj * float4(endWorld, 1.0);
+            float3 endNDC = endClip.xyz / endClip.w;
+            float2 endUV = float2(endNDC.x * 0.5 + 0.5, 0.5 - endNDC.y * 0.5);
+
+            float2 rayDir = endUV - startUV;
+            float rayLen = length(rayDir);
+
+            bool hit = false;
+            float2 hitUV = endUV;
+            float hitFade = 1.0;
+
+            int stepCount = 16;
+            if (rayLen > 0.001) {
+                float depthStart = startNDC.z;
+                float depthEnd = endNDC.z;
+
+                for (int i = 1; i <= stepCount; i++) {
+                    float t = float(i) / float(stepCount);
+                    float2 sampleUV = startUV + rayDir * t;
+                    if (sampleUV.x < 0.0 || sampleUV.x > 1.0 || sampleUV.y < 0.0 || sampleUV.y > 1.0) break;
+
+                    float sceneDepth = envDepthTex.sample(envSampler, sampleUV).r;
+                    float rayDepth = mix(depthStart, depthEnd, t);
+
+                    if (rayDepth > sceneDepth + 0.001) {
+                        float tPrev = float(i - 1) / float(stepCount);
+                        for (int j = 0; j < 4; j++) {
+                            float tMid = (tPrev + t) * 0.5;
+                            float2 midUV = startUV + rayDir * tMid;
+                            float midScene = envDepthTex.sample(envSampler, midUV).r;
+                            float midRay = mix(depthStart, depthEnd, tMid);
+                            if (midRay > midScene + 0.001) {
+                                t = tMid;
+                            } else {
+                                tPrev = tMid;
+                            }
+                        }
+                        hitUV = startUV + rayDir * t;
+                        hitFade = 1.0;
+                        hit = true;
+                        break;
+                    }
+                }
+            }
+
+            float3 fallbackSample;
+            if (r.z < 0.0) {
+                fallbackSample = envTex.sample(envSampler, startUV).rgb;
+            } else {
+                float3 lightDir = normalize(frame.lightDir_intensity.xyz);
+                float rDotL = dot(r, lightDir);
+                float skyGrad = r.z * 0.5 + 0.5;
+                fallbackSample = mix(float3(0.08, 0.07, 0.06), float3(0.35, 0.33, 0.30), skyGrad);
+                fallbackSample += float3(0.15, 0.13, 0.10) * saturate(rDotL);
+                fallbackSample *= lightI;
+            }
+
             float envStrength = envReflect * (0.4 + 0.6 * envFresnel) * subsurfaceAtten;
+
             bool debugEnv = frame.ropeMatParams4.y > 0.5;
             if (debugEnv) {
-                c = envSample;
+                c = hit ? envTex.sample(envSampler, hitUV).rgb : fallbackSample;
             } else {
-                float3 ropeColor = in.color;
-                float3 tinted = envSample * mix(float3(1.0), ropeColor, 0.5);
-                float envLum = dot(envSample, float3(0.299, 0.587, 0.114));
-                float selfLum = dot(c, float3(0.299, 0.587, 0.114));
-                float bleedAmount = saturate(envLum - selfLum * 0.5);
-                c += tinted * envStrength * bleedAmount;
+                float3 envSample = hit ? envTex.sample(envSampler, hitUV).rgb : fallbackSample;
+                float3 tinted = envSample * mix(float3(1.0), in.color, 0.3);
+                c = mix(c, tinted, envStrength);
             }
         }
     }
 
-    return float4(c, 1.0);
+    float opacity = saturate(frame.timeDrag.y);
+    bool hasEnvPass = envTex.get_width() > 1 && envDepthTex.get_width() > 1;
+    float finalAlpha = hasEnvPass ? 1.0 : opacity;
+    return float4(c, finalAlpha);
 }
 
 struct ShadowOut {
@@ -930,12 +1198,12 @@ vertex ShadowOut ropeShadowVertex(RopeIn in [[stage_in]],
     float dragActive = frame.timeDrag.w;
     float u = in.uv.x;
     float pinch = in.params.y;
-    float isWorm = in.params.w;
+    float styleMode = in.params.w;
     float w = sin(u * 3.14159265);
     w = w * w;
 
     float3 displaced;
-    if (isWorm > 0.5) {
+    if (styleMode > 0.5 && styleMode < 1.5) {
         float crawlSpeed = frame.wormParams4.x;
         float crawlAmp = frame.wormParams4.y;
         float sideAmpP = frame.wormParams4.z;
@@ -947,9 +1215,17 @@ vertex ShadowOut ropeShadowVertex(RopeIn in [[stage_in]],
         sideDir = normalize(sideDir);
         displaced = in.position + nDir * crawlWave + sideDir * sideWave;
     } else {
-        float amp = (0.002 + 0.010 * pinch) * energy * (0.25 + 0.75 * dragActive) * w;
-        float wave = sin(u * 24.0 + time * 16.0) * 0.65 + sin(u * 11.0 - time * 9.0) * 0.35;
-        displaced = in.position + normalize(in.normal) * (wave * amp);
+        displaced = in.position;
+    }
+
+    bool cracksEnabled = frame.ropeMatParams6.x > 0.5;
+    if (cracksEnabled && styleMode < 0.5) {
+        float crackAmount = saturate(frame.ropeMatParams6.y);
+        float crackWidth = clamp(frame.ropeMatParams6.z, 0.01, 0.45);
+        float crackDepth = saturate(frame.ropeMatParams6.w);
+        float cMask = crackMask(in.uv, crackAmount, crackWidth);
+        float open = cMask * crackDepth * (0.012 + 0.028 * saturate(in.params.x));
+        displaced -= normalize(in.normal) * open;
     }
 
     o.position = frame.lightViewProj * float4(displaced, 1.0);
@@ -1154,6 +1430,22 @@ static float shadowMapSample(depth2d<float> shadowMap, float2 uv, float depthRef
     return shadowMap.sample_compare(shadowSampler, uv, depthRef);
 }
 
+static float tableShadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap) {
+    if (frame.lightingParams.w < 0.5) return 1.0;
+
+    float4 lp = frame.lightViewProj * float4(worldPos, 1.0);
+    float3 ndc = lp.xyz / max(1e-6, lp.w);
+    float2 uv = float2(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+    if (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) return 1.0;
+
+    float biasBase = frame.orthoHalfSize_shadowBias.z;
+    float ndl = saturate(dot(normalize(worldN), normalize(frame.lightDir_intensity.xyz)));
+    float bias = biasBase + (1.0 - ndl) * biasBase * 2.2;
+    float depthRef = ndc.z - bias;
+
+    return shadowMapSample(shadowMap, uv, depthRef);
+}
+
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap) {
     if (frame.lightingParams.w < 0.5) return 1.0;
 
@@ -1184,10 +1476,7 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
     }
 
     float lightSize = max(0.001, frame.lightingParams.z);
-    float nearPlane = 0.01;
-    float blockerSearchRadius = lightSize * (depthRef - nearPlane) / depthRef;
-    blockerSearchRadius *= 0.65;
-    blockerSearchRadius = clamp(blockerSearchRadius, invSize.x * 1.5, invSize.x * 10.0);
+    float blockerSearchRadius = clamp(lightSize * 0.5, invSize.x * 2.0, invSize.x * 12.0);
 
     float avgBlockerDepth = findBlocker(shadowMap, uv, depthRef, blockerSearchRadius);
 
@@ -1195,11 +1484,13 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
         return 1.0;
     }
 
-    float penumbraRadius = lightSize * (depthRef - avgBlockerDepth) / avgBlockerDepth;
-    penumbraRadius = max(0.0001, penumbraRadius);
+    // Orthographic light: penumbra = lightSize * receiverDistance (no perspective divide).
+    // Use raw ndc.z (no bias) so bias does not shrink the penumbra radius.
+    float receiverDist = max(0.0, ndc.z - avgBlockerDepth);
+    float penumbraScale = max(1.0, frame.cartoonParams.z);
+    float penumbraRadius = lightSize * receiverDist * penumbraScale;
 
-    float filterRadius = penumbraRadius * 1.4;
-    filterRadius = clamp(filterRadius, invSize.x * 3.0, invSize.x * 20.0);
+    float filterRadius = clamp(penumbraRadius, invSize.x * 1.0, invSize.x * 32.0);
 
     float shadow = pcssFilter(shadowMap, uv, depthRef, filterRadius);
 
@@ -1207,6 +1498,14 @@ static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUnif
     shadow = pow(shadow, 1.2);
 
     return shadow;
+}
+
+kernel void copyDepthKernel(depth2d<float, access::read> src [[texture(0)]],
+                            texture2d<float, access::write> dst [[texture(1)]],
+                            uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) return;
+    float d = src.read(gid);
+    dst.write(float4(d, 0.0, 0.0, 1.0), gid);
 }
 
 kernel void bloomThreshold(texture2d<float, access::read> src [[texture(0)]],
@@ -1297,12 +1596,11 @@ fragment float4 postFragment(VSOut in [[stage_in]],
                              texture2d<float> bloom [[texture(1)]],
                              depth2d<float> depthTex [[texture(2)]],
                              constant PostParams& post [[buffer(0)]]) {
-    constexpr sampler s(address::clamp_to_edge, filter::linear);
+    constexpr sampler s(address::clamp_to_edge, filter::nearest);
     float2 uv = in.uv;
     float3 c = hdr.sample(s, uv).xyz;
     float3 b = bloom.sample(s, uv).xyz;
-    c += b * post.bloomStrength;
-    float3 mapped = 1.0 - exp(-c * post.exposure);
+    float3 mapped = 1.0 - exp(-(c + b * post.bloomStrength) * post.exposure);
     mapped = pow(saturate(mapped), float3(1.0 / 2.2));
     if (post.cartoonMode > 0.5) {
         mapped = floor(mapped * 32.0 + 0.5) / 32.0;
@@ -1314,5 +1612,30 @@ fragment float4 postFragment(VSOut in [[stage_in]],
         }
     }
     return float4(mapped, 1.0);
+}
+
+// MARK: - Debug 2D Overlay
+
+struct Debug2DVertex {
+    float2 position [[attribute(0)]];
+    float4 color    [[attribute(1)]];
+};
+
+struct Debug2DOut {
+    float4 position [[position]];
+    float4 color;
+    float  pointSize [[point_size]];
+};
+
+vertex Debug2DOut debug2DVertex(Debug2DVertex in [[stage_in]]) {
+    Debug2DOut out;
+    out.position = float4(in.position, 0.0, 1.0);
+    out.color = in.color;
+    out.pointSize = 8.0;
+    return out;
+}
+
+fragment float4 debug2DFragment(Debug2DOut in [[stage_in]]) {
+    return in.color;
 }
 

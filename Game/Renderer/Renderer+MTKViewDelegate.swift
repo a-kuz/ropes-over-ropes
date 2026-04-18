@@ -7,12 +7,27 @@ extension Renderer {
         let offscreen = scaledOffscreenSize(from: size)
         resizeTextures(size: offscreen)
         let aspect = Float(size.width / max(1, size.height))
-        let maxElev = holeElevations.max() ?? 0
-        camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        if isRescueMode {
+            // Rescue mode: side/angled camera, don't let fitToHoles reset it
+            setupRescueCamera(aspect: aspect)
+        } else {
+            let maxElev = holeElevations.max() ?? 0
+            camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        }
+    }
+
+    func setupRescueCamera(aspect: Float) {
+        camera.center = SIMD3<Float>(0, 0, 0.5)  // centered on hanging platform area
+        camera.tiltAngle = 0.75         // ~43° — dramatic angle, feels close
+        camera.rotationAngle = 0.15     // slight rotation for dynamism
+        camera.orthoHalfHeight = 1.2    // tighter framing
+        camera.distance = 2.5
     }
 
     func draw(in view: MTKView) {
+        let cpuStart = CACurrentMediaTime()
         guard let drawable = view.currentDrawable else { return }
+        guard let compositeRenderPass = view.currentRenderPassDescriptor else { return }
         guard let commandBuffer = commandQueue.makeCommandBuffer() else { return }
 
         let now = CACurrentMediaTime()
@@ -43,12 +58,31 @@ extension Renderer {
 
         encodeShadowPass(commandBuffer: commandBuffer)
         encodeHDRPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth)
-        if ropeEnvReflect > 0.001, let envTex {
+        if shaderParams.ropeEnvReflect > 0.001, let envTex, let envDepthTex {
             encodeEnvBlit(commandBuffer: commandBuffer, src: hdrTex, dst: envTex)
-            encodeRopeReflectionPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth, envTexture: envTex)
+            encodeCopyDepth(commandBuffer: commandBuffer, src: sceneDepth, dst: envDepthTex)
+            encodeRopeReflectionPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth, envTexture: envTex, envDepthTexture: envDepthTex)
         }
-        encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
-        encodeCompositePass(commandBuffer: commandBuffer, view: view, hdrTexture: hdrTex, bloomTextureA: bloomA, depthTexture: sceneDepth)
+        if shaderParams.bloomEnabled && shaderParams.bloomStrength > 0.001 {
+            encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
+        }
+        buildDebug2DData()
+        encodeCompositePass(commandBuffer: commandBuffer, renderPass: compositeRenderPass, view: view, hdrTexture: hdrTex, bloomTextureA: bloomA, depthTexture: sceneDepth)
+
+        let cpuEnd = CACurrentMediaTime()
+        let cpuDuration = cpuEnd - cpuStart
+
+        commandBuffer.addCompletedHandler { [weak self] buffer in
+            let gpuDuration = buffer.gpuEndTime - buffer.gpuStartTime
+            let duration: Double
+            if gpuDuration > 0.000001 {
+                duration = max(cpuDuration, gpuDuration)
+            } else {
+                duration = cpuDuration
+            }
+            let fps = duration > 0.0001 ? 1.0 / duration : 0
+            self?.updatePotentialFPS(Float(fps))
+        }
 
         commandBuffer.present(drawable)
         commandBuffer.commit()
@@ -59,7 +93,11 @@ extension Renderer {
         renderPass.colorAttachments[0].texture = hdrTexture
         renderPass.colorAttachments[0].loadAction = .clear
         renderPass.colorAttachments[0].storeAction = .store
-        renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        if isRescueMode {
+            renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.12, alpha: 1)
+        } else {
+            renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        }
         renderPass.depthAttachment.texture = depthTexture
         renderPass.depthAttachment.loadAction = .clear
         renderPass.depthAttachment.storeAction = .store
@@ -71,26 +109,20 @@ extension Renderer {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
 
-        encoder.setRenderPipelineState(tablePipeline)
-        encoder.setDepthStencilState(depthStateScene)
-        if let frameUniforms {
-            encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+        // Skip table rendering in rescue mode
+        if !isRescueMode {
+            encoder.setRenderPipelineState(tablePipeline)
+            encoder.setDepthStencilState(depthStateScene)
+            if let frameUniforms {
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            encoder.setFragmentTexture(bakedWoodTex ?? woodDebugTex, index: 3)
+            encoder.setFragmentTexture(bakedHoleMaskTex ?? holeMaskDisabledTex, index: 4)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
-        if let holeInstances {
-            var holeCount: UInt32 = UInt32(holeInstances.length / MemoryLayout<HoleInstance>.stride)
-            encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
-            encoder.setFragmentBuffer(holeInstances, offset: 0, index: 4)
-        } else {
-            var holeCount: UInt32 = 0
-            encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
-        }
-        if let shadowDepthTex {
-            encoder.setFragmentTexture(shadowDepthTex, index: 2)
-        }
-        if let bakedWoodTex {
-            encoder.setFragmentTexture(bakedWoodTex, index: 3)
-        }
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         if let boardVB = boardMeshVB, let boardIB = boardMeshIB, boardMeshIndexCount > 0 {
             encoder.setDepthStencilState(depthStateScene)
@@ -133,34 +165,112 @@ extension Renderer {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: holeIndexCount, indexType: .uint16, indexBuffer: holeIB, indexBufferOffset: 0, instanceCount: instanceCount)
         }
 
+        // Draw platform (rescue mode) — uses board pipeline
+        if let platVB = platformVB, let platIB = platformIB, platformIndexCount > 0 {
+            encoder.setDepthStencilState(depthStateScene)
+            encoder.setRenderPipelineState(boardPipeline)
+            encoder.setVertexBuffer(platVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let holeInstances {
+                var holeCount: UInt32 = UInt32(holeInstances.length / MemoryLayout<HoleInstance>.stride)
+                encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
+                encoder.setFragmentBuffer(holeInstances, offset: 0, index: 4)
+            } else {
+                var holeCount: UInt32 = 0
+                encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            encoder.setFragmentTexture(bakedBoardWoodVolumeTex ?? boardWoodVolumeDisabledTex, index: 3)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: platformIndexCount, indexType: .uint32, indexBuffer: platIB, indexBufferOffset: 0)
+        }
+
         // Draw weights and targets (tension mode)
         drawWeightsAndTargets(encoder: encoder)
 
         // Draw rails, carts, stations (rail mode)
         drawRailsAndCarts(encoder: encoder)
 
-        encoder.setRenderPipelineState(ropePipeline)
-        if let ropeVB, let ropeIB, ropeIndexCount > 0 {
-            encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
-            if let frameUniforms {
-                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
-                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
-            }
-            if let shadowDepthTex {
-                encoder.setFragmentTexture(shadowDepthTex, index: 2)
-            }
-            if let noiseTexture {
-                encoder.setFragmentTexture(noiseTexture, index: 3)
-            }
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
-        }
+        // Draw ropes without env reflection (base lighting only)
+        drawRopes(encoder: encoder)
 
         encoder.endEncoding()
     }
 
+    private func drawRopes(encoder: MTLRenderCommandEncoder, envTexture: MTLTexture? = nil, envDepthTexture: MTLTexture? = nil) {
+        encoder.setRenderPipelineState(ropePipeline)
+        guard let ropeVB, let ropeIB, ropeIndexCount > 0 else { return }
+        encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
+        if let frameUniforms {
+            encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+            encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+        }
+        if let shadowDepthTex {
+            encoder.setFragmentTexture(shadowDepthTex, index: 2)
+        }
+        if let noiseTexture {
+            encoder.setFragmentTexture(noiseTexture, index: 3)
+        }
+        encoder.setFragmentTexture(envTexture ?? envDisabledTex, index: 4)
+        if let envDepthTexture {
+            encoder.setFragmentTexture(envDepthTexture, index: 5)
+        }
+        encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
+    }
+
+    /// Second rope draw: overwrites base-lit ropes with reflection-enhanced versions.
+    /// Uses loadAction=.load so the existing HDR + depth are preserved; depth=lessEqual
+    /// means the same rope geometry overwrites exactly the same pixels.
+    private func encodeRopeReflectionPass(commandBuffer: MTLCommandBuffer, hdrTexture: MTLTexture, depthTexture: MTLTexture, envTexture: MTLTexture, envDepthTexture: MTLTexture) {
+        let renderPass = MTLRenderPassDescriptor()
+        renderPass.colorAttachments[0].texture = hdrTexture
+        renderPass.colorAttachments[0].loadAction = .load
+        renderPass.colorAttachments[0].storeAction = .store
+        renderPass.depthAttachment.texture = depthTexture
+        renderPass.depthAttachment.loadAction = .load
+        renderPass.depthAttachment.storeAction = .store
+        renderPass.stencilAttachment.texture = depthTexture
+        renderPass.stencilAttachment.loadAction = .load
+        renderPass.stencilAttachment.storeAction = .dontCare
+
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
+        encoder.setDepthStencilState(depthStateScene)
+        drawRopes(encoder: encoder, envTexture: envTexture, envDepthTexture: envDepthTexture)
+        encoder.endEncoding()
+    }
+
+    private func encodeCopyDepth(commandBuffer: MTLCommandBuffer, src: MTLTexture, dst: MTLTexture) {
+        guard let encoder = commandBuffer.makeComputeCommandEncoder() else { return }
+        encoder.setComputePipelineState(copyDepthPipeline)
+        encoder.setTexture(src, index: 0)
+        encoder.setTexture(dst, index: 1)
+        let w = copyDepthPipeline.threadExecutionWidth
+        let h = copyDepthPipeline.maxTotalThreadsPerThreadgroup / w
+        let threadsPerGroup = MTLSize(width: w, height: h, depth: 1)
+        let gridSize = MTLSize(width: dst.width, height: dst.height, depth: 1)
+        encoder.dispatchThreads(gridSize, threadsPerThreadgroup: threadsPerGroup)
+        encoder.endEncoding()
+    }
+
+    func resizeShadowTexture() {
+        let shadowDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .depth32Float,
+            width: shadowMapSize,
+            height: shadowMapSize,
+            mipmapped: false
+        )
+        shadowDesc.usage = [.renderTarget, .shaderRead]
+        shadowDesc.storageMode = .private
+        shadowDepthTex = device.makeTexture(descriptor: shadowDesc)
+    }
+
     private func encodeShadowPass(commandBuffer: MTLCommandBuffer) {
         if shadowDepthTex == nil {
-            resizeTextures(size: CGSize(width: 1, height: 1))
+            resizeShadowTexture()
         }
         guard let shadowDepthTex else { return }
 
@@ -193,6 +303,16 @@ extension Renderer {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: boardMeshIndexCount, indexType: .uint32, indexBuffer: boardIB, indexBufferOffset: 0)
         }
 
+        // Platform shadow (rescue mode)
+        if let platVB = platformVB, let platIB = platformIB, platformIndexCount > 0 {
+            encoder.setRenderPipelineState(shadowBoardPipeline)
+            encoder.setVertexBuffer(platVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: platformIndexCount, indexType: .uint32, indexBuffer: platIB, indexBufferOffset: 0)
+        }
+
         if let ropeVB, let ropeIB, ropeIndexCount > 0 {
             encoder.setRenderPipelineState(shadowRopePipeline)
             encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
@@ -211,9 +331,8 @@ extension Renderer {
         encoder.endEncoding()
     }
 
-    private func encodeCompositePass(commandBuffer: MTLCommandBuffer, view: MTKView, hdrTexture: MTLTexture, bloomTextureA: MTLTexture, depthTexture: MTLTexture) {
-        guard let rpd = view.currentRenderPassDescriptor else { return }
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: rpd) else { return }
+    private func encodeCompositePass(commandBuffer: MTLCommandBuffer, renderPass: MTLRenderPassDescriptor, view: MTKView, hdrTexture: MTLTexture, bloomTextureA: MTLTexture, depthTexture: MTLTexture) {
+        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
         encoder.setRenderPipelineState(postPipeline)
         encoder.setFragmentTexture(hdrTexture, index: 0)
         encoder.setFragmentTexture(bloomTextureA, index: 1)
@@ -222,6 +341,10 @@ extension Renderer {
             encoder.setFragmentBuffer(postParamsBuffer, offset: 0, index: 0)
         }
         encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
+
+        // Debug 2D overlay (draws on top of composite)
+        encodeDebug2DOverlay(encoder: encoder, view: view)
+
         encoder.endEncoding()
     }
 
@@ -239,13 +362,22 @@ extension Renderer {
         hdrTex = device.makeTexture(descriptor: hdrDesc)
 
         let envDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .rgba16Float,
+            pixelFormat: .rgba16Float,  
             width: width,
             height: height,
             mipmapped: false
         )
         envDesc.usage = [.shaderRead, .shaderWrite]
         envTex = device.makeTexture(descriptor: envDesc)
+
+        let envDepthDesc = MTLTextureDescriptor.texture2DDescriptor(
+            pixelFormat: .r32Float,
+            width: width,
+            height: height,
+            mipmapped: false
+        )
+        envDepthDesc.usage = [.shaderRead, .shaderWrite]
+        envDepthTex = device.makeTexture(descriptor: envDepthDesc)
 
         let sceneDepthDesc = MTLTextureDescriptor.texture2DDescriptor(
             pixelFormat: .depth32Float_stencil8,
@@ -268,15 +400,7 @@ extension Renderer {
         bloomA = device.makeTexture(descriptor: bloomDesc)
         bloomB = device.makeTexture(descriptor: bloomDesc)
 
-        let shadowDesc = MTLTextureDescriptor.texture2DDescriptor(
-            pixelFormat: .depth32Float,
-            width: shadowMapSize,
-            height: shadowMapSize,
-            mipmapped: false
-        )
-        shadowDesc.usage = [.renderTarget, .shaderRead]
-        shadowDesc.storageMode = .private
-        shadowDepthTex = device.makeTexture(descriptor: shadowDesc)
+        resizeShadowTexture()
     }
 
     private func updateFrameUniforms(view: MTKView) {
@@ -284,7 +408,33 @@ extension Renderer {
         let aspect = Float(view.drawableSize.width / max(1, view.drawableSize.height))
         let viewProjection = camera.viewProj(aspect: aspect)
 
-        let lightDir = simd_normalize(lightDir)
+        let sp = shaderParams
+        #if os(iOS)
+        if let motion = motionManager.deviceMotion {
+            let g = motion.gravity
+            let raw = SIMD2<Float>(Float(g.x), Float(g.y))
+            deviceTilt += (raw - deviceTilt) * 0.4
+
+            // Map device gravity to game world: X=right, Y=up on screen, Z=into table
+            // Device gravity: x=right, y=up, z=out of screen; magnitude ~1 when still
+            // Device gravity points toward Earth (~-1 on dominant axis).
+            // gravity scalar is negative; direction * gravity = force vector.
+            // Phone flat face-up: g=(0,0,-1) → dir=(0,0,1) → force Z− (into table) ✓
+            // Phone vertical:     g=(0,-1,0) → dir=(0,1,0) → force Y− (down screen) ✓
+            let gx = Float(-g.x)
+            let gy = Float(g.y)
+            let gz = Float(-g.z)
+            let gravDir = SIMD3<Float>(gx, gy, gz)
+            let gravLen = simd_length(gravDir)
+            if gravLen > 0.01 {
+                simulator?.gravityDirection = gravDir / gravLen
+            }
+        }
+        #endif
+        let tiltOffset = SIMD3<Float>(deviceTilt.x * sp.tiltStrength, deviceTilt.y * sp.tiltStrength, 0)
+        var rawLightDir = sp.lightDir + tiltOffset
+        rawLightDir.z = max(rawLightDir.z, 0.05)
+        let lightDir = simd_normalize(rawLightDir)
         let halfH = camera.orthoHalfHeight
         let halfW = halfH * aspect
         let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)
@@ -296,35 +446,41 @@ extension Renderer {
             viewProj: viewProjection,
             invViewProj: invViewProj,
             lightViewProj: lightViewProj,
-            lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, lightIntensity),
+            lightDirIntensity: SIMD4<Float>(lightDir.x, lightDir.y, lightDir.z, sp.lightIntensity),
             ambientColor: SIMD4<Float>(0, 0, 0, Float(highlightHoleIndex)),
             cameraPos: SIMD4<Float>(camera.center.x, camera.center.y + camera.distance * sin(camera.tiltAngle), camera.center.z + camera.distance * cos(camera.tiltAngle), 1),
-            orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, shadowBias, Float(shadowType)),
+            orthoHalfSizeShadowBias: SIMD4<Float>(halfW, halfH, sp.shadowBias, Float(sp.shadowType)),
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, camera.center.x, camera.center.y),
-            timeDrag: SIMD4<Float>(time, 0, Float(currentLevelId), dragState != nil ? 1 : 0),
+            timeDrag: SIMD4<Float>(time, sp.ropeOpacity, Float(currentLevelId), dragState != nil ? 1 : 0),
             woodBoundsMin: SIMD4<Float>(woodBoundsMin.x, woodBoundsMin.y, boardWoodZMin, 0),
-            woodBoundsMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, boardWoodZMax, 0),
-            holeTint: holeTint,
-            visualParams: SIMD4<Float>(exposure, bloomStrength, cartoonShaderEnabled ? 1 : 0, Float(cartoonLevels)),
-            lightingParams: SIMD4<Float>(ambient, shadowDarkness, lightSize, shadowsEnabled ? 1 : 0),
-            tableParams: SIMD4<Float>(Float(tableStyle), tableColor1.x, tableColor1.y, tableColor1.z),
-            tableParams2: SIMD4<Float>(tableColor2.x, tableColor2.y, tableColor2.z, squareCrossSection ? 1 : 0),
-            ropeMatParams: SIMD4<Float>(ropeMatte, ropeGloss, ropeDiffuseWrap, ropeSubsurface),
-            ropeMatParams2: SIMD4<Float>(ropeEdgeLight, ropeSaturation, ropeMicroBump, ropeContactAO),
-            ropeMatParams3: SIMD4<Float>(ropeLiftGlow, ropeBumpScale, ropeStretchGloss, ropeStretchSpec),
-            cartoonParams: SIMD4<Float>(cartoonShadowBright, cartoonWrap, cartoonEdgeSmooth, 0),
-            wormParams1: SIMD4<Float>(wormGrooveDepth, wormBellyBright, wormBackDark, wormSkinNoise),
-            wormParams2: SIMD4<Float>(wormSSS, wormRoughness, wormSpecular, wormRimStrength),
-            wormParams3: SIMD4<Float>(wormEyeSize, wormPulseSpeed, wormPulseAmp, wormSegFreq),
-            wormParams4: SIMD4<Float>(wormCrawlSpeed, wormCrawlAmp, wormSideAmp, 0),
-            ropeMatParams4: SIMD4<Float>(ropeEnvReflect, ropeEnvDebug ? 1 : 0, ropeEnvSpread, Float(shadowDebugMode))
+            woodBoundsMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, boardWoodZMax, sp.padMode ? 1 : 0),
+            holeTint: sp.holeTint,
+            visualParams: SIMD4<Float>(sp.exposure, sp.bloomStrength, sp.cartoonShaderEnabled ? 1 : 0, Float(sp.cartoonLevels)),
+            lightingParams: SIMD4<Float>(sp.ambient, sp.shadowDarkness, sp.lightSize, sp.shadowsEnabled ? 1 : 0),
+            tableParams: SIMD4<Float>(Float(sp.tableStyle), sp.tableColor1.x, sp.tableColor1.y, sp.tableColor1.z),
+            tableParams2: SIMD4<Float>(sp.tableColor2.x, sp.tableColor2.y, sp.tableColor2.z, squareCrossSection ? 1 : 0),
+            ropeMatParams: SIMD4<Float>(sp.ropeMatte, sp.ropeGloss, sp.ropeDiffuseWrap, sp.ropeSubsurface),
+            ropeMatParams2: SIMD4<Float>(sp.ropeEdgeLight, sp.ropeSaturation, sp.ropeMicroBump, sp.ropeContactAO),
+            ropeMatParams3: SIMD4<Float>(sp.ropeLiftGlow, sp.ropeBumpScale, sp.ropeStretchGloss, sp.ropeStretchSpec),
+            cartoonParams: SIMD4<Float>(sp.cartoonShadowBright, sp.cartoonWrap, sp.pcssPenumbraScale, sp.ropeFlatNormals ? 1 : 0),
+            wormParams1: SIMD4<Float>(sp.wormGrooveDepth, sp.wormBellyBright, sp.wormBackDark, sp.wormSkinNoise),
+            wormParams2: SIMD4<Float>(sp.wormSSS, sp.wormRoughness, sp.wormSpecular, sp.wormRimStrength),
+            wormParams3: SIMD4<Float>(sp.wormEyeSize, sp.wormPulseSpeed, sp.wormPulseAmp, sp.wormSegFreq),
+            wormParams4: SIMD4<Float>(sp.wormCrawlSpeed, sp.wormCrawlAmp, sp.wormSideAmp, 0),
+            ropeMatParams4: SIMD4<Float>(sp.ropeEnvReflect, sp.ropeEnvDebug ? 1 : 0, sp.ropeEnvSpread, Float(sp.shadowDebugMode)),
+            ropeMatParams5: SIMD4<Float>(sp.ropeSeamEnabled ? 1 : 0, sp.ropeSeamWidth, sp.ropeSeamDepth, sp.ropeSeamDarkness),
+            ropeMatParams6: SIMD4<Float>(sp.ropeCracksEnabled ? 1 : 0, sp.ropeCrackAmount, sp.ropeCrackWidth, sp.ropeCrackDepth),
+            ropeMatParams7: SIMD4<Float>(sp.ropeSeamHighlight, sp.ropeSeamCrackAmount, sp.ropeSeamCrackScale, sp.ropeSeamRandomize ? 1 : 0),
+            ropeMatParams8: SIMD4<Float>(sp.ropeSeamPosition, sp.ropeBumpContrast, sp.ropeBumpAniso, sp.ropeCoreDarken),
+            padParams1: SIMD4<Float>(sp.padColorR, sp.padColorG, sp.padColorB, sp.padMetallic),
+            padParams2: SIMD4<Float>(sp.padRoughness, sp.padRopeTint, sp.padHeight, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
 
-        let useCartoon = cartoonShaderEnabled
-        let effExposure = useCartoon ? cartoonExposure : exposure
-        let effBloom = useCartoon ? cartoonBloom : bloomStrength
-        let postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: cartoonEdgeSmooth)
+        let useCartoon = sp.cartoonShaderEnabled
+        let effExposure = useCartoon ? sp.cartoonExposure : sp.exposure
+        let effBloom = sp.bloomEnabled ? (useCartoon ? sp.cartoonBloom : sp.bloomStrength) : 0
+        let postParams = PostParams(exposure: effExposure, bloomStrength: effBloom, cartoonEdgeStrength: sp.cartoonEdgeStrength, cartoonMode: useCartoon ? 1 : 0, cartoonEdgeSmooth: sp.cartoonEdgeSmooth)
         postParamsBuffer?.contents().copyMemory(from: [postParams], byteCount: MemoryLayout<PostParams>.stride)
     }
 
@@ -338,39 +494,6 @@ extension Renderer {
             to: dst, destinationSlice: 0, destinationLevel: 0,
             destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
         blitEncoder.endEncoding()
-    }
-
-    private func encodeRopeReflectionPass(commandBuffer: MTLCommandBuffer, hdrTexture: MTLTexture, depthTexture: MTLTexture, envTexture: MTLTexture) {
-        let renderPass = MTLRenderPassDescriptor()
-        renderPass.colorAttachments[0].texture = hdrTexture
-        renderPass.colorAttachments[0].loadAction = .load
-        renderPass.colorAttachments[0].storeAction = .store
-        renderPass.depthAttachment.texture = depthTexture
-        renderPass.depthAttachment.loadAction = .load
-        renderPass.depthAttachment.storeAction = .store
-        renderPass.stencilAttachment.texture = depthTexture
-        renderPass.stencilAttachment.loadAction = .load
-        renderPass.stencilAttachment.storeAction = .dontCare
-
-        guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
-        encoder.setRenderPipelineState(ropePipeline)
-        encoder.setDepthStencilState(depthStateScene)
-        if let ropeVB, let ropeIB, ropeIndexCount > 0 {
-            encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
-            if let frameUniforms {
-                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
-                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
-            }
-            if let shadowDepthTex {
-                encoder.setFragmentTexture(shadowDepthTex, index: 2)
-            }
-            if let noiseTexture {
-                encoder.setFragmentTexture(noiseTexture, index: 3)
-            }
-            encoder.setFragmentTexture(envTexture, index: 4)
-            encoder.drawIndexedPrimitives(type: .triangle, indexCount: ropeIndexCount, indexType: .uint32, indexBuffer: ropeIB, indexBufferOffset: 0)
-        }
-        encoder.endEncoding()
     }
 
     private func makeLightViewProj(lightDir: SIMD3<Float>, halfW: Float, halfH: Float) -> simd_float4x4 {

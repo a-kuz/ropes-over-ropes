@@ -1,4 +1,4 @@
-# UzlsFour — Verlet Rope Physics Puzzle
+# Strain — Verlet Rope Physics Puzzle
 
 ## Overview
 
@@ -232,7 +232,7 @@ Win detection теперь использует physics-based 2D crossing check 
 
 ```
 App/
-  UzlsFourApp.swift              — @main entry point
+  StrainApp.swift                — @main entry point
   ContentView.swift              — UI, GameController, physics controls
 
 Game/

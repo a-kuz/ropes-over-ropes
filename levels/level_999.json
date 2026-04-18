@@ -1,0 +1,21 @@
+{
+  "id": 999,
+  "holeRadius": 0.08,
+  "particlesPerRope": 30,
+  "holes": [
+    {"x": -0.8, "y":  0.5},
+    {"x":  0.8, "y": -0.5},
+    {"x": -0.5, "y": -0.8},
+    {"x":  0.5, "y":  0.8}
+  ],
+  "ropes": [
+    {"startHole": 0, "endHole": 1, "color": {"r": 0.9, "g": 0.2, "b": 0.2}, "radius": 0.04},
+    {"startHole": 2, "endHole": 3, "color": {"r": 0.2, "g": 0.4, "b": 0.9}, "radius": 0.04}
+  ],
+  "actions": [
+    {"type": "pin", "ropeIndex": 0, "endIndex": 0, "holeIndex": 0},
+    {"type": "pin", "ropeIndex": 0, "endIndex": 1, "holeIndex": 1},
+    {"type": "pin", "ropeIndex": 1, "endIndex": 0, "holeIndex": 2},
+    {"type": "pin", "ropeIndex": 1, "endIndex": 1, "holeIndex": 3}
+  ]
+}

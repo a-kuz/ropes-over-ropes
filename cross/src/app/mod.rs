@@ -18,8 +18,8 @@ use uzls_cross::input as game_input;
 use uzls_cross::leaderboard;
 use uzls_cross::level::definition::LevelDefinition;
 use uzls_cross::renderer::frame_types::{
-    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, TableSettings,
-    VisualSettings, WormSettings,
+    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, SsrSettings,
+    TableSettings, VisualSettings, WormSettings,
 };
 use uzls_cross::renderer::gpu::{GpuRenderer, GpuTimings};
 use uzls_cross::simulation::verlet::{Snapshot, VerletSimulator};
@@ -42,6 +42,8 @@ pub struct PersistedSettings {
     pub cartoon: CartoonSettings,
     pub cap: CapSettings,
     pub worm: WormSettings,
+    #[serde(default)]
+    pub ssr: SsrSettings,
     pub render_scale: f32,
     pub square_cross_section: bool,
     pub render_mode: u8,
@@ -205,6 +207,7 @@ impl App {
             cartoon: renderer.cartoon.clone(),
             cap: renderer.cap.clone(),
             worm: renderer.worm.clone(),
+            ssr: renderer.ssr.clone(),
             render_scale: renderer.render_scale,
             square_cross_section: self.square_cross_section,
             render_mode: self.render_mode,
@@ -221,6 +224,7 @@ impl App {
             renderer.cartoon = settings.cartoon;
             renderer.cap = settings.cap;
             renderer.worm = settings.worm;
+            renderer.ssr = settings.ssr;
             renderer.set_render_scale(settings.render_scale);
         }
         self.square_cross_section = settings.square_cross_section;

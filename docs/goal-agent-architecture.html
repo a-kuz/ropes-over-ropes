@@ -1,0 +1,421 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 25mm 20mm;
+    @bottom-center { content: counter(page); font-size: 9pt; color: #999; }
+  }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 11pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+  }
+  h1 {
+    font-size: 22pt;
+    font-weight: 700;
+    margin-top: 0;
+    padding-bottom: 8px;
+    border-bottom: 3px solid #1a1a1a;
+  }
+  h2 {
+    font-size: 15pt;
+    font-weight: 700;
+    margin-top: 28px;
+    color: #111;
+    border-bottom: 1px solid #ddd;
+    padding-bottom: 4px;
+  }
+  h3 {
+    font-size: 12pt;
+    font-weight: 600;
+    margin-top: 20px;
+    color: #333;
+  }
+  .subtitle {
+    font-size: 12pt;
+    color: #666;
+    margin-top: -10px;
+    margin-bottom: 24px;
+  }
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    margin: 12px 0;
+    font-size: 10pt;
+  }
+  th {
+    background: #f5f5f5;
+    font-weight: 600;
+    text-align: left;
+    padding: 8px 10px;
+    border: 1px solid #ddd;
+  }
+  td {
+    padding: 7px 10px;
+    border: 1px solid #ddd;
+    vertical-align: top;
+  }
+  code {
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 9.5pt;
+    background: #f4f4f4;
+    padding: 1px 4px;
+    border-radius: 3px;
+  }
+  pre {
+    background: #f8f8f8;
+    border: 1px solid #e0e0e0;
+    border-radius: 6px;
+    padding: 12px 16px;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 9pt;
+    line-height: 1.45;
+    overflow-wrap: break-word;
+    white-space: pre-wrap;
+  }
+  .diagram {
+    background: #fafafa;
+    border: 2px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 16px 20px;
+    margin: 16px 0;
+    font-family: "SF Mono", "Menlo", monospace;
+    font-size: 9pt;
+    line-height: 1.5;
+    white-space: pre-wrap;
+  }
+  .role-worker { border-left: 4px solid #2563eb; }
+  .role-enabler { border-left: 4px solid #d97706; }
+  .role-ceo { border-left: 4px solid #dc2626; }
+  .role-idle { border-left: 4px solid #7c3aed; }
+  .tag {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 8.5pt;
+    font-weight: 600;
+    font-family: "SF Mono", monospace;
+  }
+  .tag-question { background: #dbeafe; color: #1e40af; }
+  .tag-blocker { background: #fee2e2; color: #991b1b; }
+  .tag-decision { background: #fef3c7; color: #92400e; }
+  .tag-resolved { background: #d1fae5; color: #065f46; }
+  .note {
+    background: #fffbeb;
+    border: 1px solid #fbbf24;
+    border-radius: 6px;
+    padding: 10px 14px;
+    margin: 12px 0;
+    font-size: 10pt;
+  }
+  .page-break { page-break-before: always; }
+</style>
+</head>
+<body>
+
+<h1>Goal Agent</h1>
+<div class="subtitle">Автономная целевая разработка &middot; Архитектура v5 &middot; Апрель 2026</div>
+
+<h2>1. Обзор</h2>
+
+<p>Rust CLI, который берёт задачу из Linear и доводит её до протестированного кода без участия человека. Человек взаимодействует с системой исключительно через Linear: отвечает на вопросы, разблокирует задачи, принимает решения.</p>
+
+<div class="diagram">Человек: "Сделай API для KYC-проверки"
+         |
+    goal-agent (Rust)
+         |
+    +----+----+----+----+
+    |         |         |
+ Linear    claude -p   Git
+ (MCP)    (headless)  (артефакты)
+</div>
+
+<h3>Ключевые принципы</h3>
+<ul>
+  <li><strong>&laquo;Не могу&raquo; не принимается.</strong> Замокай, заглуши, запиши в trade-offs, но продолжай работу.</li>
+  <li><strong>Контексты обязательны.</strong> Каждый агент читает project-context + task-context перед каждым действием.</li>
+  <li><strong>Linear &mdash; единственный источник правды</strong> для статусов, блокеров и коммуникации с человеком.</li>
+  <li><strong>Все артефакты в git:</strong> исследования, критерии приёмки, trade-offs, результаты тестов, история контекстов.</li>
+</ul>
+
+<h2>2. Роли</h2>
+
+<table>
+  <tr><th>Роль</th><th>Когда</th><th>Что делает</th></tr>
+  <tr class="role-worker">
+    <td><strong>Worker</strong></td>
+    <td>Задача в Research / Develop / Testing</td>
+    <td>Исследует домен, кодит, тестирует. Читает все контексты перед каждым действием. Если не может что-то сделать &mdash; заявляет блокер, не пропускает.</td>
+  </tr>
+  <tr class="role-enabler">
+    <td><strong>Enabler</strong></td>
+    <td>Worker заявляет &laquo;не могу X&raquo;</td>
+    <td>Расследует: правда не может? Проверяет CI, инфру, API, доки, конфиги. Либо &laquo;можешь, вот как&raquo;, либо &laquo;подтверждённый блокер&raquo;.</td>
+  </tr>
+  <tr class="role-ceo">
+    <td><strong>CEO Review</strong></td>
+    <td>Задача в Review + Context Review</td>
+    <td>Жёсткий ревью качества: покрытие AC, фейковые тесты, false positives, ленивые контексты, пропущенные edge cases.</td>
+  </tr>
+  <tr class="role-idle">
+    <td><strong>CEO Idle</strong></td>
+    <td>Все задачи заблокированы / idle</td>
+    <td>Блокеры реальны? Что можно делать пока ждём? Можно ли разблокировать без человека?</td>
+  </tr>
+</table>
+
+<h3>Системные промпты</h3>
+<pre>
+Worker:   "Ты senior-разработчик. Читай контексты перед каждым
+           действием. Кодь, тестируй. Если не можешь что-то
+           сделать — НЕ пропускай, заяви блокер."
+
+Enabler:  "Ты DevOps/SRE. Тебе говорят 'не могу X'.
+           Твоя задача — доказать что МОГУТ. Проверь CI, инфру,
+           доки, конфиги. Если реально нельзя — обоснуй."
+
+CEO Rev:  "Ты жёсткий техдир. Ищи дыры: непокрытые AC,
+           фейковые тесты, false positives прикрывающие лень,
+           неполные контексты."
+
+CEO Idle: "Проверь все блокеры. Реальны? Что можно делать
+           пока ждём? Можно ли разблокировать без человека?"
+</pre>
+
+<h2 class="page-break">3. Интеграция с Linear</h2>
+
+<h3>Статусы задач</h3>
+<div class="diagram">Todo --&gt; Research --&gt; Develop --&gt; Testing --&gt; Review --&gt; Context Review --&gt; Done
+                         ^          ^         ^
+                         +----------+---------+  (reject)
+
+Любой статус --&gt; Blocked (ожидание человека)
+Blocked --&gt; предыдущий статус (после резолюции)
+</div>
+
+<h3>Структура в Linear</h3>
+<pre>
+Project (Linear Project)
++-- project-context       (описание проекта)
++-- false-positives       (CEO ревьюит на предмет лени)
+|
++-- Task (Linear Issue)
+|   +-- task-context      (что пробовали, что не сработало)
+|   +-- subtasks          (sub-issues = элементы работы)
+|   +-- blockers          (blocked-by связи)
+|   +-- comments          (дискуссии, резолюции, ревью CEO)
+</pre>
+
+<h3>Теги коммуникации</h3>
+<table>
+  <tr><th>Тег</th><th>Направление</th><th>Назначение</th></tr>
+  <tr><td><span class="tag tag-question">[QUESTION]</span></td><td>Агент &rarr; Человек</td><td>Нужно уточнение</td></tr>
+  <tr><td><span class="tag tag-blocker">[BLOCKER]</span></td><td>Агент &rarr; Человек</td><td>Нужен ресурс / доступ</td></tr>
+  <tr><td><span class="tag tag-decision">[DECISION]</span></td><td>Агент &rarr; Человек</td><td>Нужен выбор из вариантов</td></tr>
+  <tr><td><span class="tag tag-resolved">[RESOLVED]</span></td><td>Человек &rarr; Агент</td><td>Ответил / предоставил ресурс</td></tr>
+  <tr><td><span class="tag tag-resolved">[DECIDED]</span></td><td>Человек &rarr; Агент</td><td>Принял решение</td></tr>
+  <tr><td><span class="tag tag-blocker">[WONTFIX]</span></td><td>Человек &rarr; Агент</td><td>Отменено человеком</td></tr>
+  <tr><td><span class="tag tag-question">[CONTEXT]</span></td><td>Агент</td><td>Уведомление об обновлении контекста</td></tr>
+  <tr><td><span class="tag tag-blocker">[CEO-REVIEW]</span></td><td>CEO</td><td>Результат ревью</td></tr>
+</table>
+
+<h2 class="page-break">4. Workflow</h2>
+
+<h3>Фаза 1: Исследование (Research)</h3>
+<div class="diagram role-worker">
+Worker:
+  1. Читает project-context.md + task-context.md
+  2. claude -p "Исследуй домен {goal}, найди решения на рынке,
+     задокументируй"
+  3. Результат: research.md -&gt; комментарий в Linear
+  4. Генерирует критерии приёмки -&gt; ac.md
+  5. Разбивает на подзадачи -&gt; sub-issues в Linear
+  6. Статус: Research -&gt; Develop
+</div>
+
+<h3>Фаза 2: Разработка (Develop)</h3>
+<div class="diagram role-worker">
+Worker (по каждой подзадаче):
+  1. Читает project-context + task-context
+  2. claude -p "Реализуй {subtask}, следуй AC"
+  3. Каждая подзадача: Todo -&gt; Done
+  4. Если блокер -&gt; проверка Enabler:
+     +-- Enabler: "можешь, вот как" -&gt; Worker продолжает
+     |   + task-context: "ложный блокер: {детали}"
+     +-- Enabler: "подтверждённый блокер" -&gt; Linear [BLOCKER]
+         + Blocked (ожидание человека)
+  5. Грабли записываются в task-context + project-context
+  6. Статус: Develop -&gt; Testing
+</div>
+
+<h3>Фаза 3: Тестирование (Testing)</h3>
+<div class="diagram role-worker">
+Worker:
+  1. claude -p "Протестируй всё по AC, найди непокрытые случаи"
+  2. Тесты падают -&gt; обновить task-context, -&gt; Develop
+  3. False positive -&gt; записать в false-positives.md
+  4. Статус: Testing -&gt; Review
+</div>
+
+<h3>Фаза 4: Ревью CEO</h3>
+<div class="diagram role-ceo">
+CEO Review:
+  1. claude -p "Жёсткий ревью: AC, тесты, edge cases, trade-offs"
+  2. Проверка: у каждого AC есть тест?
+  3. Проверка: каждый тест действительно проверяет то, что заявлено?
+  4. Проверка: false positives — не лень ли это?
+  5. Проверка: trade-offs обоснованы?
+  6. REJECT + конкретные претензии -&gt; Develop
+  7. APPROVE -&gt; Context Review
+</div>
+
+<h3>Фаза 5: Ревью контекстов (Дискуссия)</h3>
+<div class="diagram role-ceo">
+CEO читает ВСЕ контексты разом:
+  - project-context.md
+  - false-positives.md
+  - все tasks/*/context.md
+
+По каждой найденной проблеме — дискуссия:
+  CEO:    "Этот FP — реальный баг"          (претензия)
+  Автор:  "Только в parallel mode"           (защита)
+  CEO:    "Тогда запиши корректно"           (требование)
+  Автор:  "Обновил"                          (принято)
+  -&gt; RESOLVED
+
+Правила:
+  - Максимум 4 раунда на issue, потом эскалация человеку
+  - Каждый раунд = конкретный аргумент, не повтор
+  - Результат = конкретное изменение в контексте
+  - История дискуссии сохраняется в комментарии Linear
+</div>
+
+<h3>Фаза 6: Взаимодействие с человеком</h3>
+<div class="diagram">
+Агент постит [QUESTION] / [BLOCKER] / [DECISION]
+Задача -&gt; Blocked (ожидание человека)
+         |
+Человек видит в Linear, отвечает:
+  [RESOLVED] "API-ключ в .env.dev"
+  [DECIDED]  "Вариант Б, latency критична"
+  [WONTFIX]  "Эту проверку не делаем"
+         |
+goal-agent poll loop обнаруживает резолюцию:
+  1. Читает резолюцию
+  2. Обновляет task-context: "Блокер X решён: {как}"
+  3. Обновляет project-context если полезно другим задачам
+  4. Enabler проверяет: ресурс доступен?
+  5. Разблокировка, Worker продолжает
+  6. Если были моки -&gt; замена на реальную реализацию
+</div>
+
+<h2 class="page-break">5. Enabler — расследователь &laquo;не могу&raquo;</h2>
+
+<div class="diagram role-enabler">
+Worker: "Не могу задеплоить на dev"
+         |
+Enabler: claude -p "Проверь возможно ли {действие}"
+  Проверяет:
+  +-- CI/CD:      glab ci, .gitlab-ci.yml, GitHub Actions
+  +-- Docker:     compose-файлы, Dockerfile, запущенные контейнеры
+  +-- Env:        .env.example, vault, 1password-cli
+  +-- API:        sandbox-эндпоинты, тестовые ключи, recorded fixtures
+  +-- Инфра:      Makefile, scripts/, docker-compose, README
+  +-- Инструменты: доступные MCP-серверы, установленные CLI
+  +-- Lint/Type:  eslint, tsc, cargo check, ruff
+         |
+  Результат A: "Можешь. Команда: {cmd}"
+    -&gt; Worker продолжает
+    -&gt; task-context: "Ложный блокер: Worker заявлял X, на деле Y"
+         |
+  Результат B: "Подтверждённый блокер. Нужно: {конкретный ресурс}"
+    -&gt; Linear [BLOCKER] с конкретным запросом
+    -&gt; project-context: "{ресурс} недоступен, причина"
+</div>
+
+<h2>6. Артефакты (git-tracked)</h2>
+<pre>
+project/
++-- .goal-agent/
+    +-- project-context.md       # Архитектура, стек, грабли
+    +-- false-positives.md       # CEO ревьюит периодически
+    +-- tasks/
+        +-- {linear-task-id}/
+            +-- context.md       # Что пробовали, что не сработало
+            +-- research.md      # Результаты исследования
+            +-- ac.md            # Критерии приёмки
+            +-- trade-offs.md    # Что отсутствует и почему
+</pre>
+
+<h2>7. Технологический стек</h2>
+<table>
+  <tr><th>Компонент</th><th>Технология</th></tr>
+  <tr><td>Язык</td><td>Rust + tokio</td></tr>
+  <tr><td>Linear MCP</td><td>rmcp (официальный Rust MCP SDK v1.4) &rarr; SSE &rarr; mcp.linear.app</td></tr>
+  <tr><td>Claude</td><td><code>claude -p</code> headless с <code>--allowedTools</code>, <code>--max-turns</code>, <code>--max-budget-usd</code></td></tr>
+  <tr><td>Git</td><td>Артефакты в репозитории, PR на выходе</td></tr>
+  <tr><td>Коммуникация</td><td>Комментарии Linear (теги: QUESTION, BLOCKER, DECISION, RESOLVED)</td></tr>
+</table>
+
+<h2 class="page-break">8. Главный цикл (псевдокод)</h2>
+<pre>
+loop {
+    // 1. Новые задачи в Todo
+    let todo = linear.search_issues(status: "Todo").await;
+    if let Some(task) = todo.first() {
+        start_research(task).await;
+        continue;
+    }
+
+    // 2. Разблокированные задачи (человек ответил)
+    let unblocked = find_newly_resolved_tasks().await;
+    for task in unblocked {
+        apply_resolution(task).await;
+        resume_work(task).await;
+    }
+
+    // 3. Активные задачи
+    let active = linear.search_issues(
+        status: ["Research", "Develop", "Testing"]
+    ).await;
+    for task in active {
+        match task.status {
+            Research =&gt; do_research(task).await,
+            Develop  =&gt; do_develop(task).await,
+            Testing  =&gt; do_testing(task).await,
+        }
+    }
+
+    // 4. Ревью завершённых задач
+    let review = linear.search_issues(status: "Review").await;
+    for task in review {
+        ceo_review(task).await;
+    }
+
+    // 5. Ревью контекстов после одобрения
+    let ctx_review = linear.search_issues(
+        status: "Context Review"
+    ).await;
+    for task in ctx_review {
+        ceo_context_review_with_discussion(task).await;
+    }
+
+    // 6. CEO Idle — когда всё заблокировано
+    if all_tasks_blocked_or_done() {
+        ceo_idle_check_blockers().await;
+    }
+
+    sleep(poll_interval).await;
+}
+</pre>
+
+<div class="note">
+<strong>Проектное решение:</strong> один агент (Claude), четыре персоны (Worker, Enabler, CEO Review, CEO Idle). Разные системные промпты, одна модель. Это проще мульти-модельного подхода, а Claude на данный момент top-1 на всех релевантных бенчмарках.
+</div>
+
+</body>
+</html>

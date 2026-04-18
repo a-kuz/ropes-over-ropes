@@ -62,6 +62,9 @@ enum RopeMeshBuilder {
         }
         let profileCount = profile.positions.count
 
+        let ropeSeedRaw = sin(color.x * 12.9898 + color.y * 78.233 + color.z * 37.719) * 43758.5453
+        let ropeSeed = ropeSeedRaw - floor(ropeSeedRaw)
+
         var totalLen: Float = 0
         for pointIndex in 1..<pointCount {
             totalLen += simd_length(points[pointIndex] - points[pointIndex - 1])
@@ -243,7 +246,7 @@ enum RopeMeshBuilder {
                 let localN = profile.normals[k]
                 let worldPos = position + nrm * (localPos.x * scaleNrm) + bin * (localPos.y * scaleBin)
                 let worldN = simd_normalize(nrm * (localN.x / max(0.01, scaleNrm)) + bin * (localN.y / max(0.01, scaleBin)))
-                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uParam, profile.v[k]), params: params))
+                vertices.append(RopeVertex(position: worldPos, normal: worldN, color: adjustedColor, texCoord: SIMD2<Float>(uParam, profile.v[k]), params: params, ropeSeed: ropeSeed))
             }
 
             if pointIndex < pointCount - 1 {
@@ -296,7 +299,7 @@ enum RopeMeshBuilder {
                 let localY = sin(theta) * ringR
                 let pos = center + right * localX + forward * localY + facing * ringZ
                 let nrm = simd_normalize(right * (cos(theta) * cos(phi)) + forward * (sin(theta) * cos(phi)) + facing * sin(phi))
-                vertices.append(RopeVertex(position: pos, normal: nrm, color: ringColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+                vertices.append(RopeVertex(position: pos, normal: nrm, color: ringColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
             }
         }
 
@@ -311,74 +314,13 @@ enum RopeMeshBuilder {
         }
 
         let tipIdx = UInt32(vertices.count)
-        vertices.append(RopeVertex(position: center + facing * r, normal: facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
+        vertices.append(RopeVertex(position: center + facing * r, normal: facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
         let topRing = rng * seg
         for s in 0..<seg {
             let curr = UInt32(topRing + s)
             let next = UInt32(topRing + (s + 1) % seg)
             indices.append(contentsOf: [curr, tipIdx, next])
         }
-
-        return RopeMesh(vertices: vertices, indices: indices)
-    }
-
-    static func buildSquareCap(center: SIMD3<Float>, halfSize: Float, depth: Float, facing: SIMD3<Float>, color: SIMD3<Float>, darken: Float = 0.7, wormMode: Bool = false) -> RopeMesh {
-        let h = max(0.001, halfSize)
-        let d = max(0.001, depth)
-
-        let capParams = SIMD4<Float>(0, 0, 0, wormMode ? 1.0 : 0.0)
-
-        var vertices: [RopeVertex] = []
-        var indices: [UInt32] = []
-
-        let topN = SIMD3<Float>(0, 0, 1)
-
-        let corners: [SIMD2<Float>] = [
-            SIMD2<Float>( h,  h),
-            SIMD2<Float>(-h,  h),
-            SIMD2<Float>(-h, -h),
-            SIMD2<Float>( h, -h),
-        ]
-
-        func pos3(_ c: SIMD2<Float>, z: Float) -> SIMD3<Float> {
-            SIMD3<Float>(center.x + c.x, center.y + c.y, z)
-        }
-
-        func quad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, n: SIMD3<Float>, c: SIMD3<Float>) {
-            let base = UInt32(vertices.count)
-            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams))
-            indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
-        }
-
-        let topZ = center.z
-        let botZ = center.z - d
-
-        quad(pos3(corners[0], z: topZ), pos3(corners[1], z: topZ),
-             pos3(corners[2], z: topZ), pos3(corners[3], z: topZ),
-             n: topN, c: color)
-
-        let sideColor = color * (1.0 - darken * 0.4)
-        let wallNormals: [SIMD3<Float>] = [
-            SIMD3<Float>( 0,  1, 0),
-            SIMD3<Float>(-1,  0, 0),
-            SIMD3<Float>( 0, -1, 0),
-            SIMD3<Float>( 1,  0, 0),
-        ]
-        let wallEdges: [(Int, Int)] = [(0, 1), (1, 2), (2, 3), (3, 0)]
-        for (edgeIdx, (a, b)) in wallEdges.enumerated() {
-            let n = wallNormals[edgeIdx]
-            quad(pos3(corners[a], z: topZ), pos3(corners[b], z: topZ),
-                 pos3(corners[b], z: botZ), pos3(corners[a], z: botZ),
-                 n: n, c: sideColor)
-        }
-
-        let bottomColor = color * (1.0 - darken)
-        quad(pos3(corners[3], z: botZ), pos3(corners[2], z: botZ),
-             pos3(corners[1], z: botZ), pos3(corners[0], z: botZ),
-             n: SIMD3<Float>(0, 0, -1), c: bottomColor)
 
         return RopeMesh(vertices: vertices, indices: indices)
     }
@@ -419,16 +361,16 @@ enum RopeMeshBuilder {
             let pb1 = backCenter + p1dir * baseR
 
             let base = UInt32(vertices.count)
-            vertices.append(RopeVertex(position: pf0, normal: p0dir, color: baseColor, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: pb0, normal: p0dir, color: baseColor, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: pf1, normal: p1dir, color: baseColor, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: pb1, normal: p1dir, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: pf0, normal: p0dir, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: pb0, normal: p0dir, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: pf1, normal: p1dir, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: pb1, normal: p1dir, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
             indices.append(contentsOf: [base, base+1, base+2, base+2, base+1, base+3])
 
             let capBase = UInt32(vertices.count)
-            vertices.append(RopeVertex(position: frontCenter, normal: t, color: baseColor, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: pf0, normal: t, color: baseColor, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: pf1, normal: t, color: baseColor, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: frontCenter, normal: t, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: pf0, normal: t, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: pf1, normal: t, color: baseColor, texCoord: uv, params: params, ropeSeed: 0))
             indices.append(contentsOf: [capBase, capBase+1, capBase+2])
         }
 
@@ -447,10 +389,10 @@ enum RopeMeshBuilder {
 
         func clampQuad(_ p0: SIMD3<Float>, _ p1: SIMD3<Float>, _ p2: SIMD3<Float>, _ p3: SIMD3<Float>, n: SIMD3<Float>, c: SIMD3<Float>) {
             let base = UInt32(vertices.count)
-            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: uv, params: params))
-            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: uv, params: params))
+            vertices.append(RopeVertex(position: p0, normal: n, color: c, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: p1, normal: n, color: c, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: p2, normal: n, color: c, texCoord: uv, params: params, ropeSeed: 0))
+            vertices.append(RopeVertex(position: p3, normal: n, color: c, texCoord: uv, params: params, ropeSeed: 0))
             indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
         }
 
@@ -468,12 +410,75 @@ enum RopeMeshBuilder {
         return RopeMesh(vertices: vertices, indices: indices)
     }
 
-    private static func rotate(vector: SIMD3<Float>, axis: SIMD3<Float>, angle: Float) -> SIMD3<Float> {
-        let cosAngle = cos(angle)
-        let sinAngle = sin(angle)
-        return vector * cosAngle
-            + simd_cross(axis, vector) * sinAngle
-            + axis * simd_dot(axis, vector) * (1 - cosAngle)
+    /// Flat rubber disc (button) for pad mode — simple button with front/back caps and wall.
+    static func buildDisc(center: SIMD3<Float>, radius: Float, facing: SIMD3<Float>, color: SIMD3<Float>, segments: Int = 16, thickness: Float = 0.015, ropeRadius: Float = 0, ropeTangent: SIMD3<Float>? = nil) -> RopeMesh {
+        _ = ropeRadius
+        _ = ropeTangent
+        let r = max(0.001, radius)
+        let seg = max(6, segments)
+        let half = max(0.002, thickness * 0.5)
+
+        var up = SIMD3<Float>(0, 0, 1)
+        if abs(simd_dot(up, facing)) > 0.95 { up = SIMD3<Float>(0, 1, 0) }
+        let discRight = simd_normalize(simd_cross(up, facing))
+        let discFwd = simd_normalize(simd_cross(facing, discRight))
+
+        let frontCenter = center + facing * half
+        let backCenter = center - facing * half
+        let edgeColor = color * 0.85
+        let darkColor = color * 0.7
+        let capParams = SIMD4<Float>(0, 0, 0, 0)
+
+        var vertices: [RopeVertex] = []
+        var indices: [UInt32] = []
+
+        // 1. Front cap (facing outward — flat on pad when pinned)
+        let frontCenterIdx = UInt32(vertices.count)
+        vertices.append(RopeVertex(position: frontCenter, normal: facing, color: color, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+        for s in 0..<seg {
+            let theta = Float(s) / Float(seg) * Float.pi * 2
+            let pos = frontCenter + discRight * (cos(theta) * r) + discFwd * (sin(theta) * r)
+            vertices.append(RopeVertex(position: pos, normal: facing, color: edgeColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+        }
+        for s in 0..<seg {
+            let curr = frontCenterIdx + 1 + UInt32(s)
+            let next = frontCenterIdx + 1 + UInt32((s + 1) % seg)
+            indices.append(contentsOf: [frontCenterIdx, curr, next])
+        }
+
+        // 2. Cylindrical wall
+        let wallBase = UInt32(vertices.count)
+        for s in 0..<seg {
+            let theta = Float(s) / Float(seg) * Float.pi * 2
+            let outward = discRight * cos(theta) + discFwd * sin(theta)
+            let fPos = frontCenter + outward * r
+            let bPos = backCenter + outward * r
+            vertices.append(RopeVertex(position: fPos, normal: outward, color: edgeColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+            vertices.append(RopeVertex(position: bPos, normal: outward, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+        }
+        for s in 0..<seg {
+            let f0 = wallBase + UInt32(s * 2)
+            let b0 = wallBase + UInt32(s * 2 + 1)
+            let f1 = wallBase + UInt32(((s + 1) % seg) * 2)
+            let b1 = wallBase + UInt32(((s + 1) % seg) * 2 + 1)
+            indices.append(contentsOf: [f0, b0, f1, f1, b0, b1])
+        }
+
+        // 3. Back cap (closes button bottom)
+        let backCenterIdx = UInt32(vertices.count)
+        vertices.append(RopeVertex(position: backCenter, normal: -facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+        for s in 0..<seg {
+            let theta = Float(s) / Float(seg) * Float.pi * 2
+            let pos = backCenter + discRight * (cos(theta) * r) + discFwd * (sin(theta) * r)
+            vertices.append(RopeVertex(position: pos, normal: -facing, color: darkColor, texCoord: SIMD2<Float>(0.5, 0.5), params: capParams, ropeSeed: 0))
+        }
+        for s in 0..<seg {
+            let curr = backCenterIdx + 1 + UInt32(s)
+            let next = backCenterIdx + 1 + UInt32((s + 1) % seg)
+            indices.append(contentsOf: [backCenterIdx, next, curr])
+        }
+
+        return RopeMesh(vertices: vertices, indices: indices)
     }
 
     private static func twistAngle(at distanceAlong: Float, events: [TwistEvent]) -> Float {
@@ -567,6 +572,141 @@ enum RopeMeshBuilder {
         let v: [Float] = (0..<8).map { Float($0) / 8.0 }
 
         return Profile2D(positions: pos, normals: nrm, v: v)
+    }
+
+    struct ChainMeshParams {
+        var linkLength: Float = 2.8
+        var linkThickness: Float = 0.35
+        var linkWidth: Float = 0.85
+        var torusSegments: Int = 10
+        var tubeSegments: Int = 6
+    }
+
+    static func buildChain(points: UnsafeBufferPointer<SIMD3<Float>>, radius: Float, color: SIMD3<Float>, params: ChainMeshParams = ChainMeshParams()) -> RopeMesh {
+        let pointCount = points.count
+        if pointCount < 2 { return RopeMesh(vertices: [], indices: []) }
+
+        var totalLen: Float = 0
+        for i in 1..<pointCount {
+            totalLen += simd_length(points[i] - points[i - 1])
+        }
+        if totalLen < 1e-6 { return RopeMesh(vertices: [], indices: []) }
+
+        let linkSpacing = radius * params.linkLength
+        let linkCount = max(1, Int(totalLen / linkSpacing))
+        let tubeR = radius * params.linkThickness
+        let majorR = radius * params.linkWidth
+
+        let torusSeg = max(6, params.torusSegments)
+        let tubeSeg = max(4, params.tubeSegments)
+
+        var vertices: [RopeVertex] = []
+        var indices: [UInt32] = []
+        let vertsPerLink = torusSeg * tubeSeg
+        vertices.reserveCapacity(linkCount * vertsPerLink)
+        indices.reserveCapacity(linkCount * torusSeg * tubeSeg * 6)
+
+        let up = SIMD3<Float>(0, 0, 1)
+        let chainParams = SIMD4<Float>(0, 0, 0, 2.0)
+
+        for linkIdx in 0..<linkCount {
+            let t = (Float(linkIdx) + 0.5) / Float(linkCount)
+            let targetDist = t * totalLen
+
+            var accum: Float = 0
+            var segIdx = 0
+            for i in 1..<pointCount {
+                let segLen = simd_length(points[i] - points[i - 1])
+                if accum + segLen >= targetDist {
+                    segIdx = i - 1
+                    break
+                }
+                accum += segLen
+                if i == pointCount - 1 { segIdx = i - 1 }
+            }
+
+            let segLen = simd_length(points[segIdx + 1] - points[segIdx])
+            let localT = segLen > 1e-6 ? (targetDist - accum) / segLen : 0.5
+            let center = points[segIdx] * (1 - localT) + points[segIdx + 1] * localT
+
+            var tangent: SIMD3<Float>
+            if segIdx == 0 && pointCount >= 2 {
+                tangent = simd_normalize(points[1] - points[0])
+            } else if segIdx >= pointCount - 2 {
+                tangent = simd_normalize(points[pointCount - 1] - points[pointCount - 2])
+            } else {
+                tangent = simd_normalize(points[segIdx + 1] - points[segIdx])
+            }
+
+            let upProj = up - tangent * simd_dot(up, tangent)
+            var binormal: SIMD3<Float>
+            var normal: SIMD3<Float>
+            if simd_length_squared(upProj) > 1e-6 {
+                binormal = simd_normalize(upProj)
+                normal = simd_normalize(simd_cross(binormal, tangent))
+            } else {
+                normal = simd_normalize(simd_cross(up, tangent))
+                if simd_length_squared(normal) < 1e-8 { normal = SIMD3<Float>(1, 0, 0) }
+                binormal = simd_normalize(simd_cross(tangent, normal))
+            }
+
+            let isAlternate = linkIdx % 2 == 1
+            let ringAxis1: SIMD3<Float>
+            let ringAxis2: SIMD3<Float>
+            let ringNormalAxis: SIMD3<Float>
+            if isAlternate {
+                ringAxis1 = tangent
+                ringAxis2 = binormal
+                ringNormalAxis = normal
+            } else {
+                ringAxis1 = tangent
+                ringAxis2 = normal
+                ringNormalAxis = binormal
+            }
+
+            let uCoord = t
+
+            let baseVert = UInt32(vertices.count)
+            for ti in 0..<torusSeg {
+                let theta = Float(ti) / Float(torusSeg) * Float.pi * 2
+                let cosTheta = cos(theta)
+                let sinTheta = sin(theta)
+                let ringCenter = center + ringAxis1 * (majorR * cosTheta) + ringAxis2 * (majorR * sinTheta)
+                let torusOutward = simd_normalize(ringCenter - center)
+
+                for pi in 0..<tubeSeg {
+                    let phi = Float(pi) / Float(tubeSeg) * Float.pi * 2
+                    let cosPhi = cos(phi)
+                    let sinPhi = sin(phi)
+                    let tubeNormal = torusOutward * cosPhi + ringNormalAxis * sinPhi
+                    let pos = ringCenter + tubeNormal * tubeR
+                    let vCoord = Float(pi) / Float(tubeSeg)
+
+                    vertices.append(RopeVertex(
+                        position: pos,
+                        normal: tubeNormal,
+                        color: color,
+                        texCoord: SIMD2<Float>(uCoord, vCoord),
+                        params: chainParams,
+                        ropeSeed: 0
+                    ))
+                }
+            }
+
+            for ti in 0..<torusSeg {
+                let nextTi = (ti + 1) % torusSeg
+                for pi in 0..<tubeSeg {
+                    let nextPi = (pi + 1) % tubeSeg
+                    let a = baseVert + UInt32(ti * tubeSeg + pi)
+                    let b = baseVert + UInt32(nextTi * tubeSeg + pi)
+                    let c = baseVert + UInt32(nextTi * tubeSeg + nextPi)
+                    let d = baseVert + UInt32(ti * tubeSeg + nextPi)
+                    indices.append(contentsOf: [a, b, c, a, c, d])
+                }
+            }
+        }
+
+        return RopeMesh(vertices: vertices, indices: indices)
     }
 
     private static func circularProfile(radius: Float, segments: Int) -> Profile2D {

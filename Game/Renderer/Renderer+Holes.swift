@@ -27,12 +27,13 @@ extension Renderer {
         return HoleLayout(positions: positions, radius: radius)
     }
 
-    static func makeHoleInstances(device: MTLDevice, positions: [SIMD2<Float>], elevations: [Float], radius: Float) -> MTLBuffer {
+    static func makeHoleInstances(device: MTLDevice, positions: [SIMD2<Float>], elevations: [Float], radius: Float, tintColors: [SIMD4<Float>]? = nil) -> MTLBuffer {
         var holes: [HoleInstance] = []
         holes.reserveCapacity(positions.count)
         for (i, position) in positions.enumerated() {
             let z = elevations.indices.contains(i) ? elevations[i] : 0
-            holes.append(HoleInstance(positionRadius: SIMD4<Float>(position.x, position.y, z, radius)))
+            let tint = (tintColors != nil && tintColors!.indices.contains(i)) ? tintColors![i] : SIMD4<Float>.zero
+            holes.append(HoleInstance(positionRadius: SIMD4<Float>(position.x, position.y, z, radius), tintColor: tint))
         }
 
         guard let buffer = device.makeBuffer(
