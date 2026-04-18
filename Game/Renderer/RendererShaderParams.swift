@@ -39,6 +39,8 @@ struct RendererShaderParams {
     var ropeSaturation: Float = 1.35732102394104
     var ropeMicroBump: Float = 0.142847940325737
     var ropeBumpScale: Float = 3.0
+    var ropeBumpContrast: Float = 1.0
+    var ropeBumpAniso: Float = 1.0
     var ropeContactAO: Float = 1
     var ropeLiftGlow: Float = 0.97152864933013916
     var ropeStretchGloss: Float = 0.7
@@ -61,6 +63,7 @@ struct RendererShaderParams {
     var ropeSeamCrackScale: Float = 18.0
     var ropeSeamRandomize: Bool = true
     var ropeSeamPosition: Float = 0.5
+    var ropeCoreDarken: Float = 1.0
 
     // MARK: - Table / wood
     var tableStyle: Int = 0
@@ -72,6 +75,16 @@ struct RendererShaderParams {
 
     // MARK: - Hole appearance
     var holeTint: SIMD4<Float> = SIMD4<Float>(1, 0.90870898962020874, 1, 1)
+    var padMode: Bool = false
+    var padHeight: Float = 0.18
+    var padColorR: Float = 0.55
+    var padColorG: Float = 0.56
+    var padColorB: Float = 0.58
+    var padMetallic: Float = 0.15
+    var padRoughness: Float = 0.65
+    var padRopeTint: Float = 0.35
+    var padNeckHeight: Float = 0.08
+    var padNeckStiffness: Float = 0.5
 
     // MARK: - Accelerometer light tilt
     var tiltStrength: Float = 0.45

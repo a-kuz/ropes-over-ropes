@@ -74,6 +74,22 @@ extension Renderer {
         let screenHitRadius = viewW * 0.045
         var best: DragCandidate?
 
+        // Rescue mode: free rope bottom ends are draggable
+        if isRescueMode, let sim = simulator, let plat = sim.platform, !plat.freeRopeConnected {
+            for freeIdx in plat.freeRopeIndices {
+                guard sim.bands.indices.contains(freeIdx) else { continue }
+                guard plat.attachedBands.values.contains(freeIdx) == false else { continue } // already connected
+                let lastIdx = sim.bands[freeIdx].positions.count - 1
+                let freeEndPos = sim.bands[freeIdx].positions[lastIdx]
+                let freeEndScreen = worldToScreen(freeEndPos, vp: vp, viewW: viewW, viewH: viewH)
+                let dist = simd_length(screenPt - freeEndScreen)
+                if dist < screenHitRadius * 1.5 && (best == nil || dist < best!.score) {
+                    best = DragCandidate(ropeIndex: freeIdx, endIndex: 1, holeIndex: -1, score: dist)
+                }
+            }
+        }
+
+        if best == nil && !isRescueMode {
         for ropeIndex in ropes.indices {
             let endpoints = ropes[ropeIndex]
             let startHoleIndex = endpoints.startHole
@@ -112,6 +128,7 @@ extension Renderer {
                 }
             }
         }
+        } // end if !isRescueMode
 
         if best == nil, let sim = simulator {
             let bodyScreenHitRadius = viewW * 0.06
@@ -179,6 +196,22 @@ extension Renderer {
         }
 
         if let best {
+            // Rescue mode: free rope end has holeIndex=-1
+            if isRescueMode && best.holeIndex == -1 {
+                pushUndoState()
+                // Use actual particle position as drag start
+                if let sim = simulator {
+                    let lastIdx = sim.bands[best.ropeIndex].positions.count - 1
+                    let pos = sim.bands[best.ropeIndex].positions[lastIdx]
+                    dragWorld = SIMD2(pos.x, pos.y)
+                } else {
+                    dragWorld = world
+                }
+                lastDragWorld = dragWorld
+                dragState = DragState(ropeIndex: best.ropeIndex, endIndex: best.endIndex, originalHoleIndex: -1)
+                simulator?.beginDrag(bandIndex: best.ropeIndex, endIndex: best.endIndex, worldPosition: dragWorld)
+                Haptics.light()
+            } else {
             guard holePositions.indices.contains(best.holeIndex),
                   holeOccupied.indices.contains(best.holeIndex) else {
                 dragState = nil
@@ -196,6 +229,7 @@ extension Renderer {
 
             simulator?.beginDrag(bandIndex: best.ropeIndex, endIndex: best.endIndex, worldPosition: dragWorld)
             Haptics.light()
+            }
         }
     }
 
@@ -232,6 +266,49 @@ extension Renderer {
             return
         }
         guard let sim = simulator, sim.bands.indices.contains(dragState.ropeIndex) else {
+            self.dragState = nil
+            highlightHoleIndex = -1
+            return
+        }
+
+        // Rescue mode: check if free rope end is near any empty platform slot
+        if isRescueMode, let plat = sim.platform, !plat.freeRopeConnected,
+           plat.freeRopeIndices.contains(dragState.ropeIndex) {
+            let snapDist: Float = 0.25
+            var bestSlot: Int?
+            var bestDist: Float = .greatestFiniteMagnitude
+
+            // Find nearest empty slot
+            for slotIdx in plat.emptySlots {
+                guard plat.attachedBands[slotIdx] == nil else { continue }  // already filled
+                let slotCorner = plat.corners[slotIdx]
+                let slotXY = SIMD2<Float>(slotCorner.x, slotCorner.y)
+                let dist = simd_length(world - slotXY)
+                if dist < snapDist && dist < bestDist {
+                    bestDist = dist
+                    bestSlot = slotIdx
+                }
+            }
+
+            if let slot = bestSlot {
+                let slotCorner = plat.corners[slot]
+                let lastIdx = sim.bands[dragState.ropeIndex].positions.count - 1
+                sim.bands[dragState.ropeIndex].positions[lastIdx] = slotCorner
+                sim.bands[dragState.ropeIndex].previousPositions[lastIdx] = slotCorner
+                sim.dragInfo = nil
+                sim.dragStartPos = nil
+                sim.dragTargetPos = nil
+                sim.dragPickupElapsed = .greatestFiniteMagnitude
+                sim.connectFreeRopeToPlatform(ropeIndex: dragState.ropeIndex, slotIndex: slot)
+                Haptics.medium()
+                Self.logger.info("[RESCUE] Rope \(dragState.ropeIndex) snapped to slot \(slot)")
+            } else {
+                // Drop — rope falls free
+                sim.dragInfo = nil
+                sim.dragStartPos = nil
+                sim.dragTargetPos = nil
+                sim.dragPickupElapsed = .greatestFiniteMagnitude
+            }
             self.dragState = nil
             highlightHoleIndex = -1
             return

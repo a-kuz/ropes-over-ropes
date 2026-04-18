@@ -1,0 +1,796 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		0071A0EC3FFCEEE695886EEF /* Renderer+RopeMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2A0FEE38D10816265A240F /* Renderer+RopeMesh.swift */; };
+		01DE81504BD505BC5A8212DA /* LevelGenerator+Actions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2621D32296D8ECC609FD9A6 /* LevelGenerator+Actions.swift */; };
+		03F9D88AA737ED015BF12434 /* VerletSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3EF4BFB3D1D0FA37B2924D /* VerletSimulator.swift */; };
+		043991C79C0842FD5DCA2FBA /* StrainApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4DDBBC18C46ABE379E81381D /* StrainApp.swift */; };
+		0F338FF569A9A8BD3D010ABE /* Renderer+Interaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6978C772A30039185459834 /* Renderer+Interaction.swift */; };
+		12F8157D14CADD35E31CF87D /* Renderer+Pipelines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81928193CAAE6E2CD7676272 /* Renderer+Pipelines.swift */; };
+		177ACDD9720EB07556CC235F /* Renderer+Rails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A272A00A0012CE9E6D1CE1F /* Renderer+Rails.swift */; };
+		182CFC89344016C95A3742DC /* Renderer+Resources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A258952E94F55B1D9755401 /* Renderer+Resources.swift */; };
+		18E6DF69854A9FD143EE3BF1 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 1AE7E3152E56554778C94097 /* Assets.xcassets */; };
+		1C29FA39A72C6ABC4A87CA96 /* LevelGenerator+RailLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E7116B854D336EBE6558D9 /* LevelGenerator+RailLevels.swift */; };
+		2068C3AC7D267A7DE259E87A /* GameMTKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 183B3359F963780DDF238DA7 /* GameMTKView.swift */; };
+		23418FC957E68F245E02CBDF /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9238330BA3AA99C6DD7BDC40 /* GameView.swift */; };
+		256BD6F2E7FED0E7A1FBCA7F /* Renderer+Weights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412ED60ACE79CD242408ACDF /* Renderer+Weights.swift */; };
+		2B32DAF64C60548327B1798F /* SeededRNG.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD64E70AA0ABF3C1E8C8E7E /* SeededRNG.swift */; };
+		2B3D8F2CAC87BA7BF77706AB /* LevelGenerator+BoardLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24EEAA5E4B47770C522DF5C9 /* LevelGenerator+BoardLayouts.swift */; };
+		311CCE779D54D9BDA8EA4DA5 /* Array+Safe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38BAEC35B0FE7936452CAB34 /* Array+Safe.swift */; };
+		34C2154FBFB65C0338D82A38 /* LevelGenerator+TensionLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8DC70E99D528FACDECD7877 /* LevelGenerator+TensionLevels.swift */; };
+		3B21C691D853D53EAD2DB18C /* LevelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B8084291B7FCD4E15B2C1F /* LevelGenerator.swift */; };
+		3D26F31D8477766B03836C8E /* VerletSimulator+Snapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C410E472CA0C236D9057EB /* VerletSimulator+Snapshots.swift */; };
+		3FBF9B17ADDD0315D425B53A /* Renderer+Rails.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A272A00A0012CE9E6D1CE1F /* Renderer+Rails.swift */; };
+		413D59B6E20E74FF7E0070F9 /* RendererLevelFlowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE36C41A2738A0E98AFB2E2B /* RendererLevelFlowCoordinator.swift */; };
+		43FF886C0841C610F0DE3256 /* Renderer+Pipelines.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81928193CAAE6E2CD7676272 /* Renderer+Pipelines.swift */; };
+		45B994A04C263B5A8CDC0B0B /* LeaderboardAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C58AF9E7DE6B30AFC545239 /* LeaderboardAPI.swift */; };
+		483261049A7BD7E0FF7E52C9 /* LevelGenerator+Showcase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361B0AC66354F5E6290857EF /* LevelGenerator+Showcase.swift */; };
+		4CC637FFA5CB5500BA632233 /* RubberFrictionSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E152684460DDE74CBA9C199 /* RubberFrictionSound.swift */; };
+		4DFE1FFBB1C76CD9C876B9DD /* Renderer+Interaction.swift in Sources */ = {isa = PBXBuildFile; fileRef = E6978C772A30039185459834 /* Renderer+Interaction.swift */; };
+		4F00E754EB4D8F984876EC3A /* LevelGenerator+Actions.swift in Sources */ = {isa = PBXBuildFile; fileRef = B2621D32296D8ECC609FD9A6 /* LevelGenerator+Actions.swift */; };
+		523B2EDAF58BBEB1A78C9B8E /* Fireworks.metal in Sources */ = {isa = PBXBuildFile; fileRef = 277190A232BE9DEBD470CAA8 /* Fireworks.metal */; };
+		53436090D2B49BCE96008259 /* VerletSimulator+Frames.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE75C7711F6126C615EFF171 /* VerletSimulator+Frames.swift */; };
+		53F22AF54F0374D93566A8C4 /* Camera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FB605C5D6288E335134A60D /* Camera.swift */; };
+		55670BAB64CF59439520F7EF /* RendererShaderParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 186328C071E1CB647ED24D29 /* RendererShaderParams.swift */; };
+		5992D2380314D208D72ED81C /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0915F67AFEBEF45787B7ED8 /* Haptics.swift */; };
+		5D8BC5E3296A33C7FAD5B241 /* VerletSimulator.swift in Sources */ = {isa = PBXBuildFile; fileRef = FA3EF4BFB3D1D0FA37B2924D /* VerletSimulator.swift */; };
+		5E1254C34F2121C620E369AE /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C56ADCF01C048E1D4AADBA1 /* Renderer.swift */; };
+		62FA989AF19686B8B7BBCE95 /* nv.svg in Resources */ = {isa = PBXBuildFile; fileRef = B15C3F170858B25F3D5A62CD /* nv.svg */; };
+		652ABD01ACE5EF14AF851BAF /* LevelGenerator+BraidLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B93530FA3DEEEFB49B5F304 /* LevelGenerator+BraidLevels.swift */; };
+		673CF5F25543CE4861751852 /* LevelDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90EBA48B758A17776A0F8C8A /* LevelDefinition.swift */; };
+		6A2028814C3A6DFB7B2D22E9 /* PhysicsProfiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 311BC927561F665E21D66B48 /* PhysicsProfiler.swift */; };
+		6BF49B6F1810E8D55D96E493 /* Renderer+Holes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D384F58C9C6FB46D537704 /* Renderer+Holes.swift */; };
+		6C64227E3DFFDB0BAE078485 /* Renderer+Holes.swift in Sources */ = {isa = PBXBuildFile; fileRef = 42D384F58C9C6FB46D537704 /* Renderer+Holes.swift */; };
+		714C9668512E0963A4595999 /* PhysicsProfiler.swift in Sources */ = {isa = PBXBuildFile; fileRef = 311BC927561F665E21D66B48 /* PhysicsProfiler.swift */; };
+		72036DDEA6A3E112E1BB5100 /* RopeMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6788DED5CECF79986E961D /* RopeMeshBuilder.swift */; };
+		721FD00C4D8FD818F041EBD8 /* VerletSimulator+DragAndLevelInit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EEBBE6810E40864453A2C7 /* VerletSimulator+DragAndLevelInit.swift */; };
+		76942E1B33DD8A40950EE91C /* Renderer+MTKViewDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33BA9AC92E6ACFB7744A4DC5 /* Renderer+MTKViewDelegate.swift */; };
+		7793CFFFEEC57F80B60CB222 /* SeededRNG.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7DD64E70AA0ABF3C1E8C8E7E /* SeededRNG.swift */; };
+		7ACE7AF93DF85A9C49DD20F9 /* Haptics.swift in Sources */ = {isa = PBXBuildFile; fileRef = B0915F67AFEBEF45787B7ED8 /* Haptics.swift */; };
+		7BBE31CED180B5169C4F3BA3 /* HoleMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 899997DEAA962B021069291F /* HoleMeshBuilder.swift */; };
+		8162C1F67D425747C61DD32D /* LevelLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41001B31CCD07DDBDF849BBF /* LevelLoader.swift */; };
+		8369A74F8A467D68C196ABD5 /* LevelEditorView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FFC1990A36167CF83EE3AD17 /* LevelEditorView.swift */; };
+		8873EEDF1F155C56224CE33C /* Renderer+MTKViewDelegate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 33BA9AC92E6ACFB7744A4DC5 /* Renderer+MTKViewDelegate.swift */; };
+		916AC980CA7F38F6620A0A83 /* LeaderboardAPI.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3C58AF9E7DE6B30AFC545239 /* LeaderboardAPI.swift */; };
+		93176899AB029E5970C9ED5F /* GameView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9238330BA3AA99C6DD7BDC40 /* GameView.swift */; };
+		942050928F5B0AF8C53CCC53 /* HoleMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 899997DEAA962B021069291F /* HoleMeshBuilder.swift */; };
+		9A9877F91F5BCB4ECA12DDE7 /* LevelGenerator+BoardLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 24EEAA5E4B47770C522DF5C9 /* LevelGenerator+BoardLayouts.swift */; };
+		A1FC707F145EEFD0F35B2A8A /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9A0AAE6483A039E366980043 /* ContentView.swift */; };
+		A4C69792FE30925BB85D1A43 /* VerletSimulator+Snapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = F7C410E472CA0C236D9057EB /* VerletSimulator+Snapshots.swift */; };
+		A4F11D307B7581F8D594CADD /* Renderer+Debug2D.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FB1A87D760963F39641613 /* Renderer+Debug2D.swift */; };
+		A607976C367CF4AEB3378934 /* LevelGenerator+Showcase.swift in Sources */ = {isa = PBXBuildFile; fileRef = 361B0AC66354F5E6290857EF /* LevelGenerator+Showcase.swift */; };
+		A835CD20DCCAAB7A4731B84D /* Camera.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1FB605C5D6288E335134A60D /* Camera.swift */; };
+		AF5A5922773A0376F5E9FD06 /* Renderer+Debug2D.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0FB1A87D760963F39641613 /* Renderer+Debug2D.swift */; };
+		B08C53DC9AED758B280D20F2 /* LevelLoader.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41001B31CCD07DDBDF849BBF /* LevelLoader.swift */; };
+		B467D82E5C6C415CD444DB06 /* HoleLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D12BBAC27808B94EA2D8919 /* HoleLayouts.swift */; };
+		BCBA73D16D0AEB481A099F39 /* GameMTKView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 183B3359F963780DDF238DA7 /* GameMTKView.swift */; };
+		C01B37AAC143A4957CB91D43 /* Renderer+RopeMesh.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4B2A0FEE38D10816265A240F /* Renderer+RopeMesh.swift */; };
+		C13D1CEAAF41672D406AA633 /* Renderer+Bloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCD5B1F03BEC2BB607C0640 /* Renderer+Bloom.swift */; };
+		C13E1F59F899C025812E43BB /* Renderer+WinCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE42255396E16AF39E24C037 /* Renderer+WinCheck.swift */; };
+		C1D31C69538731D0540B143C /* Renderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6C56ADCF01C048E1D4AADBA1 /* Renderer.swift */; };
+		C357B503278F9AAAA8E5F22C /* nv.svg in Resources */ = {isa = PBXBuildFile; fileRef = B15C3F170858B25F3D5A62CD /* nv.svg */; };
+		C47787291F202710F4BCF11B /* LevelGenerator+BraidLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6B93530FA3DEEEFB49B5F304 /* LevelGenerator+BraidLevels.swift */; };
+		C5058B0F1E45988506CE01E4 /* FrameTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6CBE3C0DF4A4F111B5DA60C /* FrameTypes.swift */; };
+		C918EB0CAF1F1524A104A50F /* LevelGenerator+RescueLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A72FC22F9B721965A5065840 /* LevelGenerator+RescueLevels.swift */; };
+		CE062FE10864C3380AFBAE43 /* VerletSimulator+Frames.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE75C7711F6126C615EFF171 /* VerletSimulator+Frames.swift */; };
+		CE5279CFA18405132CE1272B /* RendererUndoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BEE6FA47B30DB0371DD102B /* RendererUndoStore.swift */; };
+		CF9C7BE69AA57E015186A5C0 /* Array+Safe.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38BAEC35B0FE7936452CAB34 /* Array+Safe.swift */; };
+		CFAAB10DEF3BF4201AC6270D /* LevelGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36B8084291B7FCD4E15B2C1F /* LevelGenerator.swift */; };
+		D0700F69F1D23B164848E898 /* LevelGenerator+RailLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = 18E7116B854D336EBE6558D9 /* LevelGenerator+RailLevels.swift */; };
+		D1A32D8A3749564C5C5CFAD8 /* Renderer+Weights.swift in Sources */ = {isa = PBXBuildFile; fileRef = 412ED60ACE79CD242408ACDF /* Renderer+Weights.swift */; };
+		D55F0B71897AB76BFC10F981 /* LevelGenerator+ParticleBuilders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6973B9AE107758BBCDC84C /* LevelGenerator+ParticleBuilders.swift */; };
+		D5881456EF41892CCC0C8249 /* LevelGenerator+RescueLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = A72FC22F9B721965A5065840 /* LevelGenerator+RescueLevels.swift */; };
+		D66D420F8ACDDF8D458BFD75 /* Renderer+FrameUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9FFE7805E96A98B7AE2BDF /* Renderer+FrameUpdate.swift */; };
+		D7654D842DD733D239A056EB /* VerletSimulator+Geometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81214D29F60E38B4605AC8B6 /* VerletSimulator+Geometry.swift */; };
+		DA68D5E2E9CBCAEBC35F500C /* RendererLevelFlowCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE36C41A2738A0E98AFB2E2B /* RendererLevelFlowCoordinator.swift */; };
+		DC450CE4ABFB781941A03C22 /* TunnelingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 8EF8E32775729228A92A8A96 /* TunnelingTests.swift */; };
+		DD40AF86460FBD8DDA4F4F21 /* VerletSimulator+Geometry.swift in Sources */ = {isa = PBXBuildFile; fileRef = 81214D29F60E38B4605AC8B6 /* VerletSimulator+Geometry.swift */; };
+		E17CDDF89E22BBF0D12DC482 /* RopeMeshBuilder.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1A6788DED5CECF79986E961D /* RopeMeshBuilder.swift */; };
+		E1CD1A8E62C44747097DFCA4 /* LevelGenerator+ShowcaseLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C371220404EACE07C4E65AE1 /* LevelGenerator+ShowcaseLevels.swift */; };
+		E3067C4570AD8E4E6378B0DE /* Renderer+CameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 396BABA90B37F52AF4207626 /* Renderer+CameraControls.swift */; };
+		E38202D92D10000420D26FA4 /* LevelDefinition.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90EBA48B758A17776A0F8C8A /* LevelDefinition.swift */; };
+		E3DF58C37D4C53439B8E3189 /* RubberFrictionSound.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3E152684460DDE74CBA9C199 /* RubberFrictionSound.swift */; };
+		E60254C82C59BCA1209A395C /* FrameTypes.swift in Sources */ = {isa = PBXBuildFile; fileRef = D6CBE3C0DF4A4F111B5DA60C /* FrameTypes.swift */; };
+		E7456E763EE0DFAD9AD61672 /* Renderer+Resources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3A258952E94F55B1D9755401 /* Renderer+Resources.swift */; };
+		E99B05B60619FCF9FE9FD240 /* Renderer+WinCheck.swift in Sources */ = {isa = PBXBuildFile; fileRef = FE42255396E16AF39E24C037 /* Renderer+WinCheck.swift */; };
+		E9F084C4649CB892CAA1B7F8 /* RendererShaderParams.swift in Sources */ = {isa = PBXBuildFile; fileRef = 186328C071E1CB647ED24D29 /* RendererShaderParams.swift */; };
+		ED3100A0580B7497CE71304A /* HoleLayouts.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0D12BBAC27808B94EA2D8919 /* HoleLayouts.swift */; };
+		EE010733D6B1E48A7973C56B /* VerletSimulator+DragAndLevelInit.swift in Sources */ = {isa = PBXBuildFile; fileRef = B1EEBBE6810E40864453A2C7 /* VerletSimulator+DragAndLevelInit.swift */; };
+		EEDD80552AA227F0AAB377F1 /* Renderer+FrameUpdate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5A9FFE7805E96A98B7AE2BDF /* Renderer+FrameUpdate.swift */; };
+		EF003FFB0FCDEED0C627FA7F /* LevelGenerator+TensionLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = D8DC70E99D528FACDECD7877 /* LevelGenerator+TensionLevels.swift */; };
+		F06412BB17F0BE0DA4CDCEF0 /* LevelGeneratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5739688746B27B91A26A253D /* LevelGeneratorTests.swift */; };
+		F1D620727F614F417F3FCFFE /* Renderer+Bloom.swift in Sources */ = {isa = PBXBuildFile; fileRef = CDCD5B1F03BEC2BB607C0640 /* Renderer+Bloom.swift */; };
+		F75D937B02A74381345D15F2 /* LevelGenerator+ShowcaseLevels.swift in Sources */ = {isa = PBXBuildFile; fileRef = C371220404EACE07C4E65AE1 /* LevelGenerator+ShowcaseLevels.swift */; };
+		F76262AAF2AAD496B696EAC1 /* Renderer+CameraControls.swift in Sources */ = {isa = PBXBuildFile; fileRef = 396BABA90B37F52AF4207626 /* Renderer+CameraControls.swift */; };
+		FAA3B410861DE56A4918ECEA /* Base.metal in Sources */ = {isa = PBXBuildFile; fileRef = 419183E368115F2BD7FDE844 /* Base.metal */; };
+		FAC0BB437C4CF79F96D1083F /* LevelGenerator+ParticleBuilders.swift in Sources */ = {isa = PBXBuildFile; fileRef = 4E6973B9AE107758BBCDC84C /* LevelGenerator+ParticleBuilders.swift */; };
+		FC4672BD14255C25C36CF8B0 /* RendererUndoStore.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6BEE6FA47B30DB0371DD102B /* RendererUndoStore.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		0A931A0680F9AF4AA2D60A53 /* echo */ = {isa = PBXFileReference; lastKnownFileType = text; path = echo; sourceTree = "<group>"; };
+		0D12BBAC27808B94EA2D8919 /* HoleLayouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoleLayouts.swift; sourceTree = "<group>"; };
+		15C75DDBF2204BA5B4CB905D /* WoodCommon.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WoodCommon.h; sourceTree = "<group>"; };
+		183B3359F963780DDF238DA7 /* GameMTKView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameMTKView.swift; sourceTree = "<group>"; };
+		186328C071E1CB647ED24D29 /* RendererShaderParams.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererShaderParams.swift; sourceTree = "<group>"; };
+		18E7116B854D336EBE6558D9 /* LevelGenerator+RailLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+RailLevels.swift"; sourceTree = "<group>"; };
+		1A6788DED5CECF79986E961D /* RopeMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RopeMeshBuilder.swift; sourceTree = "<group>"; };
+		1AE7E3152E56554778C94097 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
+		1FB605C5D6288E335134A60D /* Camera.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Camera.swift; sourceTree = "<group>"; };
+		24EEAA5E4B47770C522DF5C9 /* LevelGenerator+BoardLayouts.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+BoardLayouts.swift"; sourceTree = "<group>"; };
+		277190A232BE9DEBD470CAA8 /* Fireworks.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Fireworks.metal; sourceTree = "<group>"; };
+		2DCD0557F5A09C4C4C683B2E /* Strain.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = Strain.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		311BC927561F665E21D66B48 /* PhysicsProfiler.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PhysicsProfiler.swift; sourceTree = "<group>"; };
+		33BA9AC92E6ACFB7744A4DC5 /* Renderer+MTKViewDelegate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+MTKViewDelegate.swift"; sourceTree = "<group>"; };
+		361B0AC66354F5E6290857EF /* LevelGenerator+Showcase.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+Showcase.swift"; sourceTree = "<group>"; };
+		36B8084291B7FCD4E15B2C1F /* LevelGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGenerator.swift; sourceTree = "<group>"; };
+		38BAEC35B0FE7936452CAB34 /* Array+Safe.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Array+Safe.swift"; sourceTree = "<group>"; };
+		396BABA90B37F52AF4207626 /* Renderer+CameraControls.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+CameraControls.swift"; sourceTree = "<group>"; };
+		3A258952E94F55B1D9755401 /* Renderer+Resources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Resources.swift"; sourceTree = "<group>"; };
+		3C58AF9E7DE6B30AFC545239 /* LeaderboardAPI.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LeaderboardAPI.swift; sourceTree = "<group>"; };
+		3E152684460DDE74CBA9C199 /* RubberFrictionSound.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RubberFrictionSound.swift; sourceTree = "<group>"; };
+		41001B31CCD07DDBDF849BBF /* LevelLoader.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelLoader.swift; sourceTree = "<group>"; };
+		412ED60ACE79CD242408ACDF /* Renderer+Weights.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Weights.swift"; sourceTree = "<group>"; };
+		419183E368115F2BD7FDE844 /* Base.metal */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.metal; path = Base.metal; sourceTree = "<group>"; };
+		42D384F58C9C6FB46D537704 /* Renderer+Holes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Holes.swift"; sourceTree = "<group>"; };
+		4B2A0FEE38D10816265A240F /* Renderer+RopeMesh.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+RopeMesh.swift"; sourceTree = "<group>"; };
+		4DDBBC18C46ABE379E81381D /* StrainApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = StrainApp.swift; sourceTree = "<group>"; };
+		4E6973B9AE107758BBCDC84C /* LevelGenerator+ParticleBuilders.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+ParticleBuilders.swift"; sourceTree = "<group>"; };
+		569E480662F94BB3417B7A1A /* sudo */ = {isa = PBXFileReference; lastKnownFileType = text; path = sudo; sourceTree = "<group>"; };
+		5739688746B27B91A26A253D /* LevelGeneratorTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelGeneratorTests.swift; sourceTree = "<group>"; };
+		5A9FFE7805E96A98B7AE2BDF /* Renderer+FrameUpdate.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+FrameUpdate.swift"; sourceTree = "<group>"; };
+		6B93530FA3DEEEFB49B5F304 /* LevelGenerator+BraidLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+BraidLevels.swift"; sourceTree = "<group>"; };
+		6BEE6FA47B30DB0371DD102B /* RendererUndoStore.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererUndoStore.swift; sourceTree = "<group>"; };
+		6C56ADCF01C048E1D4AADBA1 /* Renderer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Renderer.swift; sourceTree = "<group>"; };
+		72AF6310C94CCCC17749B954 /* WoodGenisSole.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WoodGenisSole.h; sourceTree = "<group>"; };
+		7B3C7153BA44577ECA17149D /* StrainTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = StrainTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		7DD64E70AA0ABF3C1E8C8E7E /* SeededRNG.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SeededRNG.swift; sourceTree = "<group>"; };
+		81214D29F60E38B4605AC8B6 /* VerletSimulator+Geometry.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VerletSimulator+Geometry.swift"; sourceTree = "<group>"; };
+		81928193CAAE6E2CD7676272 /* Renderer+Pipelines.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Pipelines.swift"; sourceTree = "<group>"; };
+		899997DEAA962B021069291F /* HoleMeshBuilder.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HoleMeshBuilder.swift; sourceTree = "<group>"; };
+		8EF8E32775729228A92A8A96 /* TunnelingTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TunnelingTests.swift; sourceTree = "<group>"; };
+		90EBA48B758A17776A0F8C8A /* LevelDefinition.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelDefinition.swift; sourceTree = "<group>"; };
+		9238330BA3AA99C6DD7BDC40 /* GameView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GameView.swift; sourceTree = "<group>"; };
+		9A0AAE6483A039E366980043 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
+		9A272A00A0012CE9E6D1CE1F /* Renderer+Rails.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Rails.swift"; sourceTree = "<group>"; };
+		A72FC22F9B721965A5065840 /* LevelGenerator+RescueLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+RescueLevels.swift"; sourceTree = "<group>"; };
+		AE36C41A2738A0E98AFB2E2B /* RendererLevelFlowCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = RendererLevelFlowCoordinator.swift; sourceTree = "<group>"; };
+		AE75C7711F6126C615EFF171 /* VerletSimulator+Frames.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VerletSimulator+Frames.swift"; sourceTree = "<group>"; };
+		B0915F67AFEBEF45787B7ED8 /* Haptics.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Haptics.swift; sourceTree = "<group>"; };
+		B15C3F170858B25F3D5A62CD /* nv.svg */ = {isa = PBXFileReference; lastKnownFileType = text; path = nv.svg; sourceTree = "<group>"; };
+		B1EEBBE6810E40864453A2C7 /* VerletSimulator+DragAndLevelInit.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VerletSimulator+DragAndLevelInit.swift"; sourceTree = "<group>"; };
+		B2621D32296D8ECC609FD9A6 /* LevelGenerator+Actions.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+Actions.swift"; sourceTree = "<group>"; };
+		B4438D1597932C284F764A1B /* WoodOtavio.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = WoodOtavio.h; sourceTree = "<group>"; };
+		C371220404EACE07C4E65AE1 /* LevelGenerator+ShowcaseLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+ShowcaseLevels.swift"; sourceTree = "<group>"; };
+		CDCD5B1F03BEC2BB607C0640 /* Renderer+Bloom.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Bloom.swift"; sourceTree = "<group>"; };
+		D6CBE3C0DF4A4F111B5DA60C /* FrameTypes.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = FrameTypes.swift; sourceTree = "<group>"; };
+		D8DC70E99D528FACDECD7877 /* LevelGenerator+TensionLevels.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "LevelGenerator+TensionLevels.swift"; sourceTree = "<group>"; };
+		E6978C772A30039185459834 /* Renderer+Interaction.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Interaction.swift"; sourceTree = "<group>"; };
+		F0FB1A87D760963F39641613 /* Renderer+Debug2D.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+Debug2D.swift"; sourceTree = "<group>"; };
+		F7C410E472CA0C236D9057EB /* VerletSimulator+Snapshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "VerletSimulator+Snapshots.swift"; sourceTree = "<group>"; };
+		FA3EF4BFB3D1D0FA37B2924D /* VerletSimulator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VerletSimulator.swift; sourceTree = "<group>"; };
+		FE42255396E16AF39E24C037 /* Renderer+WinCheck.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = "Renderer+WinCheck.swift"; sourceTree = "<group>"; };
+		FFC1990A36167CF83EE3AD17 /* LevelEditorView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LevelEditorView.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXGroup section */
+		072BB42F8D1D8501FA3EACE4 /* Shaders */ = {
+			isa = PBXGroup;
+			children = (
+				419183E368115F2BD7FDE844 /* Base.metal */,
+				277190A232BE9DEBD470CAA8 /* Fireworks.metal */,
+				15C75DDBF2204BA5B4CB905D /* WoodCommon.h */,
+				72AF6310C94CCCC17749B954 /* WoodGenisSole.h */,
+				B4438D1597932C284F764A1B /* WoodOtavio.h */,
+			);
+			path = Shaders;
+			sourceTree = "<group>";
+		};
+		0F4CB362D3EF6FA1AC1025A1 /* Tests */ = {
+			isa = PBXGroup;
+			children = (
+				5739688746B27B91A26A253D /* LevelGeneratorTests.swift */,
+				8EF8E32775729228A92A8A96 /* TunnelingTests.swift */,
+			);
+			path = Tests;
+			sourceTree = "<group>";
+		};
+		248E5EF881B93F306B2DEE0F /* Utils */ = {
+			isa = PBXGroup;
+			children = (
+				38BAEC35B0FE7936452CAB34 /* Array+Safe.swift */,
+			);
+			path = Utils;
+			sourceTree = "<group>";
+		};
+		391B2CF77C9F9059DA3CD5CA /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				2DCD0557F5A09C4C4C683B2E /* Strain.app */,
+				7B3C7153BA44577ECA17149D /* StrainTests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		3E96924A4B6C90C65C538324 /* App */ = {
+			isa = PBXGroup;
+			children = (
+				1AE7E3152E56554778C94097 /* Assets.xcassets */,
+				9A0AAE6483A039E366980043 /* ContentView.swift */,
+				FFC1990A36167CF83EE3AD17 /* LevelEditorView.swift */,
+				4DDBBC18C46ABE379E81381D /* StrainApp.swift */,
+			);
+			path = App;
+			sourceTree = "<group>";
+		};
+		6B3AED2AFBA3CFF44612771B = {
+			isa = PBXGroup;
+			children = (
+				3E96924A4B6C90C65C538324 /* App */,
+				F021BC4D1638BFB31476B2CD /* Game */,
+				072BB42F8D1D8501FA3EACE4 /* Shaders */,
+				0F4CB362D3EF6FA1AC1025A1 /* Tests */,
+				391B2CF77C9F9059DA3CD5CA /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		86D00F2F8E0EF27982708C9C /* Simulation */ = {
+			isa = PBXGroup;
+			children = (
+				311BC927561F665E21D66B48 /* PhysicsProfiler.swift */,
+				3E152684460DDE74CBA9C199 /* RubberFrictionSound.swift */,
+				FA3EF4BFB3D1D0FA37B2924D /* VerletSimulator.swift */,
+				B1EEBBE6810E40864453A2C7 /* VerletSimulator+DragAndLevelInit.swift */,
+				AE75C7711F6126C615EFF171 /* VerletSimulator+Frames.swift */,
+				81214D29F60E38B4605AC8B6 /* VerletSimulator+Geometry.swift */,
+				F7C410E472CA0C236D9057EB /* VerletSimulator+Snapshots.swift */,
+			);
+			path = Simulation;
+			sourceTree = "<group>";
+		};
+		9BB9AF4432EE036F4ECA071C /* Network */ = {
+			isa = PBXGroup;
+			children = (
+				3C58AF9E7DE6B30AFC545239 /* LeaderboardAPI.swift */,
+			);
+			path = Network;
+			sourceTree = "<group>";
+		};
+		9F45CDB55546D8D43C0FA2EA /* Renderer */ = {
+			isa = PBXGroup;
+			children = (
+				1FB605C5D6288E335134A60D /* Camera.swift */,
+				0A931A0680F9AF4AA2D60A53 /* echo */,
+				D6CBE3C0DF4A4F111B5DA60C /* FrameTypes.swift */,
+				899997DEAA962B021069291F /* HoleMeshBuilder.swift */,
+				B15C3F170858B25F3D5A62CD /* nv.svg */,
+				6C56ADCF01C048E1D4AADBA1 /* Renderer.swift */,
+				CDCD5B1F03BEC2BB607C0640 /* Renderer+Bloom.swift */,
+				396BABA90B37F52AF4207626 /* Renderer+CameraControls.swift */,
+				F0FB1A87D760963F39641613 /* Renderer+Debug2D.swift */,
+				5A9FFE7805E96A98B7AE2BDF /* Renderer+FrameUpdate.swift */,
+				42D384F58C9C6FB46D537704 /* Renderer+Holes.swift */,
+				E6978C772A30039185459834 /* Renderer+Interaction.swift */,
+				33BA9AC92E6ACFB7744A4DC5 /* Renderer+MTKViewDelegate.swift */,
+				81928193CAAE6E2CD7676272 /* Renderer+Pipelines.swift */,
+				9A272A00A0012CE9E6D1CE1F /* Renderer+Rails.swift */,
+				3A258952E94F55B1D9755401 /* Renderer+Resources.swift */,
+				4B2A0FEE38D10816265A240F /* Renderer+RopeMesh.swift */,
+				412ED60ACE79CD242408ACDF /* Renderer+Weights.swift */,
+				FE42255396E16AF39E24C037 /* Renderer+WinCheck.swift */,
+				AE36C41A2738A0E98AFB2E2B /* RendererLevelFlowCoordinator.swift */,
+				186328C071E1CB647ED24D29 /* RendererShaderParams.swift */,
+				6BEE6FA47B30DB0371DD102B /* RendererUndoStore.swift */,
+				1A6788DED5CECF79986E961D /* RopeMeshBuilder.swift */,
+				569E480662F94BB3417B7A1A /* sudo */,
+			);
+			path = Renderer;
+			sourceTree = "<group>";
+		};
+		F021BC4D1638BFB31476B2CD /* Game */ = {
+			isa = PBXGroup;
+			children = (
+				183B3359F963780DDF238DA7 /* GameMTKView.swift */,
+				9238330BA3AA99C6DD7BDC40 /* GameView.swift */,
+				B0915F67AFEBEF45787B7ED8 /* Haptics.swift */,
+				F418A4E502B05F797FCC59E3 /* Level */,
+				9BB9AF4432EE036F4ECA071C /* Network */,
+				9F45CDB55546D8D43C0FA2EA /* Renderer */,
+				86D00F2F8E0EF27982708C9C /* Simulation */,
+				248E5EF881B93F306B2DEE0F /* Utils */,
+			);
+			path = Game;
+			sourceTree = "<group>";
+		};
+		F418A4E502B05F797FCC59E3 /* Level */ = {
+			isa = PBXGroup;
+			children = (
+				0D12BBAC27808B94EA2D8919 /* HoleLayouts.swift */,
+				90EBA48B758A17776A0F8C8A /* LevelDefinition.swift */,
+				36B8084291B7FCD4E15B2C1F /* LevelGenerator.swift */,
+				B2621D32296D8ECC609FD9A6 /* LevelGenerator+Actions.swift */,
+				24EEAA5E4B47770C522DF5C9 /* LevelGenerator+BoardLayouts.swift */,
+				6B93530FA3DEEEFB49B5F304 /* LevelGenerator+BraidLevels.swift */,
+				4E6973B9AE107758BBCDC84C /* LevelGenerator+ParticleBuilders.swift */,
+				18E7116B854D336EBE6558D9 /* LevelGenerator+RailLevels.swift */,
+				A72FC22F9B721965A5065840 /* LevelGenerator+RescueLevels.swift */,
+				361B0AC66354F5E6290857EF /* LevelGenerator+Showcase.swift */,
+				C371220404EACE07C4E65AE1 /* LevelGenerator+ShowcaseLevels.swift */,
+				D8DC70E99D528FACDECD7877 /* LevelGenerator+TensionLevels.swift */,
+				41001B31CCD07DDBDF849BBF /* LevelLoader.swift */,
+				7DD64E70AA0ABF3C1E8C8E7E /* SeededRNG.swift */,
+			);
+			path = Level;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		C67CD10AE95D439449431103 /* Strain */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7747A19B8634DC12B24C5D9F /* Build configuration list for PBXNativeTarget "Strain" */;
+			buildPhases = (
+				D35B8552AA0FC4A8215369A7 /* Sources */,
+				3F7913B32D59A3E11A713393 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = Strain;
+			packageProductDependencies = (
+			);
+			productName = Strain;
+			productReference = 2DCD0557F5A09C4C4C683B2E /* Strain.app */;
+			productType = "com.apple.product-type.application";
+		};
+		E2315D7773E426D7E29C8173 /* StrainTests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 53D684021A6CE461EA100682 /* Build configuration list for PBXNativeTarget "StrainTests" */;
+			buildPhases = (
+				5D423259BCDECA9561BFF0E1 /* Sources */,
+				D3E1B7E8F9DAFF283C65BB8D /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = StrainTests;
+			packageProductDependencies = (
+			);
+			productName = StrainTests;
+			productReference = 7B3C7153BA44577ECA17149D /* StrainTests.xctest */;
+			productType = "com.apple.product-type.bundle.unit-test";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AEE5AA554A5D99D46F7BA722 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+			};
+			buildConfigurationList = ABD88DBE0070556AD4EB462F /* Build configuration list for PBXProject "Strain" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 6B3AED2AFBA3CFF44612771B;
+			minimizedProjectReferenceProxies = 1;
+			preferredProjectObjectVersion = 77;
+			productRefGroup = 391B2CF77C9F9059DA3CD5CA /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C67CD10AE95D439449431103 /* Strain */,
+				E2315D7773E426D7E29C8173 /* StrainTests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3F7913B32D59A3E11A713393 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				18E6DF69854A9FD143EE3BF1 /* Assets.xcassets in Resources */,
+				62FA989AF19686B8B7BBCE95 /* nv.svg in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D3E1B7E8F9DAFF283C65BB8D /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				C357B503278F9AAAA8E5F22C /* nv.svg in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		5D423259BCDECA9561BFF0E1 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				CF9C7BE69AA57E015186A5C0 /* Array+Safe.swift in Sources */,
+				A835CD20DCCAAB7A4731B84D /* Camera.swift in Sources */,
+				C5058B0F1E45988506CE01E4 /* FrameTypes.swift in Sources */,
+				2068C3AC7D267A7DE259E87A /* GameMTKView.swift in Sources */,
+				93176899AB029E5970C9ED5F /* GameView.swift in Sources */,
+				5992D2380314D208D72ED81C /* Haptics.swift in Sources */,
+				B467D82E5C6C415CD444DB06 /* HoleLayouts.swift in Sources */,
+				942050928F5B0AF8C53CCC53 /* HoleMeshBuilder.swift in Sources */,
+				45B994A04C263B5A8CDC0B0B /* LeaderboardAPI.swift in Sources */,
+				673CF5F25543CE4861751852 /* LevelDefinition.swift in Sources */,
+				01DE81504BD505BC5A8212DA /* LevelGenerator+Actions.swift in Sources */,
+				9A9877F91F5BCB4ECA12DDE7 /* LevelGenerator+BoardLayouts.swift in Sources */,
+				C47787291F202710F4BCF11B /* LevelGenerator+BraidLevels.swift in Sources */,
+				FAC0BB437C4CF79F96D1083F /* LevelGenerator+ParticleBuilders.swift in Sources */,
+				1C29FA39A72C6ABC4A87CA96 /* LevelGenerator+RailLevels.swift in Sources */,
+				C918EB0CAF1F1524A104A50F /* LevelGenerator+RescueLevels.swift in Sources */,
+				A607976C367CF4AEB3378934 /* LevelGenerator+Showcase.swift in Sources */,
+				E1CD1A8E62C44747097DFCA4 /* LevelGenerator+ShowcaseLevels.swift in Sources */,
+				EF003FFB0FCDEED0C627FA7F /* LevelGenerator+TensionLevels.swift in Sources */,
+				CFAAB10DEF3BF4201AC6270D /* LevelGenerator.swift in Sources */,
+				F06412BB17F0BE0DA4CDCEF0 /* LevelGeneratorTests.swift in Sources */,
+				8162C1F67D425747C61DD32D /* LevelLoader.swift in Sources */,
+				6A2028814C3A6DFB7B2D22E9 /* PhysicsProfiler.swift in Sources */,
+				C13D1CEAAF41672D406AA633 /* Renderer+Bloom.swift in Sources */,
+				E3067C4570AD8E4E6378B0DE /* Renderer+CameraControls.swift in Sources */,
+				A4F11D307B7581F8D594CADD /* Renderer+Debug2D.swift in Sources */,
+				EEDD80552AA227F0AAB377F1 /* Renderer+FrameUpdate.swift in Sources */,
+				6C64227E3DFFDB0BAE078485 /* Renderer+Holes.swift in Sources */,
+				0F338FF569A9A8BD3D010ABE /* Renderer+Interaction.swift in Sources */,
+				76942E1B33DD8A40950EE91C /* Renderer+MTKViewDelegate.swift in Sources */,
+				12F8157D14CADD35E31CF87D /* Renderer+Pipelines.swift in Sources */,
+				3FBF9B17ADDD0315D425B53A /* Renderer+Rails.swift in Sources */,
+				182CFC89344016C95A3742DC /* Renderer+Resources.swift in Sources */,
+				C01B37AAC143A4957CB91D43 /* Renderer+RopeMesh.swift in Sources */,
+				256BD6F2E7FED0E7A1FBCA7F /* Renderer+Weights.swift in Sources */,
+				C13E1F59F899C025812E43BB /* Renderer+WinCheck.swift in Sources */,
+				C1D31C69538731D0540B143C /* Renderer.swift in Sources */,
+				DA68D5E2E9CBCAEBC35F500C /* RendererLevelFlowCoordinator.swift in Sources */,
+				E9F084C4649CB892CAA1B7F8 /* RendererShaderParams.swift in Sources */,
+				CE5279CFA18405132CE1272B /* RendererUndoStore.swift in Sources */,
+				E17CDDF89E22BBF0D12DC482 /* RopeMeshBuilder.swift in Sources */,
+				4CC637FFA5CB5500BA632233 /* RubberFrictionSound.swift in Sources */,
+				2B32DAF64C60548327B1798F /* SeededRNG.swift in Sources */,
+				DC450CE4ABFB781941A03C22 /* TunnelingTests.swift in Sources */,
+				EE010733D6B1E48A7973C56B /* VerletSimulator+DragAndLevelInit.swift in Sources */,
+				CE062FE10864C3380AFBAE43 /* VerletSimulator+Frames.swift in Sources */,
+				DD40AF86460FBD8DDA4F4F21 /* VerletSimulator+Geometry.swift in Sources */,
+				A4C69792FE30925BB85D1A43 /* VerletSimulator+Snapshots.swift in Sources */,
+				03F9D88AA737ED015BF12434 /* VerletSimulator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D35B8552AA0FC4A8215369A7 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				311CCE779D54D9BDA8EA4DA5 /* Array+Safe.swift in Sources */,
+				FAA3B410861DE56A4918ECEA /* Base.metal in Sources */,
+				53F22AF54F0374D93566A8C4 /* Camera.swift in Sources */,
+				A1FC707F145EEFD0F35B2A8A /* ContentView.swift in Sources */,
+				523B2EDAF58BBEB1A78C9B8E /* Fireworks.metal in Sources */,
+				E60254C82C59BCA1209A395C /* FrameTypes.swift in Sources */,
+				BCBA73D16D0AEB481A099F39 /* GameMTKView.swift in Sources */,
+				23418FC957E68F245E02CBDF /* GameView.swift in Sources */,
+				7ACE7AF93DF85A9C49DD20F9 /* Haptics.swift in Sources */,
+				ED3100A0580B7497CE71304A /* HoleLayouts.swift in Sources */,
+				7BBE31CED180B5169C4F3BA3 /* HoleMeshBuilder.swift in Sources */,
+				916AC980CA7F38F6620A0A83 /* LeaderboardAPI.swift in Sources */,
+				E38202D92D10000420D26FA4 /* LevelDefinition.swift in Sources */,
+				8369A74F8A467D68C196ABD5 /* LevelEditorView.swift in Sources */,
+				4F00E754EB4D8F984876EC3A /* LevelGenerator+Actions.swift in Sources */,
+				2B3D8F2CAC87BA7BF77706AB /* LevelGenerator+BoardLayouts.swift in Sources */,
+				652ABD01ACE5EF14AF851BAF /* LevelGenerator+BraidLevels.swift in Sources */,
+				D55F0B71897AB76BFC10F981 /* LevelGenerator+ParticleBuilders.swift in Sources */,
+				D0700F69F1D23B164848E898 /* LevelGenerator+RailLevels.swift in Sources */,
+				D5881456EF41892CCC0C8249 /* LevelGenerator+RescueLevels.swift in Sources */,
+				483261049A7BD7E0FF7E52C9 /* LevelGenerator+Showcase.swift in Sources */,
+				F75D937B02A74381345D15F2 /* LevelGenerator+ShowcaseLevels.swift in Sources */,
+				34C2154FBFB65C0338D82A38 /* LevelGenerator+TensionLevels.swift in Sources */,
+				3B21C691D853D53EAD2DB18C /* LevelGenerator.swift in Sources */,
+				B08C53DC9AED758B280D20F2 /* LevelLoader.swift in Sources */,
+				714C9668512E0963A4595999 /* PhysicsProfiler.swift in Sources */,
+				F1D620727F614F417F3FCFFE /* Renderer+Bloom.swift in Sources */,
+				F76262AAF2AAD496B696EAC1 /* Renderer+CameraControls.swift in Sources */,
+				AF5A5922773A0376F5E9FD06 /* Renderer+Debug2D.swift in Sources */,
+				D66D420F8ACDDF8D458BFD75 /* Renderer+FrameUpdate.swift in Sources */,
+				6BF49B6F1810E8D55D96E493 /* Renderer+Holes.swift in Sources */,
+				4DFE1FFBB1C76CD9C876B9DD /* Renderer+Interaction.swift in Sources */,
+				8873EEDF1F155C56224CE33C /* Renderer+MTKViewDelegate.swift in Sources */,
+				43FF886C0841C610F0DE3256 /* Renderer+Pipelines.swift in Sources */,
+				177ACDD9720EB07556CC235F /* Renderer+Rails.swift in Sources */,
+				E7456E763EE0DFAD9AD61672 /* Renderer+Resources.swift in Sources */,
+				0071A0EC3FFCEEE695886EEF /* Renderer+RopeMesh.swift in Sources */,
+				D1A32D8A3749564C5C5CFAD8 /* Renderer+Weights.swift in Sources */,
+				E99B05B60619FCF9FE9FD240 /* Renderer+WinCheck.swift in Sources */,
+				5E1254C34F2121C620E369AE /* Renderer.swift in Sources */,
+				413D59B6E20E74FF7E0070F9 /* RendererLevelFlowCoordinator.swift in Sources */,
+				55670BAB64CF59439520F7EF /* RendererShaderParams.swift in Sources */,
+				FC4672BD14255C25C36CF8B0 /* RendererUndoStore.swift in Sources */,
+				72036DDEA6A3E112E1BB5100 /* RopeMeshBuilder.swift in Sources */,
+				E3DF58C37D4C53439B8E3189 /* RubberFrictionSound.swift in Sources */,
+				7793CFFFEEC57F80B60CB222 /* SeededRNG.swift in Sources */,
+				043991C79C0842FD5DCA2FBA /* StrainApp.swift in Sources */,
+				721FD00C4D8FD818F041EBD8 /* VerletSimulator+DragAndLevelInit.swift in Sources */,
+				53436090D2B49BCE96008259 /* VerletSimulator+Frames.swift in Sources */,
+				D7654D842DD733D239A056EB /* VerletSimulator+Geometry.swift in Sources */,
+				3D26F31D8477766B03836C8E /* VerletSimulator+Snapshots.swift in Sources */,
+				5D8BC5E3296A33C7FAD5B241 /* VerletSimulator.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		17EB45F4287BC01FD0A89663 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "";
+			};
+			name = Release;
+		};
+		320CCCA130717273E4E041A5 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NW2CSMF97Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDuration = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
+				INFOPLIST_KEY_UIInterfaceOrientation = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = NO;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LSSupportsOpeningDocumentsInPlace = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uzls.four;
+				PRODUCT_MODULE_NAME = Strain;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				UIFileSharingEnabled = YES;
+			};
+			name = Release;
+		};
+		B1B27A7774895D6315830285 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "Apple Development";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = NW2CSMF97Y;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDuration = YES;
+				INFOPLIST_KEY_CADisableMinimumFrameDurationOnPhone = YES;
+				INFOPLIST_KEY_UIInterfaceOrientation = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UIRequiresFullScreen = NO;
+				INFOPLIST_KEY_UIStatusBarHidden = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				LSSupportsOpeningDocumentsInPlace = YES;
+				MARKETING_VERSION = 1.0.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.uzls.four;
+				PRODUCT_MODULE_NAME = Strain;
+				PROVISIONING_PROFILE_SPECIFIER = "";
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				UIFileSharingEnabled = YES;
+			};
+			name = Debug;
+		};
+		B8A4CFE715FF26B2BF1A0695 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_HOST = "";
+			};
+			name = Debug;
+		};
+		BD586D1AD2870653FA7636F7 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		F47636CDD6BD9427AF717794 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = s;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = auto;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator macosx";
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		53D684021A6CE461EA100682 /* Build configuration list for PBXNativeTarget "StrainTests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B8A4CFE715FF26B2BF1A0695 /* Debug */,
+				17EB45F4287BC01FD0A89663 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7747A19B8634DC12B24C5D9F /* Build configuration list for PBXNativeTarget "Strain" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B1B27A7774895D6315830285 /* Debug */,
+				320CCCA130717273E4E041A5 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		ABD88DBE0070556AD4EB462F /* Build configuration list for PBXProject "Strain" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F47636CDD6BD9427AF717794 /* Debug */,
+				BD586D1AD2870653FA7636F7 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = AEE5AA554A5D99D46F7BA722 /* Project object */;
+}

@@ -210,7 +210,42 @@ struct LevelDefinition: Codable {
         let cartIndex: Int
     }
 
-    /// "untangle" (default), "tension", "rail", or "braid"
+    /// Rescue mode: platform suspended by ropes
+    struct PlatformDef: Codable {
+        let width: Float
+        let height: Float
+        let mass: Float
+        /// Which rope indices are initially connected to which corner (0=TL,1=TR,2=BR,3=BL)
+        let attachments: [PlatformAttachment]
+        /// Corner indices of empty slots (multiple for multi-step rescue)
+        let emptySlots: [Int]
+        /// Rope indices of free (detached) ropes — one per empty slot
+        let freeRopeIndices: [Int]
+
+        // Legacy single-slot convenience init
+        init(width: Float, height: Float, mass: Float, attachments: [PlatformAttachment],
+             emptySlot: Int, freeRopeIndex: Int) {
+            self.width = width; self.height = height; self.mass = mass
+            self.attachments = attachments
+            self.emptySlots = [emptySlot]
+            self.freeRopeIndices = [freeRopeIndex]
+        }
+
+        init(width: Float, height: Float, mass: Float, attachments: [PlatformAttachment],
+             emptySlots: [Int], freeRopeIndices: [Int]) {
+            self.width = width; self.height = height; self.mass = mass
+            self.attachments = attachments
+            self.emptySlots = emptySlots
+            self.freeRopeIndices = freeRopeIndices
+        }
+    }
+
+    struct PlatformAttachment: Codable {
+        let ropeIndex: Int
+        let cornerIndex: Int  // 0=TL, 1=TR, 2=BR, 3=BL
+    }
+
+    /// "untangle" (default), "tension", "rail", "braid", or "rescue"
     let mode: String?
 
     let id: Int
@@ -236,16 +271,20 @@ struct LevelDefinition: Codable {
     /// ropeParticles[ropeIndex] = array of Vec2 (with z) for each particle along the rope.
     let ropeParticles: [[Vec2]]?
 
+    let platform: PlatformDef?
+
     var isTensionMode: Bool { mode == "tension" }
     var isRailMode: Bool { mode == "rail" }
     var isBraidMode: Bool { mode == "braid" }
+    var isRescueMode: Bool { mode == "rescue" }
 
     init(mode: String?, id: Int, holeRadius: Float, particlesPerRope: Int,
          holes: [Vec2], ropes: [Rope], hooks: [Hook]?, actions: [Action]?,
          boards: [Board]?, weights: [WeightDef]?, targets: [TargetDef]?,
          rails: [RailDef]?, carts: [CartDef]?, stations: [StationDef]?,
          braidTargets: [Int]? = nil, braidMinCrossings: Int? = nil,
-         ropeParticles: [[Vec2]]? = nil) {
+         ropeParticles: [[Vec2]]? = nil,
+         platform: PlatformDef? = nil) {
         self.mode = mode
         self.id = id
         self.holeRadius = holeRadius
@@ -263,6 +302,7 @@ struct LevelDefinition: Codable {
         self.braidTargets = braidTargets
         self.braidMinCrossings = braidMinCrossings
         self.ropeParticles = ropeParticles
+        self.platform = platform
     }
 }
 

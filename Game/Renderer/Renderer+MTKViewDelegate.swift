@@ -7,8 +7,21 @@ extension Renderer {
         let offscreen = scaledOffscreenSize(from: size)
         resizeTextures(size: offscreen)
         let aspect = Float(size.width / max(1, size.height))
-        let maxElev = holeElevations.max() ?? 0
-        camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        if isRescueMode {
+            // Rescue mode: side/angled camera, don't let fitToHoles reset it
+            setupRescueCamera(aspect: aspect)
+        } else {
+            let maxElev = holeElevations.max() ?? 0
+            camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        }
+    }
+
+    func setupRescueCamera(aspect: Float) {
+        camera.center = SIMD3<Float>(0, 0, 0.5)  // centered on hanging platform area
+        camera.tiltAngle = 0.75         // ~43° — dramatic angle, feels close
+        camera.rotationAngle = 0.15     // slight rotation for dynamism
+        camera.orthoHalfHeight = 1.2    // tighter framing
+        camera.distance = 2.5
     }
 
     func draw(in view: MTKView) {
@@ -50,7 +63,7 @@ extension Renderer {
             encodeCopyDepth(commandBuffer: commandBuffer, src: sceneDepth, dst: envDepthTex)
             encodeRopeReflectionPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, depthTexture: sceneDepth, envTexture: envTex, envDepthTexture: envDepthTex)
         }
-        if shaderParams.bloomEnabled {
+        if shaderParams.bloomEnabled && shaderParams.bloomStrength > 0.001 {
             encodeBloomPass(commandBuffer: commandBuffer, hdrTexture: hdrTex, bloomTextureA: bloomA, bloomTextureB: bloomB)
         }
         buildDebug2DData()
@@ -80,7 +93,11 @@ extension Renderer {
         renderPass.colorAttachments[0].texture = hdrTexture
         renderPass.colorAttachments[0].loadAction = .clear
         renderPass.colorAttachments[0].storeAction = .store
-        renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        if isRescueMode {
+            renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0.05, green: 0.07, blue: 0.12, alpha: 1)
+        } else {
+            renderPass.colorAttachments[0].clearColor = MTLClearColor(red: 0, green: 0, blue: 0, alpha: 1)
+        }
         renderPass.depthAttachment.texture = depthTexture
         renderPass.depthAttachment.loadAction = .clear
         renderPass.depthAttachment.storeAction = .store
@@ -92,17 +109,20 @@ extension Renderer {
 
         guard let encoder = commandBuffer.makeRenderCommandEncoder(descriptor: renderPass) else { return }
 
-        encoder.setRenderPipelineState(tablePipeline)
-        encoder.setDepthStencilState(depthStateScene)
-        if let frameUniforms {
-            encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+        // Skip table rendering in rescue mode
+        if !isRescueMode {
+            encoder.setRenderPipelineState(tablePipeline)
+            encoder.setDepthStencilState(depthStateScene)
+            if let frameUniforms {
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            encoder.setFragmentTexture(bakedWoodTex ?? woodDebugTex, index: 3)
+            encoder.setFragmentTexture(bakedHoleMaskTex ?? holeMaskDisabledTex, index: 4)
+            encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
         }
-        if let shadowDepthTex {
-            encoder.setFragmentTexture(shadowDepthTex, index: 2)
-        }
-        encoder.setFragmentTexture(bakedWoodTex ?? woodDebugTex, index: 3)
-        encoder.setFragmentTexture(bakedHoleMaskTex ?? holeMaskDisabledTex, index: 4)
-        encoder.drawPrimitives(type: .triangle, vertexStart: 0, vertexCount: 3)
 
         if let boardVB = boardMeshVB, let boardIB = boardMeshIB, boardMeshIndexCount > 0 {
             encoder.setDepthStencilState(depthStateScene)
@@ -143,6 +163,30 @@ extension Renderer {
             }
             let instanceCount = holeInstances.length / MemoryLayout<HoleInstance>.stride
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: holeIndexCount, indexType: .uint16, indexBuffer: holeIB, indexBufferOffset: 0, instanceCount: instanceCount)
+        }
+
+        // Draw platform (rescue mode) — uses board pipeline
+        if let platVB = platformVB, let platIB = platformIB, platformIndexCount > 0 {
+            encoder.setDepthStencilState(depthStateScene)
+            encoder.setRenderPipelineState(boardPipeline)
+            encoder.setVertexBuffer(platVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+                encoder.setFragmentBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            if let holeInstances {
+                var holeCount: UInt32 = UInt32(holeInstances.length / MemoryLayout<HoleInstance>.stride)
+                encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
+                encoder.setFragmentBuffer(holeInstances, offset: 0, index: 4)
+            } else {
+                var holeCount: UInt32 = 0
+                encoder.setFragmentBytes(&holeCount, length: MemoryLayout<UInt32>.stride, index: 3)
+            }
+            if let shadowDepthTex {
+                encoder.setFragmentTexture(shadowDepthTex, index: 2)
+            }
+            encoder.setFragmentTexture(bakedBoardWoodVolumeTex ?? boardWoodVolumeDisabledTex, index: 3)
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: platformIndexCount, indexType: .uint32, indexBuffer: platIB, indexBufferOffset: 0)
         }
 
         // Draw weights and targets (tension mode)
@@ -259,6 +303,16 @@ extension Renderer {
             encoder.drawIndexedPrimitives(type: .triangle, indexCount: boardMeshIndexCount, indexType: .uint32, indexBuffer: boardIB, indexBufferOffset: 0)
         }
 
+        // Platform shadow (rescue mode)
+        if let platVB = platformVB, let platIB = platformIB, platformIndexCount > 0 {
+            encoder.setRenderPipelineState(shadowBoardPipeline)
+            encoder.setVertexBuffer(platVB, offset: 0, index: 0)
+            if let frameUniforms {
+                encoder.setVertexBuffer(frameUniforms, offset: 0, index: 1)
+            }
+            encoder.drawIndexedPrimitives(type: .triangle, indexCount: platformIndexCount, indexType: .uint32, indexBuffer: platIB, indexBufferOffset: 0)
+        }
+
         if let ropeVB, let ropeIB, ropeIndexCount > 0 {
             encoder.setRenderPipelineState(shadowRopePipeline)
             encoder.setVertexBuffer(ropeVB, offset: 0, index: 0)
@@ -360,10 +414,27 @@ extension Renderer {
             let g = motion.gravity
             let raw = SIMD2<Float>(Float(g.x), Float(g.y))
             deviceTilt += (raw - deviceTilt) * 0.4
+
+            // Map device gravity to game world: X=right, Y=up on screen, Z=into table
+            // Device gravity: x=right, y=up, z=out of screen; magnitude ~1 when still
+            // Device gravity points toward Earth (~-1 on dominant axis).
+            // gravity scalar is negative; direction * gravity = force vector.
+            // Phone flat face-up: g=(0,0,-1) → dir=(0,0,1) → force Z− (into table) ✓
+            // Phone vertical:     g=(0,-1,0) → dir=(0,1,0) → force Y− (down screen) ✓
+            let gx = Float(-g.x)
+            let gy = Float(g.y)
+            let gz = Float(-g.z)
+            let gravDir = SIMD3<Float>(gx, gy, gz)
+            let gravLen = simd_length(gravDir)
+            if gravLen > 0.01 {
+                simulator?.gravityDirection = gravDir / gravLen
+            }
         }
         #endif
         let tiltOffset = SIMD3<Float>(deviceTilt.x * sp.tiltStrength, deviceTilt.y * sp.tiltStrength, 0)
-        let lightDir = simd_normalize(sp.lightDir + tiltOffset)
+        var rawLightDir = sp.lightDir + tiltOffset
+        rawLightDir.z = max(rawLightDir.z, 0.05)
+        let lightDir = simd_normalize(rawLightDir)
         let halfH = camera.orthoHalfHeight
         let halfW = halfH * aspect
         let lightViewProj = makeLightViewProj(lightDir: lightDir, halfW: halfW, halfH: halfH)
@@ -382,7 +453,7 @@ extension Renderer {
             shadowInvSizeUnused: SIMD4<Float>(invShadow, invShadow, camera.center.x, camera.center.y),
             timeDrag: SIMD4<Float>(time, sp.ropeOpacity, Float(currentLevelId), dragState != nil ? 1 : 0),
             woodBoundsMin: SIMD4<Float>(woodBoundsMin.x, woodBoundsMin.y, boardWoodZMin, 0),
-            woodBoundsMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, boardWoodZMax, 0),
+            woodBoundsMax: SIMD4<Float>(woodBoundsMax.x, woodBoundsMax.y, boardWoodZMax, sp.padMode ? 1 : 0),
             holeTint: sp.holeTint,
             visualParams: SIMD4<Float>(sp.exposure, sp.bloomStrength, sp.cartoonShaderEnabled ? 1 : 0, Float(sp.cartoonLevels)),
             lightingParams: SIMD4<Float>(sp.ambient, sp.shadowDarkness, sp.lightSize, sp.shadowsEnabled ? 1 : 0),
@@ -400,7 +471,9 @@ extension Renderer {
             ropeMatParams5: SIMD4<Float>(sp.ropeSeamEnabled ? 1 : 0, sp.ropeSeamWidth, sp.ropeSeamDepth, sp.ropeSeamDarkness),
             ropeMatParams6: SIMD4<Float>(sp.ropeCracksEnabled ? 1 : 0, sp.ropeCrackAmount, sp.ropeCrackWidth, sp.ropeCrackDepth),
             ropeMatParams7: SIMD4<Float>(sp.ropeSeamHighlight, sp.ropeSeamCrackAmount, sp.ropeSeamCrackScale, sp.ropeSeamRandomize ? 1 : 0),
-            ropeMatParams8: SIMD4<Float>(sp.ropeSeamPosition, 0, 0, 0)
+            ropeMatParams8: SIMD4<Float>(sp.ropeSeamPosition, sp.ropeBumpContrast, sp.ropeBumpAniso, sp.ropeCoreDarken),
+            padParams1: SIMD4<Float>(sp.padColorR, sp.padColorG, sp.padColorB, sp.padMetallic),
+            padParams2: SIMD4<Float>(sp.padRoughness, sp.padRopeTint, sp.padHeight, 0)
         )
         frameUniforms.contents().copyMemory(from: [uniforms], byteCount: MemoryLayout<FrameUniforms>.stride)
 

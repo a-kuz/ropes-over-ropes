@@ -95,6 +95,39 @@ final class VerletSimulator {
     var weights: [Weight] = []
     var isTensionMode: Bool = false
     var isRailMode: Bool = false
+    var isRescueMode: Bool = false
+
+    // MARK: - Platform (rescue mode)
+
+    struct Platform {
+        var corners: [SIMD3<Float>]          // 4 corner positions (TL, TR, BR, BL)
+        var oldCorners: [SIMD3<Float>]       // previous positions for Verlet
+        var restEdges: [(Int, Int, Float)]   // 6 distance constraints (4 edges + 2 diags)
+        var mass: Float                       // total platform mass
+        var width: Float
+        var height: Float
+        /// Which rope (band) is attached to which corner. Key=corner index, Value=band index
+        var attachedBands: [Int: Int]
+        /// Corner indices of empty slots (where free ropes should be inserted)
+        var emptySlots: [Int]
+        /// Band indices of free ropes (one per empty slot)
+        var freeRopeIndices: [Int]
+        /// How many free ropes have been connected
+        var connectedCount: Int = 0
+        /// Seconds the platform has been stable (for win condition)
+        var stableTime: Float = 0
+        /// Wind: random impulse timer
+        var windTimer: Float = 0
+        /// Current wind force
+        var windForce: SIMD3<Float> = .zero
+
+        // Convenience accessors
+        var emptySlot: Int { emptySlots.first ?? 0 }
+        var freeRopeIndex: Int { freeRopeIndices.first ?? 0 }
+        var freeRopeConnected: Bool { connectedCount >= freeRopeIndices.count }
+    }
+
+    var platform: Platform?
 
     // Weight physics parameters
     var weightStaticFriction: Float = 0.02
@@ -222,9 +255,16 @@ final class VerletSimulator {
     let holeRadius: Float
     let holeDepth: Float
     let boards: [BoardDef]
+    var padMode: Bool = false
+    var padHeight: Float = 0.18
+    var padNeckHeight: Float = 0.08   // world-space vertical stub height at pinned pad
+    var padNeckStiffness: Float = 0.5 // soft-pin strength per iteration (0 = free, 1 = hard)
+    var holeRadiusScale: Float = 1.0
 
     // Physics parameters (tuneable)
     var gravity: Float = -14.298969268798828
+    /// Normalized direction for gravity. (0,0,1) = into table (phone flat), (0,-1,0) = down screen (phone vertical).
+    var gravityDirection: SIMD3<Float> = SIMD3<Float>(0, 0, 1)
     var damping: Float = 0.92867755889892578
     var constraintIterations: Int = 2 {
         didSet { constraintIterations = max(constraintIterations, 2) }
@@ -262,6 +302,11 @@ final class VerletSimulator {
     var logEvery: Float = 1.0  // log every N seconds
 
     var dragInfo: DragInfo?
+
+    // MARK: - Pre-allocated scratch buffers (avoid per-frame heap allocations)
+    private var activeIndices: [Int] = []
+    private var collisionPairsBuf: [CollisionPair] = []
+    private var lowerKeysToRemove: [LowerAnimationKey] = []
 
     // MARK: - Idle sleep
     var fadeOutSpeed: Float = 45.0
@@ -408,7 +453,7 @@ final class VerletSimulator {
     func update(deltaTime: Float) {
         let clampedDt = min(deltaTime, 1.0 / 15.0)  // spiral-of-death protection
 
-        if dragInfo != nil || hasLowerAnimations {
+        if dragInfo != nil || hasLowerAnimations || isRescueMode {
             idleTimer = 0
             isSleeping = false
         } else {
@@ -435,96 +480,137 @@ final class VerletSimulator {
             }
         }
 
-        // Advance suck-into-hole animations: slide rope along its arc-length curve into the hole
+        // Advance fade-out animations
         for i in bands.indices where bands[i].fadeOut > 0 && bands[i].active {
-            guard let hole = bands[i].suckHole else { continue }
             let n = bands[i].positions.count
-            let holeXY = holePositions[hole]
-            let holeElev = holeSurfaceZ(hole)
-            let holeBelow = SIMD3<Float>(holeXY.x, holeXY.y, holeElev - holeDepth)
 
-            let pullSpeed = fadeOutSpeed * bands[i].segmentLength
-            bands[i].suckConsumed += pullSpeed * clampedDt
+            if padMode {
+                // Pad mode: contract toward center + lift off + fade opacity
+                let duration: Float = 0.45
+                bands[i].suckConsumed += clampedDt
+                let t = min(bands[i].suckConsumed / duration, 1.0)
+                // Ease-in-out for smooth contraction
+                let eased = t * t * (3.0 - 2.0 * t)
 
-            let fromEnd = bands[i].suckFromEnd
-            let suckSegs = bands[i].suckSegLengths
-            let R = bands[i].radius
+                let origPositions = bands[i].suckOrigPositions
+                guard origPositions.count == n else { continue }
 
-            let origPositions = bands[i].suckOrigPositions
+                // Compute center of rope
+                var center = SIMD3<Float>.zero
+                for k in 0..<n { center += origPositions[k] }
+                center /= Float(n)
 
-            var arcLen = ContiguousArray<Float>(repeating: 0, count: n)
-            if fromEnd == 1 {
-                for k in 1..<n {
-                    arcLen[k] = arcLen[k - 1] + (k - 1 < suckSegs.count ? suckSegs[k - 1] : bands[i].segmentLength)
-                }
-            } else {
-                for k in stride(from: n - 2, through: 0, by: -1) {
-                    arcLen[k] = arcLen[k + 1] + (k < suckSegs.count ? suckSegs[k] : bands[i].segmentLength)
-                }
-            }
-
-            let totalArc = fromEnd == 1 ? arcLen[n - 1] : arcLen[0]
-            let consumed = bands[i].suckConsumed
-
-            for k in 0..<n {
-                let myArc = arcLen[k]
-                let shifted = myArc - consumed
-
-                if shifted <= 0 {
-                    bands[i].positions[k] = holeBelow - SIMD3<Float>(0, 0, -shifted)
-                } else {
-                    if fromEnd == 1 {
-                        var seg = 0
-                        var acc: Float = 0
-                        while seg < n - 1 {
-                            let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
-                            if acc + segL >= shifted { break }
-                            acc += segL
-                            seg += 1
-                        }
-                        let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
-                        let t = segL > 1e-9 ? (shifted - acc) / segL : 0
-                        let p0 = origPositions[seg]
-                        let p1 = seg + 1 < n ? origPositions[seg + 1] : p0
-                        bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
-                    } else {
-                        var seg = n - 1
-                        var acc: Float = 0
-                        while seg > 0 {
-                            let segL = (seg - 1) < suckSegs.count ? suckSegs[seg - 1] : bands[i].segmentLength
-                            if acc + segL >= shifted { break }
-                            acc += segL
-                            seg -= 1
-                        }
-                        let segL = (seg - 1 >= 0 && seg - 1 < suckSegs.count) ? suckSegs[seg - 1] : bands[i].segmentLength
-                        let t = segL > 1e-9 ? (shifted - acc) / segL : 0
-                        let p0 = origPositions[seg]
-                        let p1 = seg - 1 >= 0 ? origPositions[seg - 1] : p0
-                        bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
-                    }
-
-                    let surfZ = boardSurfaceZ(x: bands[i].positions[k].x, y: bands[i].positions[k].y)
-                    if bands[i].positions[k].z >= surfZ && bands[i].positions[k].z < surfZ + R {
-                        bands[i].positions[k].z = surfZ + R
-                    }
-                }
-                bands[i].previousPositions[k] = bands[i].positions[k]
-            }
-
-            if consumed >= totalArc {
-                Self.logger.warning("[WIN-DIAG] fadeOutComplete band=\(i) pinStart=\(self.bands[i].pinStart.map(String.init) ?? "nil") pinEnd=\(self.bands[i].pinEnd.map(String.init) ?? "nil") suckHole=\(self.bands[i].suckHole.map(String.init) ?? "nil") activeBefore=\(self.bands[i].active)")
-                bands[i].fadeOut = 1
-                bands[i].active = false
-                bands[i].pinStart = nil
-                bands[i].pinEnd = nil
-                bands[i].suckHole = nil
-            } else {
-                var aboveCount = 0
                 for k in 0..<n {
-                    let surfZ = boardSurfaceZ(x: bands[i].positions[k].x, y: bands[i].positions[k].y)
-                    if bands[i].positions[k].z >= surfZ { aboveCount += 1 }
+                    let orig = origPositions[k]
+                    // Contract toward center
+                    let contracted = orig + (center - orig) * eased * 0.85
+                    // Lift up
+                    let lift = eased * 0.15
+                    bands[i].positions[k] = SIMD3<Float>(contracted.x, contracted.y, contracted.z + lift)
+                    bands[i].previousPositions[k] = bands[i].positions[k]
                 }
-                bands[i].fadeOut = min(1.0 - Float(aboveCount) / Float(n), 0.999)
+
+                bands[i].fadeOut = min(eased, 0.999)
+                if t >= 1.0 {
+                    bands[i].fadeOut = 1
+                    bands[i].active = false
+                    bands[i].pinStart = nil
+                    bands[i].pinEnd = nil
+                    bands[i].suckHole = nil
+                }
+            } else {
+                // Standard mode: suck into hole
+                guard let hole = bands[i].suckHole else { continue }
+                let holeXY = holePositions[hole]
+                let holeElev = holeSurfaceZ(hole)
+                let holeBelow = SIMD3<Float>(holeXY.x, holeXY.y, holeElev - holeDepth)
+
+                let totalArcEst = bands[i].suckSegLengths.reduce(0, +)
+                let progress = totalArcEst > 1e-6 ? min(bands[i].suckConsumed / totalArcEst, 1.0) : 0
+                let accel = 1.0 + 2.0 * progress * progress
+                let pullSpeed = fadeOutSpeed * bands[i].segmentLength * accel
+                bands[i].suckConsumed += pullSpeed * clampedDt
+
+                let fromEnd = bands[i].suckFromEnd
+                let suckSegs = bands[i].suckSegLengths
+                let R = bands[i].radius
+
+                let origPositions = bands[i].suckOrigPositions
+
+                var arcLen = ContiguousArray<Float>(repeating: 0, count: n)
+                if fromEnd == 1 {
+                    for k in 1..<n {
+                        arcLen[k] = arcLen[k - 1] + (k - 1 < suckSegs.count ? suckSegs[k - 1] : bands[i].segmentLength)
+                    }
+                } else {
+                    for k in stride(from: n - 2, through: 0, by: -1) {
+                        arcLen[k] = arcLen[k + 1] + (k < suckSegs.count ? suckSegs[k] : bands[i].segmentLength)
+                    }
+                }
+
+                let totalArc = fromEnd == 1 ? arcLen[n - 1] : arcLen[0]
+                let consumed = bands[i].suckConsumed
+
+                for k in 0..<n {
+                    let myArc = arcLen[k]
+                    let shifted = myArc - consumed
+
+                    if shifted <= 0 {
+                        bands[i].positions[k] = holeBelow - SIMD3<Float>(0, 0, -shifted)
+                    } else {
+                        if fromEnd == 1 {
+                            var seg = 0
+                            var acc: Float = 0
+                            while seg < n - 1 {
+                                let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
+                                if acc + segL >= shifted { break }
+                                acc += segL
+                                seg += 1
+                            }
+                            let segL = seg < suckSegs.count ? suckSegs[seg] : bands[i].segmentLength
+                            let t = segL > 1e-9 ? (shifted - acc) / segL : 0
+                            let p0 = origPositions[seg]
+                            let p1 = seg + 1 < n ? origPositions[seg + 1] : p0
+                            bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
+                        } else {
+                            var seg = n - 1
+                            var acc: Float = 0
+                            while seg > 0 {
+                                let segL = (seg - 1) < suckSegs.count ? suckSegs[seg - 1] : bands[i].segmentLength
+                                if acc + segL >= shifted { break }
+                                acc += segL
+                                seg -= 1
+                            }
+                            let segL = (seg - 1 >= 0 && seg - 1 < suckSegs.count) ? suckSegs[seg - 1] : bands[i].segmentLength
+                            let t = segL > 1e-9 ? (shifted - acc) / segL : 0
+                            let p0 = origPositions[seg]
+                            let p1 = seg - 1 >= 0 ? origPositions[seg - 1] : p0
+                            bands[i].positions[k] = p0 + (p1 - p0) * min(t, 1)
+                        }
+
+                        let surfZ = boardSurfaceZ(x: bands[i].positions[k].x, y: bands[i].positions[k].y)
+                        if bands[i].positions[k].z >= surfZ && bands[i].positions[k].z < surfZ + R {
+                            bands[i].positions[k].z = surfZ + R
+                        }
+                    }
+                    bands[i].previousPositions[k] = bands[i].positions[k]
+                }
+
+                if consumed >= totalArc {
+                    Self.logger.warning("[WIN-DIAG] fadeOutComplete band=\(i) pinStart=\(self.bands[i].pinStart.map(String.init) ?? "nil") pinEnd=\(self.bands[i].pinEnd.map(String.init) ?? "nil") suckHole=\(self.bands[i].suckHole.map(String.init) ?? "nil") activeBefore=\(self.bands[i].active)")
+                    bands[i].fadeOut = 1
+                    bands[i].active = false
+                    bands[i].pinStart = nil
+                    bands[i].pinEnd = nil
+                    bands[i].suckHole = nil
+                } else {
+                    var aboveCount = 0
+                    for k in 0..<n {
+                        let surfZ = boardSurfaceZ(x: bands[i].positions[k].x, y: bands[i].positions[k].y)
+                        if bands[i].positions[k].z >= surfZ { aboveCount += 1 }
+                    }
+                    bands[i].fadeOut = min(1.0 - Float(aboveCount) / Float(n), 0.999)
+                }
             }
         }
 
@@ -557,6 +643,13 @@ final class VerletSimulator {
                 drag=\(self.dragInfo != nil) particles=\(self.bands.first?.positions.count ?? 0) \
                 bands=\(self.bands.filter { $0.active }.count) constIter=\(self.constraintIterations)
                 """)
+            if isRescueMode, let plat = platform {
+                let c0 = plat.corners[0]
+                let c1 = plat.corners[1]
+                let c2 = plat.corners[2]
+                let c3 = plat.corners[3]
+                Self.logger.info("[PLATFORM] corners z=[\(String(format:"%.3f",c0.z)),\(String(format:"%.3f",c1.z)),\(String(format:"%.3f",c2.z)),\(String(format:"%.3f",c3.z))] attached=\(plat.attachedBands.count) free=\(plat.freeRopeConnected) stable=\(String(format:"%.1f",plat.stableTime))")
+            }
         }
 
         if let drag = dragInfo, let target = dragTargetPos {
@@ -609,14 +702,31 @@ final class VerletSimulator {
             updateWeights(dt: clampedDt)
         }
 
+        // Platform stability check (rescue mode) — win condition timer, runs per-frame
+        if isRescueMode, var plat = platform {
+            if plat.freeRopeConnected {
+                var maxVel: Float = 0
+                for i in 0..<4 {
+                    let vel = simd_length(plat.corners[i] - plat.oldCorners[i])
+                    maxVel = max(maxVel, vel)
+                }
+                if maxVel < 0.001 {
+                    plat.stableTime += clampedDt
+                } else {
+                    plat.stableTime = max(0, plat.stableTime - clampedDt * 0.5)
+                }
+                platform = plat
+            }
+        }
+
         // logCrossingState disabled — costs 8% CPU (O(n²) per band pair)
     }
 
     private func updateLowerAnimation(deltaTime: Float) {
         guard !lowerAnimations.isEmpty else { return }
 
-        for key in Array(lowerAnimations.keys) {
-            guard var anim = lowerAnimations[key] else { continue }
+        lowerKeysToRemove.removeAll(keepingCapacity: true)
+        for (key, var anim) in lowerAnimations {
             anim.timer += deltaTime
 
             let bi = anim.bandIndex
@@ -641,7 +751,23 @@ final class VerletSimulator {
 
             let holePos = holePosition3D(anim.targetHole)
             let t = min(anim.timer / lowerAnimDuration, 1.0)
-            let eased = 1.0 - (1.0 - t) * (1.0 - t)
+            let eased: Float
+            if padMode {
+                // Magnetic snap via cubic Hermite: C1-smooth, no derivative kink
+                // p0=0, p1=1, m0=tangent at start, m1=tangent at end
+                // m0=0.8 (gentle start), m1=2.5 (magnetic acceleration into pad)
+                let t2 = t * t
+                let t3 = t2 * t
+                let m0: Float = 0.8
+                let m1: Float = 2.5
+                // Hermite basis: h00*p0 + h10*m0 + h01*p1 + h11*m1 (p0=0, p1=1)
+                let h10 = t3 - 2 * t2 + t           // *m0
+                let h01 = -2 * t3 + 3 * t2          // *p1 = 1
+                let h11 = t3 - t2                    // *m1
+                eased = h10 * m0 + h01 + h11 * m1
+            } else {
+                eased = 1.0 - (1.0 - t) * (1.0 - t)
+            }
             let pos = anim.startPos + (holePos - anim.startPos) * eased
             bands[bi].positions[idx] = pos
             bands[bi].previousPositions[idx] = pos
@@ -654,12 +780,13 @@ final class VerletSimulator {
                 }
                 bands[bi].positions[idx] = holePos
                 bands[bi].previousPositions[idx] = holePos
-                lowerAnimations.removeValue(forKey: key)
+                lowerKeysToRemove.append(key)
                 continue
             }
 
             lowerAnimations[key] = anim
         }
+        for key in lowerKeysToRemove { lowerAnimations.removeValue(forKey: key) }
     }
 
     // MARK: - Weight physics
@@ -774,6 +901,122 @@ final class VerletSimulator {
         return weights.allSatisfy { $0.settled }
     }
 
+    // MARK: - Platform (rescue mode)
+
+    func initializePlatform(_ def: LevelDefinition.PlatformDef) {
+        let hw = def.width / 2
+        let hh = def.height / 2
+        let z: Float = 0.3  // platform hangs at this Z
+
+        // Corners: TL(0), TR(1), BR(2), BL(3)
+        let corners: [SIMD3<Float>] = [
+            SIMD3(-hw,  hh, z),  // TL
+            SIMD3( hw,  hh, z),  // TR
+            SIMD3( hw, -hh, z),  // BR
+            SIMD3(-hw, -hh, z),  // BL
+        ]
+
+        // 6 constraints: 4 edges + 2 diagonals
+        var edges: [(Int, Int, Float)] = []
+        let pairs: [(Int, Int)] = [(0,1), (1,2), (2,3), (3,0), (0,2), (1,3)]
+        for (a, b) in pairs {
+            edges.append((a, b, simd_length(corners[a] - corners[b])))
+        }
+
+        var attachedBands: [Int: Int] = [:]
+        for att in def.attachments {
+            attachedBands[att.cornerIndex] = att.ropeIndex
+        }
+
+        platform = Platform(
+            corners: corners,
+            oldCorners: corners,
+            restEdges: edges,
+            mass: def.mass,
+            width: def.width,
+            height: def.height,
+            attachedBands: attachedBands,
+            emptySlots: def.emptySlots,
+            freeRopeIndices: def.freeRopeIndices
+        )
+
+        // At start: ALL ropes connected (including "free" ones).
+        // Free ropes will be detached after a brief animation delay.
+        // This means at init, attach free ropes too.
+        var allAttached = attachedBands
+        for (i, freeIdx) in def.freeRopeIndices.enumerated() {
+            if i < def.emptySlots.count {
+                allAttached[def.emptySlots[i]] = freeIdx
+            }
+        }
+        // Store all-connected state temporarily
+        platform?.attachedBands = allAttached
+
+        // Initialize ALL ropes: spread particles from ceiling anchor to platform corner
+        for bandIdx in bands.indices {
+            guard bands[bandIdx].pinStart != nil else { continue }
+            let anchorHole = bands[bandIdx].pinStart!
+            let anchorPos = holePosition3D(anchorHole)
+            let n = bands[bandIdx].positions.count
+
+            // Every rope goes to its assigned corner
+            let bottomPos: SIMD3<Float>
+            if let cornerIdx = allAttached.first(where: { $0.value == bandIdx })?.key {
+                bottomPos = corners[cornerIdx]
+            } else {
+                continue
+            }
+
+            // Spread particles along straight line from anchor to bottom
+            for i in 0..<n {
+                let t = Float(i) / Float(max(1, n - 1))
+                bands[bandIdx].positions[i] = anchorPos + (bottomPos - anchorPos) * t
+            }
+            bands[bandIdx].positions[0] = anchorPos
+            bands[bandIdx].positions[n - 1] = bottomPos
+            bands[bandIdx].previousPositions = bands[bandIdx].positions
+
+            let dist = simd_length(bottomPos - anchorPos)
+            bands[bandIdx].segmentLength = dist / Float(max(1, n - 1))
+            bands[bandIdx].active = true
+
+            Self.logger.info("[RESCUE-INIT] band=\(bandIdx) n=\(n) segLen=\(String(format: "%.4f", self.bands[bandIdx].segmentLength)) anchor=\(anchorHole)")
+        }
+
+        // All ropes have no pinEnd — they connect to platform via bilateral constraints
+        for bandIdx in bands.indices {
+            bands[bandIdx].pinEnd = nil
+        }
+
+        // No settle — platform starts mid-air and physics runs at runtime.
+        // Free ropes will be detached after rescueBreakDelay seconds.
+    }
+
+    /// Connect a free rope to a specific empty slot
+    func connectFreeRopeToPlatform(ropeIndex: Int, slotIndex: Int) {
+        guard var plat = platform else { return }
+        guard plat.emptySlots.contains(slotIndex) else { return }
+        guard plat.freeRopeIndices.contains(ropeIndex) else { return }
+        guard plat.attachedBands[slotIndex] == nil else { return }  // slot already filled
+        plat.attachedBands[slotIndex] = ropeIndex
+        plat.connectedCount += 1
+        platform = plat
+        Self.logger.info("[RESCUE] Rope \(ropeIndex) connected to slot \(slotIndex), \(plat.connectedCount)/\(plat.freeRopeIndices.count) done")
+    }
+
+    /// Legacy single-rope connect
+    func connectFreeRopeToPlatform() {
+        guard let plat = platform else { return }
+        connectFreeRopeToPlatform(ropeIndex: plat.freeRopeIndex, slotIndex: plat.emptySlot)
+    }
+
+    var isPlatformStable: Bool {
+        guard let plat = platform else { return false }
+        return plat.freeRopeConnected && plat.stableTime >= 2.0
+    }
+
+    // updatePlatform removed — platform physics now runs inside verletStep() at 120Hz
+
     // MARK: - Rail mode initialization
 
     func initializeRails(railDefs: [LevelDefinition.RailDef],
@@ -812,7 +1055,7 @@ final class VerletSimulator {
         profiler.begin()
 
         // 1. Verlet position update + velocity limiting
-        let gravVec = SIMD3<Float>(0, 0, gravity * dt2)
+        let gravVec = gravityDirection * (gravity * dt2)
         for bi in bands.indices {
             guard bands[bi].active && bands[bi].fadeOut == 0 else { continue }
             let n = bands[bi].positions.count
@@ -839,16 +1082,51 @@ final class VerletSimulator {
                 }
             }
         }
+        // Platform Verlet integration (rescue mode) — runs per substep
+        if isRescueMode, var plat = platform {
+            // Wind: random impulses that change direction periodically
+            plat.windTimer += dt
+            if plat.windTimer > 0.4 + Float.random(in: 0...0.6) {
+                plat.windTimer = 0
+                let windStrength: Float = 0.3 * plat.mass
+                plat.windForce = SIMD3<Float>(
+                    Float.random(in: -windStrength...windStrength),
+                    Float.random(in: -windStrength...windStrength),
+                    Float.random(in: -windStrength * 0.3...windStrength * 0.1)
+                ) * dt2
+            }
+            let windPerCorner = plat.windForce / 4.0
+
+            let cornerGrav = gravityDirection * (gravity * dt2 * plat.mass / 4.0)
+            for i in 0..<4 {
+                let pos = plat.corners[i]
+                let old = plat.oldCorners[i]
+                var vel = (pos - old) * 0.98  // light damping — platform is heavy
+                let maxVel: Float = 5.0 * dt   // allow real falling speed
+                let vLen = simd_length(vel)
+                if vLen > maxVel { vel *= maxVel / vLen }
+                plat.oldCorners[i] = pos
+                plat.corners[i] = pos + vel + cornerGrav + windPerCorner
+            }
+            platform = plat
+        }
+
         profiler.end(.verletIntegration)
 
         // 2. Constraint + collision iterations (interleaved for robust PBD)
-        let active: [Int] = collide ? bands.indices.filter({ bands[$0].active && bands[$0].fadeOut == 0 }) : []
+        activeIndices.removeAll(keepingCapacity: true)
+        if collide {
+            for i in bands.indices where bands[i].active && bands[i].fadeOut == 0 {
+                activeIndices.append(i)
+            }
+        }
+        let active = activeIndices
 
         // Scale iterations inversely with tension — stronger tension needs more solver work
         let effectiveIters = max(constraintIterations, Int(Float(constraintIterations) / max(currentTension, 0.3)))
 
         // Build collision pair list (broadphase). Rebuilt periodically during solve.
-        var collisionPairs: [CollisionPair] = collide ? profiler.measure(.broadphase) { buildCollisionPairs(active) } : []
+        if collide { profiler.measure(.broadphase) { rebuildCollisionPairs(active) } }
 
         // Recompute material frames for rectangular bands (needed for collision + twist)
         profiler.measure(.frames) { recomputeFrames() }
@@ -874,11 +1152,57 @@ final class VerletSimulator {
                 guard bands[bi].active && bands[bi].fadeOut == 0 else { continue }
                 bandConstraints(bi, dt: dt)
             }
+
+            // Platform shape + rope-corner constraints (rescue mode)
+            if isRescueMode, var plat = platform {
+                // Shape constraints: keep rectangle rigid
+                for (a, b, rest) in plat.restEdges {
+                    let delta = plat.corners[b] - plat.corners[a]
+                    let dist = simd_length(delta)
+                    guard dist > 1e-6 else { continue }
+                    let correction = (dist - rest) / dist * 0.5
+                    let offset = delta * correction
+                    plat.corners[a] += offset
+                    plat.corners[b] -= offset
+                }
+
+                // Rope-corner coupling via shared distance constraint.
+                // Platform corner is heavy (mass/4), rope particle is light (1.0).
+                // We solve a distance constraint (rest=0) between them, splitting
+                // correction by inverse mass so the heavy corner moves less.
+                let cornerInvMass = 4.0 / plat.mass  // 1/cornerMass
+                let particleInvMass: Float = 1.0
+                let totalInvMass = cornerInvMass + particleInvMass
+                let cornerFrac = cornerInvMass / totalInvMass
+                let particleFrac = particleInvMass / totalInvMass
+
+                for (cornerIdx, bandIdx) in plat.attachedBands {
+                    guard bands.indices.contains(bandIdx), bands[bandIdx].active else { continue }
+                    let lastIdx = bands[bandIdx].positions.count - 1
+                    let ropeEnd = bands[bandIdx].positions[lastIdx]
+                    let corner = plat.corners[cornerIdx]
+                    let delta = ropeEnd - corner
+                    // Move both toward each other, weighted by inverse mass
+                    plat.corners[cornerIdx] += delta * cornerFrac
+                    bands[bandIdx].positions[lastIdx] -= delta * particleFrac
+                    bands[bandIdx].previousPositions[lastIdx] = bands[bandIdx].positions[lastIdx]
+                }
+
+                // Floor constraint — far below, platform should hang in air
+                let floorLimit: Float = -3.0
+                for i in 0..<4 {
+                    if plat.corners[i].z < floorLimit {
+                        plat.corners[i].z = floorLimit
+                    }
+                }
+                platform = plat
+            }
+
             if collide {
                 if broadphaseRebuildInterval > 0 && iter > 0 && iter % broadphaseRebuildInterval == 0 {
-                    collisionPairs = profiler.measure(.broadphase) { buildCollisionPairs(active) }
+                    profiler.measure(.broadphase) { rebuildCollisionPairs(active) }
                 }
-                resolveCollisionPairs(collisionPairs)
+                resolveCollisionPairs(collisionPairsBuf)
                 profiler.measure(.crossingSolve) { resolve2DCrossingCollisions(active) }
             }
         }
@@ -888,7 +1212,7 @@ final class VerletSimulator {
         // Post-solve: collision-only passes until converged
         if collide {
             for _ in 0..<3 {
-                let hadCollision = resolveCollisionPairs(collisionPairs, injectVelocity: true)
+                let hadCollision = resolveCollisionPairs(collisionPairsBuf, injectVelocity: true)
                 for bi in active {
                     let n = bands[bi].positions.count
                     if let startPin = bands[bi].pinStart {
@@ -901,25 +1225,28 @@ final class VerletSimulator {
                         bands[bi].positions[n - 1] = hp
                         bands[bi].previousPositions[n - 1] = hp
                     }
-                    if bands[bi].crossSection.isRectangular && cachedFrames.indices.contains(bi) && cachedFrames[bi].count == n {
-                        let cs = bands[bi].crossSection
-                        for i in 1..<(n - 1) {
-                            let frame = cachedFrames[bi][i]
-                            let zExtent = cs.effectiveRadius(
-                                normal: SIMD3<Float>(0, 0, 1),
-                                d1: frame.d1,
-                                d2: frame.d2
-                            )
-                            let floorZ = boardSurfaceZ(x: bands[bi].positions[i].x, y: bands[bi].positions[i].y) + zExtent
-                            if bands[bi].positions[i].z < floorZ {
-                                bands[bi].positions[i].z = floorZ
+                    // Rescue mode: no floor — ropes hang freely in air
+                    if !isRescueMode {
+                        if bands[bi].crossSection.isRectangular && cachedFrames.indices.contains(bi) && cachedFrames[bi].count == n {
+                            let cs = bands[bi].crossSection
+                            for i in 1..<(n - 1) {
+                                let frame = cachedFrames[bi][i]
+                                let zExtent = cs.effectiveRadius(
+                                    normal: SIMD3<Float>(0, 0, 1),
+                                    d1: frame.d1,
+                                    d2: frame.d2
+                                )
+                                let floorZ = boardSurfaceZ(x: bands[bi].positions[i].x, y: bands[bi].positions[i].y) + zExtent
+                                if bands[bi].positions[i].z < floorZ {
+                                    bands[bi].positions[i].z = floorZ
+                                }
                             }
-                        }
-                    } else {
-                        for i in 1..<(n - 1) {
-                            let floorZ = boardSurfaceZ(x: bands[bi].positions[i].x, y: bands[bi].positions[i].y) + bands[bi].radius
-                            if bands[bi].positions[i].z < floorZ {
-                                bands[bi].positions[i].z = floorZ
+                        } else {
+                            for i in 1..<(n - 1) {
+                                let floorZ = boardSurfaceZ(x: bands[bi].positions[i].x, y: bands[bi].positions[i].y) + bands[bi].radius
+                                if bands[bi].positions[i].z < floorZ {
+                                    bands[bi].positions[i].z = floorZ
+                                }
                             }
                         }
                     }
@@ -1030,7 +1357,7 @@ final class VerletSimulator {
 
         profiler.end(.postCollision)
 
-        profiler.setCounter("pairs", collisionPairs.count)
+        profiler.setCounter("pairs", collisionPairsBuf.count)
         profiler.setCounter("particles", bands.first?.positions.count ?? 0)
         profiler.setCounter("bands", active.count)
         profiler.setCounter("effIter", effectiveIters)
@@ -1041,7 +1368,8 @@ final class VerletSimulator {
 
     private func bandConstraints(_ bi: Int, dt: Float) {
         let n = bands[bi].positions.count
-        let segLen = bands[bi].segmentLength * currentTension
+        let naturalSegLen = bands[bi].segmentLength
+        let segLen = naturalSegLen * currentTension
         let alpha = max(bendCompliance, 0) / max(dt * dt, 1e-8)
         let bendCoupling = max(0, min(bendVelocityCoupling, 1))
         let pinS = bands[bi].pinStart
@@ -1053,7 +1381,8 @@ final class VerletSimulator {
         let R = bands[bi].radius
         let frames = (isRect && cachedFrames.indices.contains(bi) && cachedFrames[bi].count == n) ? cachedFrames[bi] : []
 
-        var prev = bands[bi].previousPositions
+        var prev = ContiguousArray<SIMD3<Float>>()
+        swap(&prev, &bands[bi].previousPositions)
         bands[bi].positions.withUnsafeMutableBufferPointer { pos in
             for offset in 0...1 {
                 var idx = offset
@@ -1063,8 +1392,10 @@ final class VerletSimulator {
                     if dist2 > 1e-12 {
                         let dist = sqrtf(dist2)
                         let corr = diff * ((dist - segLen) / dist * 0.5)
-                        if idx > 0 { pos[idx] += corr }
-                        if idx + 1 < n - 1 { pos[idx + 1] -= corr }
+                        let startFree = pinS == nil
+                        let endFree = pinE == nil
+                        if idx > 0 || startFree { pos[idx] += corr }
+                        if idx + 1 < n - 1 || endFree { pos[idx + 1] -= corr }
                     }
                     idx += 2
                 }
@@ -1110,6 +1441,35 @@ final class VerletSimulator {
             if let hp = holeS { pos[0] = hp }
             if let hp = holeE { pos[n - 1] = hp }
 
+            // Pad mode: soft-pin a vertical "neck" of particles above each pad.
+            // Stiffness tapers from max near the pin to 0 at neck top — rope blends
+            // smoothly into free physics. Neck stays vertical under normal tension
+            // but can yield to strong external forces.
+            if padMode {
+                let neckK = min(n / 3, max(1, Int(ceil(padNeckHeight / max(naturalSegLen, 1e-6)))))
+                let maxStiffness = padNeckStiffness
+                if holeS != nil {
+                    let base = pos[0]
+                    for k in 1...neckK where k < n - 1 {
+                        let t = Float(k) / Float(neckK + 1)
+                        let falloff = 1.0 - t * t * (3.0 - 2.0 * t)
+                        let stiff = maxStiffness * falloff
+                        let target = base + SIMD3<Float>(0, 0, Float(k) * naturalSegLen)
+                        pos[k] += (target - pos[k]) * stiff
+                    }
+                }
+                if holeE != nil {
+                    let base = pos[n - 1]
+                    for k in 1...neckK where n - 1 - k > 0 {
+                        let t = Float(k) / Float(neckK + 1)
+                        let falloff = 1.0 - t * t * (3.0 - 2.0 * t)
+                        let stiff = maxStiffness * falloff
+                        let target = base + SIMD3<Float>(0, 0, Float(k) * naturalSegLen)
+                        pos[n - 1 - k] += (target - pos[n - 1 - k]) * stiff
+                    }
+                }
+            }
+
             if !frames.isEmpty {
                 let upN = SIMD3<Float>(0, 0, 1)
                 for i in 1..<(n - 1) {
@@ -1125,7 +1485,7 @@ final class VerletSimulator {
                 }
             }
         }
-        bands[bi].previousPositions = prev
+        swap(&prev, &bands[bi].previousPositions)
 
         if isRect {
             let stiffness = twistStiffness
@@ -1327,10 +1687,9 @@ final class VerletSimulator {
     }
 
     /// Broadphase: AABB sweep between band pairs and within the same band.
-    func buildCollisionPairs(_ activeBands: [Int]) -> [CollisionPair] {
-        guard !activeBands.isEmpty else { return [] }
-        var pairs: [CollisionPair] = []
-        pairs.reserveCapacity(512)
+    private func rebuildCollisionPairs(_ activeBands: [Int]) {
+        collisionPairsBuf.removeAll(keepingCapacity: true)
+        guard !activeBands.isEmpty else { return }
 
         for ai in 0..<activeBands.count {
             let bi = activeBands[ai]
@@ -1356,7 +1715,7 @@ final class VerletSimulator {
                         let b1 = posI[sj + 1]
                         if max(b0.x, b1.x) < aMinX || min(b0.x, b1.x) > aMaxX { continue }
                         if max(b0.y, b1.y) < aMinY || min(b0.y, b1.y) > aMaxY { continue }
-                        pairs.append(CollisionPair(bandA: UInt16(bi), segA: UInt16(si), bandB: UInt16(bi), segB: UInt16(sj)))
+                        collisionPairsBuf.append(CollisionPair(bandA: UInt16(bi), segA: UInt16(si), bandB: UInt16(bi), segB: UInt16(sj)))
                     }
                 }
             }
@@ -1380,12 +1739,11 @@ final class VerletSimulator {
                         let b1 = posJ[sj + 1]
                         if max(b0.x, b1.x) < aMinX || min(b0.x, b1.x) > aMaxX { continue }
                         if max(b0.y, b1.y) < aMinY || min(b0.y, b1.y) > aMaxY { continue }
-                        pairs.append(CollisionPair(bandA: UInt16(bi), segA: UInt16(si), bandB: UInt16(bj), segB: UInt16(sj)))
+                        collisionPairsBuf.append(CollisionPair(bandA: UInt16(bi), segA: UInt16(si), bandB: UInt16(bj), segB: UInt16(sj)))
                     }
                 }
             }
         }
-        return pairs
     }
 
     @discardableResult

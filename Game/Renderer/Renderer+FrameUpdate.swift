@@ -240,6 +240,12 @@ extension Renderer {
         }
 
         PhysicsProfiler.shared.measure(.meshBuild) { updateRopeMesh() }
+        updateHoleTintColors()
+
+        // Rescue mode: rebuild platform mesh every frame
+        if isRescueMode {
+            updatePlatformMesh()
+        }
 
         // Tension mode: update weight render state and check win
         if isTensionMode {
@@ -261,6 +267,54 @@ extension Renderer {
         if isBraidMode && !braidLevelCompleted {
             if dragState == nil && simulator?.dragInfo == nil && simulator?.hasLowerAnimations != true {
                 checkBraidModeComplete()
+            }
+        }
+
+        // Rescue mode: rope break animation + win check
+        if isRescueMode && !rescueLevelCompleted {
+            // Rope break animation: after delay, snap free ropes off platform
+            if !rescueRopesDetached {
+                rescueBreakTimer += deltaTime
+                if rescueBreakTimer >= rescueBreakDelay {
+                    rescueRopesDetached = true
+                    if let sim = simulator, var plat = sim.platform {
+                        for freeIdx in plat.freeRopeIndices {
+                            guard let cornerIdx = plat.attachedBands.first(where: { $0.value == freeIdx })?.key else { continue }
+                            guard sim.bands.indices.contains(freeIdx) else { continue }
+
+                            let n = sim.bands[freeIdx].positions.count
+                            let lastIdx = n - 1
+
+                            // Detach from platform
+                            plat.attachedBands.removeValue(forKey: cornerIdx)
+
+                            // Give rope end a spring-back impulse (snap upward)
+                            let cornerPos = plat.corners[cornerIdx]
+                            let anchorPos = sim.bands[freeIdx].positions[0]
+                            let snapDir = simd_normalize(anchorPos - cornerPos)
+                            let snapImpulse = snapDir * 0.15
+
+                            // Apply impulse to bottom half of rope (spring recoil)
+                            let halfN = n / 2
+                            for i in halfN..<n {
+                                let t = Float(i - halfN) / Float(n - halfN)
+                                sim.bands[freeIdx].previousPositions[i] -= snapImpulse * t
+                            }
+
+                            // Give platform a downward jerk (lost support)
+                            let jerk = SIMD3<Float>(0, 0, -0.08)
+                            plat.corners[cornerIdx] += jerk
+
+                            Self.logger.info("[RESCUE] Rope \(freeIdx) SNAPPED from corner \(cornerIdx)!")
+                        }
+                        sim.platform = plat
+                        Haptics.medium()
+                    }
+                }
+            }
+
+            if let sim = simulator, sim.isPlatformStable {
+                checkRescueModeComplete()
             }
         }
     }

@@ -150,7 +150,7 @@ extension Renderer {
         }
 
         // Identity instance: position=(0,0,0), radius=1
-        var identityInstance = HoleInstance(positionRadius: SIMD4<Float>(0, 0, 0, 1))
+        var identityInstance = HoleInstance(positionRadius: SIMD4<Float>(0, 0, 0, 1), tintColor: .zero)
         let identityBuf = device.makeBuffer(bytes: &identityInstance, length: MemoryLayout<HoleInstance>.stride, options: [.storageModeShared])
         encoder.setVertexBuffer(identityBuf, offset: 0, index: 2)
 

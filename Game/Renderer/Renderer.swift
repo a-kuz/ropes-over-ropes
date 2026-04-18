@@ -69,6 +69,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var profileSegments: Int = 10
     var holeRadiusScale: Float = 0.73367023468017578 {
         didSet {
+            simulator?.holeRadiusScale = holeRadiusScale
             rebuildHoleInstancesIfNeeded()
             if levelLoaded { bakeHoleMaskTexture() }
         }
@@ -80,6 +81,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             rebuildHoleMeshIfNeeded()
             simulator?.squareCrossSection = squareCrossSection
             if levelLoaded { bakeHoleMaskTexture() }
+        }
+    }
+    var padMode: Bool = false {
+        didSet {
+            shaderParams.padMode = padMode
+            rebuildHoleMeshIfNeeded()
+            simulator?.padMode = padMode
         }
     }
     var stretchThinning: Float = 0.5 {
@@ -147,6 +155,7 @@ final class Renderer: NSObject, MTKViewDelegate {
     var envDisabledTex: MTLTexture
     var woodDebugTex: MTLTexture
     var holeMaskDisabledTex: MTLTexture
+    var boardWoodVolumeDisabledTex: MTLTexture
     var sceneDepthTex: MTLTexture?
     var bloomA: MTLTexture?
     var bloomB: MTLTexture?
@@ -167,6 +176,11 @@ final class Renderer: NSObject, MTKViewDelegate {
     var boardMeshVB: MTLBuffer?
     var boardMeshIB: MTLBuffer?
     var boardMeshIndexCount: Int = 0
+
+    // Platform rendering (rescue mode)
+    var platformVB: MTLBuffer?
+    var platformIB: MTLBuffer?
+    var platformIndexCount: Int = 0
 
     let frictionSound = RubberFrictionSound()
 
@@ -244,6 +258,13 @@ final class Renderer: NSObject, MTKViewDelegate {
     // Rail mode rendering
     var isRailMode: Bool = false
     var railLevelCompleted: Bool = false
+
+    // Rescue mode
+    var isRescueMode: Bool = false
+    var rescueLevelCompleted: Bool = false
+    var rescueBreakTimer: Float = 0
+    let rescueBreakDelay: Float = 1.5  // seconds before ropes break
+    var rescueRopesDetached: Bool = false
     struct RailRenderInfo {
         var points: [SIMD2<Float>]
     }
@@ -496,7 +517,7 @@ final class Renderer: NSObject, MTKViewDelegate {
 
         self.frameUniforms = device.makeBuffer(length: MemoryLayout<FrameUniforms>.stride, options: [.storageModeShared])
         self.postParamsBuffer = device.makeBuffer(length: MemoryLayout<PostParams>.stride, options: [.storageModeShared])
-        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
+        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, padMode: shaderParams.padMode, padHeight: shaderParams.padHeight, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
         let envDisabledDesc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: 1, height: 1, mipmapped: false)
         envDisabledDesc.usage = .shaderRead
         guard let envDisabledTex = device.makeTexture(descriptor: envDisabledDesc) else {
@@ -512,9 +533,20 @@ final class Renderer: NSObject, MTKViewDelegate {
         guard let holeMaskDisabledTex = device.makeTexture(descriptor: holeMaskDisabledDesc) else {
             fatalError("Failed to create disabled hole mask texture")
         }
+        let boardWoodVolumeDisabledDesc = MTLTextureDescriptor()
+        boardWoodVolumeDisabledDesc.textureType = .type3D
+        boardWoodVolumeDisabledDesc.pixelFormat = .rgba16Float
+        boardWoodVolumeDisabledDesc.width = 1
+        boardWoodVolumeDisabledDesc.height = 1
+        boardWoodVolumeDisabledDesc.depth = 1
+        boardWoodVolumeDisabledDesc.usage = .shaderRead
+        guard let boardWoodVolumeDisabledTex = device.makeTexture(descriptor: boardWoodVolumeDisabledDesc) else {
+            fatalError("Failed to create disabled board wood volume texture")
+        }
         self.envDisabledTex = envDisabledTex
         self.woodDebugTex = woodDebugTex
         self.holeMaskDisabledTex = holeMaskDisabledTex
+        self.boardWoodVolumeDisabledTex = boardWoodVolumeDisabledTex
 
         var envDisabledPixel = [UInt16](repeating: 0, count: 4)
         envDisabledTex.replace(region: MTLRegionMake2D(0, 0, 1, 1), mipmapLevel: 0, withBytes: &envDisabledPixel, bytesPerRow: MemoryLayout<UInt16>.stride * 4)
@@ -585,6 +617,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         } else if let jsonLevel = LevelLoader.load(levelId: levelId) {
             Self.logger.info("Level \(levelId) loaded from JSON: \(jsonLevel.ropes.count) ropes, \(jsonLevel.holes.count) holes")
             level = jsonLevel
+        } else if levelId >= 4001 {
+            Self.logger.info("Level \(levelId) generated as rescue mode")
+            level = LevelGenerator.generateRescueLevel(levelId: levelId, particleCount: physicsParticleCount)
         } else if levelId >= 3100 {
             Self.logger.info("Level \(levelId): structure showcase")
             level = LevelGenerator.generateStructureShowcase(levelId: levelId, particleCount: physicsParticleCount)
@@ -616,7 +651,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         let validatedRopes = level.ropes.filter { rope in
             guard rope.startHole >= 0 && rope.startHole <= maxValidIndex else { return false }
             guard rope.endHole >= 0 && rope.endHole <= maxValidIndex else { return false }
-            return rope.startHole != rope.endHole
+            // Rescue mode: ropes have startHole == endHole (only top end is pinned)
+            if !level.isRescueMode {
+                guard rope.startHole != rope.endHole else { return false }
+            }
+            return true
         }
 
         holePositions = levelHoles
@@ -662,6 +701,9 @@ final class Renderer: NSObject, MTKViewDelegate {
         sim.idleTimeout = physicsIdleTimeout
         sim.stretchThinning = stretchThinning
         sim.squareCrossSection = squareCrossSection
+        sim.padMode = padMode
+        sim.padHeight = shaderParams.padHeight
+        sim.holeRadiusScale = holeRadiusScale
 
         let simRopeConfigs = ropes.map { rope in
             VerletSimulator.RopeConfig(startHole: rope.startHole, endHole: rope.endHole, radius: rope.radius, crossSection: rope.crossSection)
@@ -748,6 +790,13 @@ final class Renderer: NSObject, MTKViewDelegate {
             stationRenderInfos = []
         }
 
+        // Rescue mode setup
+        isRescueMode = level.isRescueMode
+        rescueLevelCompleted = false
+        rescueBreakTimer = 0
+        rescueRopesDetached = false
+        sim.isRescueMode = isRescueMode
+
         let simParticles: [[SIMD3<Float>]]? = level.ropeParticles.map { ropes in
             ropes.map { particles in particles.map { $0.simd3 } }
         }
@@ -770,6 +819,11 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
         pendingBraidDrags = []
         braidRemainingCrossings = 0
+
+        // Rescue mode: initialize platform after bands are set up
+        if isRescueMode, let platformDef = level.platform {
+            sim.initializePlatform(platformDef)
+        }
 
         let tPhysics = CACurrentMediaTime()
         self.simulator = sim
@@ -808,8 +862,12 @@ final class Renderer: NSObject, MTKViewDelegate {
         }
 
         let aspect = Float(lastViewSize.width / max(1, lastViewSize.height))
-        let maxElev = holeElevations.max() ?? 0
-        camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        if isRescueMode {
+            setupRescueCamera(aspect: aspect)
+        } else {
+            let maxElev = holeElevations.max() ?? 0
+            camera.fitToHoles(holePositions, holeRadius: holeRadius, aspect: aspect, maxElevation: maxElev)
+        }
         cameraBaseOrthoHalfHeight = camera.orthoHalfHeight
         camera.orthoHalfHeight = cameraBaseOrthoHalfHeight / cameraZoomScale
 

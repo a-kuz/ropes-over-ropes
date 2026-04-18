@@ -1,7 +1,7 @@
 use crate::leaderboard::LeaderboardResult;
 use crate::renderer::frame_types::{
-    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, TableSettings,
-    VisualSettings, WormSettings,
+    CapSettings, CartoonSettings, LightingSettings, RopeMaterialSettings, SsrSettings,
+    TableSettings, VisualSettings, WormSettings,
 };
 use crate::renderer::gpu::GpuTimings;
 use serde_json::Value;
@@ -78,6 +78,7 @@ pub fn draw_hud(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     square_cross: &mut bool,
     current_level: usize,
@@ -767,6 +768,34 @@ pub fn draw_hud(
                                 );
                             });
 
+                        egui::CollapsingHeader::new("SSR")
+                            .default_open(false)
+                            .show(ui, |ui| {
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.strength, 0.0..=1.0)
+                                        .text("Strength"),
+                                );
+                                let mut steps_f = ssr.max_steps as f32;
+                                if ui
+                                    .add(
+                                        egui::Slider::new(&mut steps_f, 4.0..=64.0)
+                                            .text("Max steps")
+                                            .step_by(1.0),
+                                    )
+                                    .changed()
+                                {
+                                    ssr.max_steps = steps_f.round().max(1.0) as u32;
+                                }
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.step_size, 0.001..=0.15)
+                                        .text("Step size"),
+                                );
+                                ui.add(
+                                    egui::Slider::new(&mut ssr.thickness, 0.005..=0.5)
+                                        .text("Thickness"),
+                                );
+                            });
+
                         egui::CollapsingHeader::new("Table")
                             .default_open(false)
                             .show(ui, |ui| {
@@ -810,6 +839,7 @@ pub fn draw_hud(
                                 *lighting = LightingSettings::default();
                                 *table = TableSettings::default();
                                 *worm = WormSettings::default();
+                                *ssr = SsrSettings::default();
                                 visual.wave_energy = 0.0;
                             }
                             let settings_editor_id = egui::Id::new("settings_editor_open");
@@ -817,7 +847,7 @@ pub fn draw_hud(
                                 ctx.data_mut(|d| d.get_temp(settings_editor_id).unwrap_or(false));
                             if ui.button("Settings text\u{2026}").clicked() {
                                 let json = export_settings_to_json(
-                                    rope_mat, lighting, visual, table, cartoon, cap, worm,
+                                    rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
                                     *render_scale, *cel_mode, *square_cross, current_level,
                                 );
                                 native_textarea::show(&json);
@@ -854,7 +884,7 @@ pub fn draw_hud(
                         Some(false) => "\u{274C} Failed",
                         None => "Load",
                     };
-                    if ui.button(load_label).clicked() {
+                        if ui.button(load_label).clicked() {
                         let text = native_textarea::get_value();
                         let ok = apply_settings_from_text(
                             &text,
@@ -865,6 +895,7 @@ pub fn draw_hud(
                             cartoon,
                             cap,
                             worm,
+                            ssr,
                             render_scale,
                             cel_mode,
                             square_cross,
@@ -1029,6 +1060,7 @@ fn export_settings_to_json(
     cartoon: &CartoonSettings,
     cap: &CapSettings,
     worm: &WormSettings,
+    ssr: &SsrSettings,
     render_scale: f32,
     cel_mode: bool,
     square_cross: bool,
@@ -1116,6 +1148,10 @@ fn export_settings_to_json(
         "wormSegFreq": worm.params3[3],
         "renderScale": render_scale,
         "squareCrossSection": square_cross,
+        "ssrStrength": ssr.strength,
+        "ssrMaxSteps": ssr.max_steps,
+        "ssrStepSize": ssr.step_size,
+        "ssrThickness": ssr.thickness,
     })
     .to_string()
 }
@@ -1129,6 +1165,7 @@ fn apply_settings_from_text(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     cel_mode: &mut bool,
     square_cross: &mut bool,
@@ -1138,7 +1175,7 @@ fn apply_settings_from_text(
         Err(_) => return false,
     };
     apply_settings_from_json(
-        &json, rope_mat, lighting, visual, table, cartoon, cap, worm,
+        &json, rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
         render_scale, cel_mode, square_cross,
     );
     true
@@ -1152,6 +1189,7 @@ fn import_settings_from_clipboard(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     cel_mode: &mut bool,
     square_cross: &mut bool,
@@ -1165,7 +1203,7 @@ fn import_settings_from_clipboard(
         Err(_) => return (false, None),
     };
     apply_settings_from_json(
-        &json, rope_mat, lighting, visual, table, cartoon, cap, worm,
+        &json, rope_mat, lighting, visual, table, cartoon, cap, worm, ssr,
         render_scale, cel_mode, square_cross,
     );
     (true, None)
@@ -1180,6 +1218,7 @@ fn apply_settings_from_json(
     cartoon: &mut CartoonSettings,
     cap: &mut CapSettings,
     worm: &mut WormSettings,
+    ssr: &mut SsrSettings,
     render_scale: &mut f32,
     cel_mode: &mut bool,
     square_cross: &mut bool,
@@ -1394,4 +1433,9 @@ fn apply_settings_from_json(
     if let Some(v) = f("wormPulseSpeed") { worm.params3[1] = v; }
     if let Some(v) = f("wormPulseAmp") { worm.params3[2] = v; }
     if let Some(v) = f("wormSegFreq") { worm.params3[3] = v; }
+
+    if let Some(v) = f("ssrStrength") { ssr.strength = v; }
+    if let Some(v) = f("ssrMaxSteps") { ssr.max_steps = v.round().max(1.0) as u32; }
+    if let Some(v) = f("ssrStepSize") { ssr.step_size = v; }
+    if let Some(v) = f("ssrThickness") { ssr.thickness = v; }
 }

@@ -59,7 +59,7 @@ final class LevelGeneratorTests: XCTestCase {
             for i in 0..<level.holes.count {
                 for j in (i+1)..<level.holes.count {
                     let dist = simd_length(level.holes[i].simd - level.holes[j].simd)
-                    XCTAssertGreaterThanOrEqual(dist, 0.0,
+                    XCTAssertGreaterThan(dist, 0.01,
                         "Level \(levelId): holes \(i) and \(j) overlap (\(dist))")
                 }
             }
@@ -406,8 +406,8 @@ final class LevelGeneratorTests: XCTestCase {
         sim.damping = 0.97
         sim.constraintIterations = 4
         sim.particleCount = 20
-        sim.cartFriction = 0.05
-        sim.cartDamping = 0.98
+        // sim.cartFriction = 0.05  // removed from VerletSimulator
+        // sim.cartDamping = 0.98
 
         // Rail: horizontal from -0.6 to 0.6
         let railDef = LevelDefinition.RailDef(points: [
@@ -866,5 +866,65 @@ final class LevelGeneratorTests: XCTestCase {
         // Cart and station are required for rail mode to be playable
         XCTAssertNil(level.carts, "User level has no carts — need to add via editor")
         XCTAssertNil(level.stations, "User level has no stations — need to add via editor")
+    }
+
+    // MARK: - Braid untangle levels
+
+    func testBraidUntangleDebug() {
+        // Detailed diagnostic for a specific braid level
+        for levelId in [8, 12, 16, 20, 60, 68] {
+            guard LevelGenerator.isBraidUntangleLevel(levelId) else { continue }
+            let level = LevelGenerator.generate(levelId: levelId)
+            let holeSimd = level.holes.map { SIMD2<Float>($0.xPosition, $0.yPosition) }
+            let actions = level.actions ?? []
+
+            print("\n=== BRAID LEVEL \(levelId) ===")
+            print("Ropes: \(level.ropes.count), Holes: \(level.holes.count)")
+            for (i, r) in level.ropes.enumerated() {
+                let s = holeSimd[r.startHole]
+                let e = holeSimd[r.endHole]
+                print("  Rope \(i): hole \(r.startHole)(\(String(format:"%.2f,%.2f",s.x,s.y))) → hole \(r.endHole)(\(String(format:"%.2f,%.2f",e.x,e.y)))")
+            }
+
+            // Check crossing
+            if level.ropes.count >= 2 {
+                let r0 = level.ropes[0], r1 = level.ropes[1]
+                let crosses = LevelGenerator.segmentsCross(holeSimd[r0.startHole], holeSimd[r0.endHole],
+                                                            holeSimd[r1.startHole], holeSimd[r1.endHole])
+                print("  Ropes 0×1 cross: \(crosses)")
+            }
+
+            print("  Actions (\(actions.count)):")
+            for a in actions {
+                print("    \(a.type) rope=\(a.ropeIndex) end=\(a.endIndex) hole=\(a.holeIndex) pos=\(String(format:"%.2f,%.2f", holeSimd[a.holeIndex].x, holeSimd[a.holeIndex].y))")
+            }
+
+            let drags = actions.filter { $0.type == "drag" }
+            XCTAssertGreaterThan(drags.count, 2, "Level \(levelId): need >2 drags for spiral, got \(drags.count)")
+        }
+    }
+
+    func testBraidUntangleLevelsDragCount() {
+        let braidLevels = [8, 12, 16, 20, 24, 28, 32, 36, 40, 44, 48]
+        for levelId in braidLevels {
+            XCTAssertTrue(LevelGenerator.isBraidUntangleLevel(levelId), "Level \(levelId) should be braid")
+            let level = LevelGenerator.generate(levelId: levelId)
+            let actions = level.actions ?? []
+            let drags = actions.filter { $0.type == "drag" }
+
+            // Debug: check if ropes cross each other
+            let holeSimd = level.holes.map { SIMD2<Float>($0.xPosition, $0.yPosition) }
+            for i in 0..<level.ropes.count {
+                for j in (i+1)..<level.ropes.count {
+                    let crosses = LevelGenerator.segmentsCross(
+                        holeSimd[level.ropes[i].startHole], holeSimd[level.ropes[i].endHole],
+                        holeSimd[level.ropes[j].startHole], holeSimd[level.ropes[j].endHole])
+                    print("Level \(levelId): rope \(i)(\(level.ropes[i].startHole)→\(level.ropes[i].endHole)) x rope \(j)(\(level.ropes[j].startHole)→\(level.ropes[j].endHole)) = \(crosses)")
+                }
+            }
+
+            print("Level \(levelId): ropes=\(level.ropes.count) holes=\(level.holes.count) drags=\(drags.count)")
+            XCTAssertGreaterThan(drags.count, 1, "Level \(levelId) should have multiple drags, got \(drags.count)")
+        }
     }
 }

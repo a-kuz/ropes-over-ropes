@@ -160,7 +160,16 @@ extension Renderer {
                 }
             }
 
-            if fadeOut > 0 && band.suckHole != nil {
+            if fadeOut > 0 && shaderParams.padMode {
+                // Pad mode: uniform fade-to-white (release glow)
+                let alpha = 1.0 - fadeOut
+                var modifiedVerts = ropeMesh.vertices
+                let glow = fadeOut * 0.3
+                for vi in modifiedVerts.indices {
+                    modifiedVerts[vi].color = modifiedVerts[vi].color * alpha + SIMD3<Float>(glow, glow, glow)
+                }
+                allVertices.append(contentsOf: modifiedVerts)
+            } else if fadeOut > 0 && band.suckHole != nil {
                 let suckEnd = band.suckFromEnd
                 let pulse = 0.85 + 0.15 * sin(time * 14.0)
                 let fadeEdge = min(fadeOut * 1.8, 0.95)
@@ -181,6 +190,48 @@ extension Renderer {
 
             if shaderParams.chainMode {
                 // no end caps for chain mode
+            } else if shaderParams.padMode {
+                // Pad mode: flat rubber discs instead of hemispheres/swivels
+                // Skip discs during fade-out (rope is contracting/disappearing)
+                let discRadius = holeRadius * holeRadiusScale * shaderParams.capRadiusScale * 1.3
+                if visiblePoints.count >= 2 && fadeOut == 0 {
+                    let isSucking = false
+                    let suckFromEnd = band.suckFromEnd
+                    let drawStart = !isSucking || suckFromEnd == 0
+                    let drawEnd = !isSucking || suckFromEnd == 1
+                    let faceUp = SIMD3<Float>(0, 0, 1)
+
+                    if drawStart {
+                        let startTangent = simd_normalize(visiblePoints[1] - visiblePoints[0])
+                        let pinned = band.pinStart != nil
+                        let disc = RopeMeshBuilder.buildDisc(
+                            center: visiblePoints[0], radius: discRadius,
+                            facing: pinned ? faceUp : -startTangent,
+                            color: ropeColor, segments: max(12, shaderParams.capSegments),
+                            ropeRadius: scaledRadius,
+                            ropeTangent: pinned ? startTangent : nil
+                        )
+                        allVertices.append(contentsOf: disc.vertices)
+                        allIndices.append(contentsOf: disc.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(disc.vertices.count)
+                    }
+
+                    if drawEnd {
+                        let lastIdx = visiblePoints.count - 1
+                        let endTangent = simd_normalize(visiblePoints[lastIdx] - visiblePoints[lastIdx - 1])
+                        let pinned = band.pinEnd != nil
+                        let disc = RopeMeshBuilder.buildDisc(
+                            center: visiblePoints[lastIdx], radius: discRadius,
+                            facing: pinned ? faceUp : endTangent,
+                            color: ropeColor, segments: max(12, shaderParams.capSegments),
+                            ropeRadius: scaledRadius,
+                            ropeTangent: pinned ? -endTangent : nil
+                        )
+                        allVertices.append(contentsOf: disc.vertices)
+                        allIndices.append(contentsOf: disc.indices.map { $0 + baseVertex })
+                        baseVertex += UInt32(disc.vertices.count)
+                    }
+                }
             } else if squareCrossSection {
                 if visiblePoints.count >= 2 {
                     let isSucking = fadeOut > 0 && band.suckHole != nil

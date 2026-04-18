@@ -22,7 +22,45 @@ extension Renderer {
     func rebuildHoleInstances() {
         guard !holePositions.isEmpty else { return }
         let visualRadius = holeRadius * holeRadiusScale
-        holeInstances = Self.makeHoleInstances(device: device, positions: holePositions, elevations: holeElevations, radius: visualRadius)
+        let tintColors = computeHoleTintColors()
+        holeInstances = Self.makeHoleInstances(device: device, positions: holePositions, elevations: holeElevations, radius: visualRadius, tintColors: tintColors)
+    }
+
+    func updateHoleTintColors() {
+        guard let buf = holeInstances, !holePositions.isEmpty else { return }
+        let count = holePositions.count
+        let stride = MemoryLayout<HoleInstance>.stride
+        guard buf.length >= count * stride else { return }
+        let ptr = buf.contents().bindMemory(to: HoleInstance.self, capacity: count)
+        guard let sim = simulator else {
+            for i in 0..<count { ptr[i].tintColor = .zero }
+            return
+        }
+        for i in 0..<count { ptr[i].tintColor = .zero }
+        for i in ropes.indices {
+            guard i < sim.bands.count, sim.bands[i].active, sim.bands[i].fadeOut == 0 else { continue }
+            let c = ropes[i].color
+            let tint = SIMD4<Float>(c.x, c.y, c.z, 1)
+            if let pinS = sim.bands[i].pinStart, pinS >= 0, pinS < count { ptr[pinS].tintColor = tint }
+            if let pinE = sim.bands[i].pinEnd, pinE >= 0, pinE < count { ptr[pinE].tintColor = tint }
+        }
+    }
+
+    private func computeHoleTintColors() -> [SIMD4<Float>] {
+        var colors = [SIMD4<Float>](repeating: .zero, count: holePositions.count)
+        guard let sim = simulator else { return colors }
+        for i in ropes.indices {
+            guard i < sim.bands.count, sim.bands[i].active, sim.bands[i].fadeOut == 0 else { continue }
+            let ropeColor = ropes[i].color
+            let tint = SIMD4<Float>(ropeColor.x, ropeColor.y, ropeColor.z, 1)
+            if let pinS = sim.bands[i].pinStart, pinS >= 0, pinS < holePositions.count {
+                colors[pinS] = tint
+            }
+            if let pinE = sim.bands[i].pinEnd, pinE >= 0, pinE < holePositions.count {
+                colors[pinE] = tint
+            }
+        }
+        return colors
     }
 
     func rebuildHoleInstancesIfNeeded() {
@@ -30,7 +68,7 @@ extension Renderer {
     }
 
     func rebuildHoleMeshIfNeeded() {
-        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
+        Self.buildHoleMeshBuffers(device: device, segments: holeSegments, square: squareCrossSection, padMode: shaderParams.padMode, padHeight: shaderParams.padHeight, vertexBuffer: &holeVB, indexBuffer: &holeIB, indexCount: &holeIndexCount)
     }
 
     func rebuildBoardMesh() {
@@ -79,6 +117,84 @@ extension Renderer {
         guard boardMeshIndexCount > 0 else { return }
         boardMeshVB = device.makeBuffer(bytes: vertices, length: vertices.count * MemoryLayout<BoardVertex>.stride, options: [.storageModeShared])
         boardMeshIB = device.makeBuffer(bytes: indices, length: indices.count * MemoryLayout<UInt32>.stride, options: [.storageModeShared])
+    }
+
+    // MARK: - Platform mesh (rescue mode)
+
+    /// Build platform mesh from 4 corner positions. Generates a box with thickness.
+    /// Called every frame to track moving platform corners.
+    func updatePlatformMesh() {
+        guard isRescueMode, let sim = simulator, let plat = sim.platform else {
+            platformVB = nil
+            platformIB = nil
+            platformIndexCount = 0
+            return
+        }
+
+        let corners = plat.corners  // TL(0), TR(1), BR(2), BL(3)
+        let thickness: Float = 0.06
+
+        var vertices: [BoardVertex] = []
+        var indices: [UInt32] = []
+        vertices.reserveCapacity(24)
+        indices.reserveCapacity(36)
+
+        // Top face normal — cross product of two edges
+        let edge01 = corners[1] - corners[0]
+        let edge03 = corners[3] - corners[0]
+        let topNormal = simd_normalize(simd_cross(edge01, edge03))
+
+        // Top face (4 verts, 2 tris)
+        let base: UInt32 = 0
+        for i in 0..<4 {
+            let p = corners[i]
+            vertices.append(BoardVertex(position: p, normal: topNormal, worldXY: SIMD2(p.x, p.y)))
+        }
+        indices.append(contentsOf: [base, base+1, base+2, base, base+2, base+3])
+
+        // Bottom face
+        let botBase = UInt32(vertices.count)
+        let botNormal = -topNormal
+        for i in 0..<4 {
+            let p = corners[i] - topNormal * thickness
+            vertices.append(BoardVertex(position: p, normal: botNormal, worldXY: SIMD2(p.x, p.y)))
+        }
+        indices.append(contentsOf: [botBase, botBase+2, botBase+1, botBase, botBase+3, botBase+2])
+
+        // 4 side faces: edges (0,1), (1,2), (2,3), (3,0)
+        let edgePairs: [(Int, Int)] = [(0,1), (1,2), (2,3), (3,0)]
+        for (a, b) in edgePairs {
+            let topA = corners[a]
+            let topB = corners[b]
+            let botA = topA - topNormal * thickness
+            let botB = topB - topNormal * thickness
+
+            let edgeDir = topB - topA
+            let sideNormal = simd_normalize(simd_cross(edgeDir, topNormal))
+
+            let sb = UInt32(vertices.count)
+            vertices.append(BoardVertex(position: topA, normal: sideNormal, worldXY: SIMD2(topA.x, topA.y)))
+            vertices.append(BoardVertex(position: topB, normal: sideNormal, worldXY: SIMD2(topB.x, topB.y)))
+            vertices.append(BoardVertex(position: botB, normal: sideNormal, worldXY: SIMD2(botB.x, botB.y)))
+            vertices.append(BoardVertex(position: botA, normal: sideNormal, worldXY: SIMD2(botA.x, botA.y)))
+            indices.append(contentsOf: [sb, sb+1, sb+2, sb, sb+2, sb+3])
+        }
+
+        platformIndexCount = indices.count
+        guard platformIndexCount > 0 else { return }
+
+        let vbSize = vertices.count * MemoryLayout<BoardVertex>.stride
+        let ibSize = indices.count * MemoryLayout<UInt32>.stride
+
+        if platformVB == nil || platformVB!.length < vbSize {
+            platformVB = device.makeBuffer(length: vbSize, options: [.storageModeShared])
+        }
+        if platformIB == nil || platformIB!.length < ibSize {
+            platformIB = device.makeBuffer(bytes: indices, length: ibSize, options: [.storageModeShared])
+        } else {
+            platformIB?.contents().copyMemory(from: indices, byteCount: ibSize)
+        }
+        platformVB?.contents().copyMemory(from: vertices, byteCount: vbSize)
     }
 
     func bakeWoodTexture() {

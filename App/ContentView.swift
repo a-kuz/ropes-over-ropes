@@ -1,4 +1,7 @@
 import SwiftUI
+#if os(iOS)
+import UIKit
+#endif
 
 struct ContentView: View {
     @StateObject private var gameController = GameController()
@@ -47,8 +50,13 @@ struct ContentView: View {
                 }
                 .ignoresSafeArea()
             } else {
+                #if os(iOS)
+                OrientationLockedGameView(controller: gameController)
+                    .ignoresSafeArea()
+                #else
                 GameView(controller: gameController)
                     .ignoresSafeArea()
+                #endif
             }
 
 
@@ -115,9 +123,14 @@ struct ContentView: View {
                             levelInput = "\(gameController.currentLevel)"
                             showLevelPicker = true
                         }) {
-                            Text("L \(gameController.currentLevel)")
-                                .font(.system(size: 18, weight: .bold, design: .rounded))
-                                .foregroundColor(.white)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("L \(gameController.currentLevel)")
+                                    .font(.system(size: 18, weight: .bold, design: .rounded))
+                                    .foregroundColor(.white)
+                                Text("\(Int(gameController.fps)) fps")
+                                    .font(.system(size: 11, design: .monospaced))
+                                    .foregroundColor(.white.opacity(0.4))
+                            }
                         }
 
                         Button(action: {
@@ -326,7 +339,11 @@ struct ContentView: View {
     /// Game view + compact HUD for editor split mode
     private var gameFieldWithHUD: some View {
         ZStack {
+            #if os(iOS)
+            OrientationLockedGameView(controller: gameController)
+            #else
             GameView(controller: gameController)
+            #endif
 
             VStack {
                 HStack(spacing: 6) {
@@ -385,7 +402,6 @@ struct ContentView: View {
                 }
                 HStack(spacing: 4) {
                     MiniParam(label: "BrdFr", value: $gameController.boardFrictionRatio, range: 0.0...1.0, format: "%.2f")
-                    MiniParam(label: "ZSep", value: $gameController.zSeparation, range: 0.0...2.0, format: "%.2f")
                 }
                 ParamRow(label: "Board Z", value: $gameController.boardElevation, range: 0.02...0.5, format: "%.3f", defaultValue: 0.257)
                 HStack(spacing: 4) {
@@ -398,7 +414,7 @@ struct ContentView: View {
                 }
                 HStack(spacing: 4) {
                     MiniParamInt(label: "DrgSb", value: $gameController.dragMinSubsteps, range: 1...10)
-                    MiniParam(label: "FadeS", value: $gameController.fadeOutSpeed, range: 5.0...100.0, format: "%.0f")
+                    MiniParam(label: "FadeS", value: $gameController.fadeOutSpeed, range: 0.25...100.0, format: "%.1f")
                 }
                 HStack(spacing: 4) {
                     MiniParam(label: "LwrDr", value: $gameController.lowerAnimDuration, range: 0.1...2.0, format: "%.2f")
@@ -453,6 +469,33 @@ struct ContentView: View {
                         .foregroundColor(.white.opacity(0.8))
                     Toggle("", isOn: $gameController.ropeFlatNormals)
                         .labelsHidden()
+                    Text("Pad")
+                        .font(.system(size: 12))
+                        .foregroundColor(.white.opacity(0.8))
+                    Toggle("", isOn: $gameController.padMode)
+                        .labelsHidden()
+                }
+                if gameController.padMode {
+                    HStack(spacing: 4) {
+                        Text("Pad H").font(.system(size: 10)).foregroundColor(.white.opacity(0.6)).frame(width: 38, alignment: .leading)
+                        Slider(value: $gameController.padHeight, in: 0.05...0.5)
+                        Text("Met").font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+                        Slider(value: $gameController.padMetallic, in: 0...1)
+                        Text("Rgh").font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+                        Slider(value: $gameController.padRoughness, in: 0...1)
+                    }
+                    HStack(spacing: 4) {
+                        Text("Pad R").font(.system(size: 10)).foregroundColor(.white.opacity(0.6)).frame(width: 38, alignment: .leading)
+                        Slider(value: $gameController.padColorR, in: 0...1)
+                        Text("G").font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+                        Slider(value: $gameController.padColorG, in: 0...1)
+                        Text("B").font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+                        Slider(value: $gameController.padColorB, in: 0...1)
+                        Text("Tint").font(.system(size: 10)).foregroundColor(.white.opacity(0.6))
+                        Slider(value: $gameController.padRopeTint, in: 0...1)
+                    }
+                }
+                HStack(spacing: 4) {
                     Toggle("Env Dbg", isOn: $gameController.ropeEnvDebug)
                         .font(.system(size: 11))
                         .foregroundColor(.white.opacity(0.7))
@@ -511,11 +554,16 @@ struct ContentView: View {
                 }
                 HStack(spacing: 4) {
                     MiniParam(label: "Edge", value: $gameController.ropeEdgeLight, range: 0...0.5, format: "%.2f")
+                    MiniParam(label: "Core", value: $gameController.ropeCoreDarken, range: 0...10, format: "%.1f")
                     MiniParam(label: "Satur", value: $gameController.ropeSaturation, range: 0...2, format: "%.2f")
                 }
                 HStack(spacing: 4) {
-                    MiniParam(label: "Bump", value: $gameController.ropeMicroBump, range: 0...1.5, format: "%.3f")
+                    MiniParam(label: "Bump", value: $gameController.ropeMicroBump, range: 0...3.0, format: "%.3f")
                     MiniParam(label: "B.Scl", value: $gameController.ropeBumpScale, range: 0.5...20.0, format: "%.1f")
+                }
+                HStack(spacing: 4) {
+                    MiniParam(label: "B.Ctr", value: $gameController.ropeBumpContrast, range: 0.05...4.0, format: "%.2f")
+                    MiniParam(label: "B.Ans", value: $gameController.ropeBumpAniso, range: 0.0...3.0, format: "%.2f")
                 }
                 HStack(spacing: 4) {
                     MiniParam(label: "StrTh", value: $gameController.stretchThinning, range: 0.0...1.0, format: "%.2f")
@@ -851,7 +899,7 @@ struct ContentView: View {
                                 Text(preset.name)
                                     .font(.system(size: 14, weight: .bold))
                                     .foregroundColor(.white)
-                                Text(preset.name == "Jelly" ? "Bouncy, glossy, translucent" :
+                                Text(preset.name == "Jelly Beams" ? "Soft, glossy, elastic beams" :
                                      preset.name == "Steel Cable" ? "Stiff, heavy, metallic" : "Standard rubber band")
                                     .font(.system(size: 11))
                                     .foregroundColor(.white.opacity(0.6))
@@ -1114,6 +1162,60 @@ private struct ParamRowInt: View {
     }
 }
 
+#if os(iOS)
+private func activeWindowScene() -> UIWindowScene? {
+    let scenes = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }
+    return scenes.first { $0.activationState == .foregroundActive } ?? scenes.first
+}
+
+private struct OrientationLockedGameView: View {
+    @ObservedObject var controller: GameController
+    @State private var interfaceOrientation: UIInterfaceOrientation = .portrait
+
+    var body: some View {
+        GeometryReader { geo in
+            let sz = geo.size
+            let (angle, fw, fh) = orientationFrame(interfaceOrientation, container: sz)
+            GameView(controller: controller)
+                .frame(width: fw, height: fh)
+                .rotationEffect(angle)
+                .position(x: sz.width * 0.5, y: sz.height * 0.5)
+        }
+        .onAppear { refreshOrientation() }
+        .onReceive(NotificationCenter.default.publisher(for: UIDevice.orientationDidChangeNotification)) { _ in
+            refreshOrientation()
+        }
+    }
+
+    private func refreshOrientation() {
+        guard let scene = activeWindowScene() else { return }
+        let next = scene.interfaceOrientation
+        if next != interfaceOrientation {
+            var t = Transaction()
+            t.disablesAnimations = true
+            withTransaction(t) {
+                interfaceOrientation = next
+            }
+        }
+    }
+
+    private func orientationFrame(_ o: UIInterfaceOrientation, container: CGSize) -> (Angle, CGFloat, CGFloat) {
+        let w = container.width
+        let h = container.height
+        switch o {
+        case .landscapeLeft:
+            return (.degrees(90), h, w)
+        case .landscapeRight:
+            return (.degrees(-90), h, w)
+        case .portraitUpsideDown:
+            return (.degrees(180), w, h)
+        default:
+            return (.zero, w, h)
+        }
+    }
+}
+#endif
+
 private struct VictoryOverlay: View {
     let level: Int
     var starCount: Int = 3
@@ -1130,6 +1232,8 @@ private struct VictoryOverlay: View {
             VStack(spacing: 20) {
                 Text("Level \(level)")
                     .font(.system(size: 42, weight: .heavy, design: .rounded))
+                    .minimumScaleFactor(0.5)
+                    .lineLimit(1)
                     .foregroundColor(.white)
                     .shadow(color: .white.opacity(0.4), radius: 16)
                     .scaleEffect(titleScale)
@@ -1163,6 +1267,8 @@ private struct VictoryOverlay: View {
                     HStack(spacing: 10) {
                         Text("Level \(level + 1)")
                             .font(.system(size: 21, weight: .bold, design: .rounded))
+                            .minimumScaleFactor(0.6)
+                            .lineLimit(1)
                         Image(systemName: "arrow.right")
                             .font(.system(size: 17, weight: .bold))
                     }

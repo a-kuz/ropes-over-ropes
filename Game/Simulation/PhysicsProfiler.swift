@@ -14,11 +14,11 @@ final class PhysicsProfiler: @unchecked Sendable {
         case narrowphase       = "narrow"
         case postCollision     = "postCol"
         case dragFrame         = "drag"
-        case crossingSolve     = "x2d"
-        case crossingTunnel    = "tunnel"
-        case crossingRecords   = "xRec"
         case meshBuild         = "mesh"
         case winCheck          = "winChk"
+        case crossingRecords   = "xRec"
+        case crossingSolve     = "xSolve"
+        case crossingTunnel    = "xTunnel"
     }
 
     struct Sample {

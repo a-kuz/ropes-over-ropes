@@ -30,6 +30,8 @@ struct FrameUniforms {
     var ropeMatParams6: SIMD4<Float>
     var ropeMatParams7: SIMD4<Float>
     var ropeMatParams8: SIMD4<Float>
+    var padParams1: SIMD4<Float>
+    var padParams2: SIMD4<Float>
 }
 
 struct PostParams {
@@ -63,6 +65,7 @@ struct BakeBoardWoodVolumeParams {
 
 struct HoleInstance {
     var positionRadius: SIMD4<Float>
+    var tintColor: SIMD4<Float>
 }
 
 struct RopeVertex {
@@ -71,6 +74,7 @@ struct RopeVertex {
     var color: SIMD3<Float>
     var texCoord: SIMD2<Float>
     var params: SIMD4<Float>
+    var ropeSeed: Float
 }
 
 struct HoleVertex {

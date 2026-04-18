@@ -231,6 +231,9 @@ extension Renderer {
         descriptor.attributes[4].format = .float4
         descriptor.attributes[4].offset = MemoryLayout<RopeVertex>.offset(of: \.params) ?? 0
         descriptor.attributes[4].bufferIndex = 0
+        descriptor.attributes[5].format = .float
+        descriptor.attributes[5].offset = MemoryLayout<RopeVertex>.offset(of: \.ropeSeed) ?? 0
+        descriptor.attributes[5].bufferIndex = 0
         descriptor.layouts[0].stride = MemoryLayout<RopeVertex>.stride
         return descriptor
     }
@@ -275,8 +278,15 @@ extension Renderer {
         return descriptor
     }
 
-    static func buildHoleMeshBuffers(device: MTLDevice, segments: Int, square: Bool = false, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
-        let mesh = square ? HoleMeshBuilder.buildSquare() : HoleMeshBuilder.build(segments: segments)
+    static func buildHoleMeshBuffers(device: MTLDevice, segments: Int, square: Bool = false, padMode: Bool = false, padHeight: Float = 0.18, vertexBuffer: inout MTLBuffer?, indexBuffer: inout MTLBuffer?, indexCount: inout Int) {
+        let mesh: HoleMesh
+        if padMode {
+            mesh = HoleMeshBuilder.buildPad(segments: segments, height: padHeight)
+        } else if square {
+            mesh = HoleMeshBuilder.buildSquare()
+        } else {
+            mesh = HoleMeshBuilder.build(segments: segments)
+        }
         indexCount = mesh.indices.count
         vertexBuffer = device.makeBuffer(bytes: mesh.vertices, length: mesh.vertices.count * MemoryLayout<HoleVertex>.stride, options: [.storageModeShared])
         indexBuffer = device.makeBuffer(bytes: mesh.indices, length: mesh.indices.count * MemoryLayout<UInt16>.stride, options: [.storageModeShared])

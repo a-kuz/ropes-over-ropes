@@ -30,6 +30,7 @@ pub struct FrameUniforms {
     pub worm_params3: [f32; 4],
     pub worm_params4: [f32; 4],
     pub rope_mat_params4: [f32; 4],
+    pub ssr_params: [f32; 4],
 }
 
 #[repr(C)]
@@ -60,6 +61,25 @@ pub struct RopeMaterialSettings {
     pub stretch_gloss: f32,
     pub stretch_spec: f32,
     pub env_reflect: f32,
+}
+
+#[derive(Clone, PartialEq, Serialize, Deserialize)]
+pub struct SsrSettings {
+    pub strength: f32,
+    pub max_steps: u32,
+    pub step_size: f32,
+    pub thickness: f32,
+}
+
+impl Default for SsrSettings {
+    fn default() -> Self {
+        Self {
+            strength: 0.0,
+            max_steps: 32,
+            step_size: 0.015,
+            thickness: 0.06,
+        }
+    }
 }
 
 impl Default for RopeMaterialSettings {

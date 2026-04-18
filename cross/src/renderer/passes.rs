@@ -1,7 +1,7 @@
 use super::camera::{look_at, ortho, Camera};
 use super::frame_types::{
-    CartoonSettings, FrameUniforms, LightingSettings, RopeMaterialSettings, TableSettings,
-    VisualSettings, WormSettings,
+    CartoonSettings, FrameUniforms, LightingSettings, RopeMaterialSettings, SsrSettings,
+    TableSettings, VisualSettings, WormSettings,
 };
 use glam::{Mat4, Vec3};
 
@@ -33,6 +33,7 @@ pub fn build_frame_uniforms(
     table: &TableSettings,
     cartoon: &CartoonSettings,
     worm: &WormSettings,
+    ssr: &SsrSettings,
 ) -> FrameUniforms {
     let view_proj = camera.view_proj(aspect);
     let inv_view_proj = view_proj.inverse();
@@ -155,6 +156,7 @@ pub fn build_frame_uniforms(
         worm_params3: worm.params3,
         worm_params4: worm.params4,
         rope_mat_params4: [rope_mat.env_reflect, visual.wave_energy, 0.0, 0.0],
+        ssr_params: [ssr.strength, ssr.max_steps as f32, ssr.step_size, ssr.thickness],
     }
 }
 

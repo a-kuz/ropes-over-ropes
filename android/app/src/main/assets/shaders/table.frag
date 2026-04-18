@@ -526,11 +526,9 @@ vec3 gradientTexture(vec2 worldXY, float seed) {
 // ============================================================
 vec3 woodTexture(vec2 uv, vec2 worldXY, float seed) {
     float style = fract(seed * 0.3819);
-    if (style < 0.20) {
+    if (style < 0.25) {
         return woodSolidTexture(worldXY, seed);
-    } else if (style < 0.40) {
-        return plankWoodTexture(worldXY, seed);
-    } else if (style < 0.60) {
+    } else if (style < 0.50) {
         return gradientTexture(worldXY, seed);
     } else {
         return otavioWoodTexture(worldXY, seed);

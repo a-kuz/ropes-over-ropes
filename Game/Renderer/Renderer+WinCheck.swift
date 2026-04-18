@@ -2,8 +2,17 @@ import simd
 import Foundation
 
 extension Renderer {
+    func checkRescueModeComplete() {
+        guard isRescueMode, !rescueLevelCompleted else { return }
+        guard let sim = simulator, sim.isPlatformStable else { return }
+        rescueLevelCompleted = true
+        Self.logger.info("[RESCUE] Platform stable — level complete!")
+        Haptics.success()
+        onLevelComplete?()
+    }
+
     func removeUntangledRopes() {
-        if isTensionMode || isRailMode || isBraidMode { return }
+        if isTensionMode || isRailMode || isBraidMode || isRescueMode { return }
         var removed = true
         while removed {
             removed = false

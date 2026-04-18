@@ -170,6 +170,7 @@ extension VerletSimulator {
     func initializeLevel(ropeConfigs: [RopeConfig], actions: [LevelAction], ropeParticles: [[SIMD3<Float>]]? = nil) {
         // Save user's runtime params
         let savedGravity = gravity
+        let savedGravityDirection = gravityDirection
         let savedDamping = damping
         let savedConstraintIterations = constraintIterations
         let savedSettleSteps = settleSteps
@@ -181,6 +182,7 @@ extension VerletSimulator {
 
         // Apply fixed init params (matched to Rust) for deterministic generation
         gravity = InitParams.gravity
+        gravityDirection = SIMD3<Float>(0, 0, 1)  // always into table during init
         damping = InitParams.damping
         constraintIterations = InitParams.constraintIterations
         settleSteps = InitParams.settleSteps
@@ -193,6 +195,7 @@ extension VerletSimulator {
         defer {
             // Restore user's runtime params after init
             gravity = savedGravity
+            gravityDirection = savedGravityDirection
             damping = savedDamping
             constraintIterations = savedConstraintIterations
             settleSteps = savedSettleSteps

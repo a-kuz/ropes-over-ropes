@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<style>
+  @page {
+    size: A4;
+    margin: 25mm 20mm;
+    @bottom-center { content: counter(page); font-size: 9pt; color: #999; }
+  }
+  body {
+    font-family: -apple-system, "Helvetica Neue", Arial, sans-serif;
+    font-size: 10.5pt;
+    line-height: 1.5;
+    color: #1a1a1a;
+  }
+  h1 { font-size: 20pt; font-weight: 700; margin-top: 0; padding-bottom: 6px; border-bottom: 3px solid #1a1a1a; }
+  h2 { font-size: 14pt; font-weight: 700; margin-top: 24px; color: #111; border-bottom: 1px solid #ddd; padding-bottom: 4px; }
+  h3 { font-size: 11pt; font-weight: 600; margin-top: 16px; color: #333; }
+  .subtitle { font-size: 11pt; color: #666; margin-top: -8px; margin-bottom: 20px; }
+  table { border-collapse: collapse; width: 100%; margin: 10px 0; font-size: 9.5pt; }
+  th { background: #f5f5f5; font-weight: 600; text-align: left; padding: 6px 8px; border: 1px solid #ddd; }
+  td { padding: 5px 8px; border: 1px solid #ddd; vertical-align: top; }
+  .note { background: #f0f9ff; border: 1px solid #93c5fd; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: 10pt; }
+  .warn { background: #fef2f2; border: 1px solid #fca5a5; border-radius: 6px; padding: 10px 14px; margin: 12px 0; font-size: 10pt; }
+  .page-break { page-break-before: always; }
+  .small { font-size: 8.5pt; color: #666; }
+  .source { font-size: 8.5pt; color: #888; margin-top: 2px; }
+</style>
+</head>
+<body>
+
+<h1>Автоматическая разработка: обзор рынка</h1>
+<div class="subtitle">Апрель 2026</div>
+
+<h2>1. CLI-агенты для автономной разработки</h2>
+
+<table>
+  <tr><th style="width:18%">Инструмент</th><th style="width:82%">Факты</th></tr>
+  <tr>
+    <td><strong>Claude Code</strong><br><span class="small">Anthropic, закрытый</span></td>
+    <td>
+      SWE-bench Verified: 80.9% &mdash; лучший результат среди всех агентов. Нативные Agent Teams (параллельные субагенты). Headless-режим (<code>claude -p</code>) для автоматизации. Hooks для детерминистического enforcement правил.
+      <br><br>
+      <strong>Из отзывов:</strong> CLAUDE.md соблюдается примерно на 70% &mdash; это advisory, не enforcement. Один разработчик написал 200 строк правил, Claude проигнорировал все. Механические правила рекомендуют выносить в hooks. Без human review &mdash; 33% успешности на сложных задачах.
+      <br><span class="source">dev.to/minatoplanb, anthropic.com/research/measuring-agent-autonomy</span>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Codex CLI</strong><br><span class="small">OpenAI, 75k stars, Rust</span></td>
+    <td>
+      Full-auto режим с kernel-level sandboxing (Seatbelt/Landlock). Облачное выполнение. Заявляется 4x эффективнее по токенам.
+      <br><br>
+      <strong>Из отзывов:</strong> слабее Claude по reasoning. Хорош для batch-задач в sandbox.
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Devin</strong><br><span class="small">Cognition, закрытый, $20/мес + $2.25/ACU</span></td>
+    <td>
+      Единственный полностью асинхронный агент: получает задачу из Jira/Slack, сам пишет код, запускает тесты, открывает PR. Встроенный браузер, shell, редактор в sandbox.
+      <br><br>
+      <strong>Из отзывов:</strong> Answer.AI (Jeremy Howard) тестировали месяц на 20 задачах: 3 успеха, 14 провалов, 3 неопределённых. На рутине (миграции, lint-фиксы, юнит-тесты) работает. На сложных задачах уходит в тупик на дни вместо того чтобы остановиться. ~$9/час, непредсказуемый расход.
+      <br><span class="source">answer.ai/posts/2025-01-08-devin, news.ycombinator.com/item?id=42743697</span>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>OpenHands</strong><br><span class="small">All-Hands-AI, 71k stars, Python, MIT</span></td>
+    <td>
+      Open-source альтернатива Devin. Sandbox с браузером и терминалом &mdash; может исследовать веб перед кодом. Series A $18.8M. Model-agnostic.
+      <br><br>
+      <strong>Из отзывов:</strong> SWE-bench 53% (vs Claude Code 80.9%). Залипание в циклах &mdash; хорошо задокументированная проблема (issues #5480, #6357). Senior-lead из Германии: &laquo;не убеждён что экономит время&raquo;. На чётких задачах (фикс бага) &mdash; работает с первой попытки. На открытых &mdash; требует надзора. Стоимость PR ~$3.
+      <br><span class="source">medium.com/@mchechulin, github.com/OpenHands/OpenHands/issues/5480</span>
+    </td>
+  </tr>
+</table>
+
+<h2>2. Оркестраторы</h2>
+
+<table>
+  <tr><th style="width:18%">Инструмент</th><th style="width:82%">Факты</th></tr>
+  <tr>
+    <td><strong>Conductor</strong><br><span class="small">Melty Labs, Mac-only, бесплатный</span></td>
+    <td>
+      Mac-приложение для параллельного запуска Claude Code/Codex агентов. Каждый в изолированном git worktree. Visual dashboard с diff-first review UI. $22M Series A.
+      <br><br>
+      <strong>Из отзывов (HN, 228 баллов):</strong><br>
+      &laquo;My team are very heavy users of conductor.build&raquo; &mdash; dominicholmes<br>
+      &laquo;Dramatically improved code quality and speed&raquo; &mdash; josh2600<br>
+      &laquo;Full read-write access to ALL repos. Not a privacy policy in sight&raquo; &mdash; itsalotoffun (починили в v0.0.21)<br>
+      Клонирует с GitHub (не локальный repo), зависимости надо ставить заново в каждом workspace. Только macOS + Apple Silicon.
+      <br><span class="source">news.ycombinator.com, conductor.build</span>
+    </td>
+  </tr>
+</table>
+
+<div class="warn">
+<strong>Остальные оркестраторы.</strong> Исследовано 10+ проектов (Aperant, Ruflo, Claude Squad, Composio Agent Orchestrator, Vibe Kanban, Automaker, Hivemoot, Amux, Code Conductor). Ни один не показал значимого реального adoption: соотношение stars к downloads/subscribers аномально высокое, обсуждения на Reddit/HN отсутствуют или минимальны, большинство &mdash; solo-проекты.
+</div>
+
+<h2 class="page-break">3. Методологии и паттерны</h2>
+
+<table>
+  <tr><th style="width:22%">Подход</th><th style="width:78%">Факты</th></tr>
+  <tr>
+    <td><strong>Spec-Driven Development</strong><br><span class="small">GitHub Spec Kit, 88k stars</span></td>
+    <td>
+      Четыре фазы: specify &rarr; plan &rarr; tasks &rarr; implement. 30+ интеграций с агентами.
+      <br><br>
+      <strong>Из отзывов:</strong> Scott Logic провели практический тест: 33 минуты и 2577 строк markdown для генерации 689 строк кода. Тот же результат итеративным промптингом &mdash; 8 минут. Статья &laquo;SDD Is Waterfall in Markdown&raquo; (Medium) описывает повторение ошибки аутсорсинга. Консенсус: окупается на крупных greenfield-проектах, для мелких задач &mdash; overhead.
+      <br><span class="source">blog.scottlogic.com, medium.com/@iamalvisng</span>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Spec-Kitty</strong><br><span class="small">1k stars, Python, MIT</span></td>
+    <td>
+      Расширение подхода Spec Kit: CLI + Kanban-дашборд + swim-lane worktrees + auto-merge. FSM с 9 состояниями для каждого work package. 14 агентов из коробки. Среди исследованных проектов &mdash; единственный с реальным community (44 контрибьютора, 160 issues, упоминания на HN).
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Ralph Loop</strong><br><span class="small">Addy Osmani, O'Reilly</span></td>
+    <td>
+      Атомарная задача &rarr; implement &rarr; validate &rarr; commit &rarr; reset context. Контекст сбрасывается каждую итерацию &mdash; меньше галлюцинаций. Stop hook блокирует завершение пока тесты не зелёные. Рекомендован как основной паттерн для автономной работы.
+      <br><span class="source">addyosmani.com/blog/code-agent-orchestra</span>
+    </td>
+  </tr>
+  <tr>
+    <td><strong>Hooks &gt; CLAUDE.md</strong><br><span class="small">Сообщество Claude Code</span></td>
+    <td>
+      CLAUDE.md &mdash; для контекста проекта. Механические правила (запускать тесты, не пушить в main, lint) &mdash; в hooks. Hooks &mdash; shell-скрипты, выполняются детерминистически вне модели.
+      <br><span class="source">code.claude.com/docs/en/hooks</span>
+    </td>
+  </tr>
+</table>
+
+<h2>4. Экспертные выводы (Addy Osmani, O'Reilly CodeCon 2026)</h2>
+
+<h3>Работает</h3>
+<ul>
+  <li><strong>3&ndash;5 агентов</strong> &mdash; sweet spot; больше не успеваешь ревьюить</li>
+  <li><strong>Выделенный @reviewer</strong> (Opus, read-only) на каждые 3&ndash;4 builder'а</li>
+  <li><strong>Plan approval перед кодом</strong> &mdash; дешевле починить план, чем код</li>
+  <li><strong>AGENTS.md писать руками</strong> &mdash; AI-сгенерированные на 3% хуже, на 20% дороже по токенам (ETH Zurich)</li>
+  <li><strong>Git worktrees</strong> для изоляции каждого агента</li>
+  <li><strong>Multi-model routing:</strong> планирование на дешёвой модели, реализация на Opus/Sonnet</li>
+</ul>
+
+<h3>Не работает</h3>
+<ul>
+  <li>Больше агентов чем можешь ревьюить &mdash; &laquo;ошибки компаундятся быстрее чем ловишь&raquo;</li>
+  <li>Два агента в одном файле &mdash; конфликты убивают скорость</li>
+  <li>Агенты без loop guardrails &mdash; бесконечный повтор одной ошибки</li>
+  <li>AI-сгенерированный AGENTS.md &mdash; нулевой или отрицательный эффект</li>
+</ul>
+
+<h3>Инструменты для аудита</h3>
+<ul>
+  <li><strong>Codex Web</strong> &mdash; цитаты из терминальных логов на каждую задачу</li>
+  <li><strong>Conductor</strong> &mdash; diff-first review UI</li>
+  <li><strong>Gastown</strong> &mdash; иммутабельные git-backed записи каждого решения, SQL-запрашиваемые</li>
+</ul>
+
+<h2>5. Итог</h2>
+
+<div class="note">
+Готового инструмента для goal-driven автономной разработки (исследование домена &rarr; критерии приёмки &rarr; реализация &rarr; тестирование &rarr; документация trade-offs) не существует. Ни один из исследованных проектов не реализует этот цикл.
+<br><br>
+Кирпичи для построения своего решения: <strong>Claude Code</strong> (headless <code>claude -p</code>, top-1 по бенчмаркам), <strong>hooks</strong> (детерминистический enforcement), <strong>Ralph Loop</strong> (атомарные задачи + верификация), <strong>Linear MCP</strong> через <strong>rmcp</strong> (статусы, коммуникация с человеком).
+</div>
+
+<p class="small">Исследование: апрель 2026. Количество stars верифицировано через GitHub API. Отзывы получены с HN, Reddit, GitHub Issues.</p>
+
+</body>
+</html>

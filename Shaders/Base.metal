@@ -39,6 +39,8 @@ struct FrameUniforms {
     float4 ropeMatParams6;
     float4 ropeMatParams7;
     float4 ropeMatParams8;
+    float4 padParams1;   // r, g, b, metallic
+    float4 padParams2;   // roughness, ropeTint, height, unused
 };
 
 static float shadowVisibility(float3 worldPos, float3 worldN, constant FrameUniforms& frame, depth2d<float> shadowMap);
@@ -221,11 +223,9 @@ static float3 gradientTexture(float2 worldXY, float seed) {
 
 static float3 woodTexture(float2 uv, float2 worldXY, float seed) {
     float style = fract(seed * 0.3819);
-    if (style < 0.20) {
+    if (style < 0.25) {
         return woodSolidTexture(worldXY, seed);
-    } else if (style < 0.40) {
-        return plankWoodTexture(worldXY, seed);
-    } else if (style < 0.60) {
+    } else if (style < 0.50) {
         return gradientTexture(worldXY, seed);
     } else {
         return otavioWoodTexture(worldXY, seed);
@@ -282,7 +282,8 @@ static float3 celHoleShading(float3 baseColor, float3 n, float3 l, int levels, f
 
 static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
                         float roughness, float taut, float vCoord, float cartoonMode, int cartoonLevels,
-                        float4 matP, float4 matP2, float stretchGloss, float stretchSpec) {
+                        float4 matP, float4 matP2, float stretchGloss, float stretchSpec,
+                        float4 matP2Extra) {
     float matteAmount = matP.x;
     float glossAmount = matP.y;
     float diffuseWrap = matP.z;
@@ -296,9 +297,10 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
     float nh = saturate(dot(n, h));
     float vh = saturate(dot(v, h));
 
-    float radial = abs(vCoord - 0.5) * 2.0;
-    float coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount);
-    float edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount);
+    float coreDarkenAmount = matP2Extra.w;
+    float radial = 1.0 - nv;
+    float coreDarken = 1.0 - (1.0 - radial) * (1.0 - radial) * mix(0.15, 0.45, matteAmount) * coreDarkenAmount;
+    float edgeBrighten = pow(radial, 2.5) * mix(0.15, 0.02, matteAmount) * coreDarkenAmount;
     float3 albedo = baseColor * coreDarken + float3(edgeBrighten);
 
     float grey = dot(albedo, float3(0.299, 0.587, 0.114));
@@ -351,6 +353,7 @@ static float3 rubberPBR(float3 baseColor, float3 n, float3 l, float3 v,
 
 struct HoleInstance {
     float4 position_radius;
+    float4 tintColor;
 };
 
 struct SceneVSOut {
@@ -543,6 +546,7 @@ struct HoleOut {
     float highlight;
     float holeId;
     float localZ;
+    float4 tintColor;
 };
 
 vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
@@ -566,6 +570,7 @@ vertex HoleOut holeVertex(const device HoleIn* vertices [[buffer(0)]],
     o.highlight = isHighlight;
     o.holeId = float(iid);
     o.localZ = vertices[vid].position.z;
+    o.tintColor = inst.tintColor;
     return o;
 }
 
@@ -576,19 +581,50 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
     float3 l = normalize(frame.lightDir_intensity.xyz);
     float3 v = normalize(frame.cameraPos.xyz - in.worldPos);
 
+    float isPadMode = frame.woodBoundsMax.w;
+
     float depthFade = saturate(-in.localZ * 1.2);
     float metalMask = 1.0 - depthFade * depthFade;
 
-    float metallic = 0.85;
-    float roughness = 0.28;
-    float3 baseCol = float3(0.75, 0.76, 0.78);
-    float3 darkCol = float3(0.45, 0.46, 0.50);
-    float3 col = mix(darkCol, baseCol, smoothstep(0.1, 0.8, n.z));
-    col *= metalMask;
+    float metallic;
+    float roughness;
+    float3 col;
 
-    float3 tint = frame.holeTint.xyz;
-    float tintAmt = frame.holeTint.w;
-    col = mix(col, col * tint, tintAmt);
+    if (isPadMode > 0.5) {
+        // Pad mode: tunable rubber material
+        float3 padCol = frame.padParams1.xyz;
+        metallic = frame.padParams1.w;
+        roughness = frame.padParams2.x;
+        float ropeTintStr = frame.padParams2.y;
+        float3 darkCol = padCol * 0.65;
+        col = mix(darkCol, padCol, smoothstep(0.0, 0.6, n.z));
+
+        float perHoleTintAmt = in.tintColor.w;
+        if (perHoleTintAmt > 0.001) {
+            float3 ropeCol = in.tintColor.xyz;
+            col = mix(col, ropeCol * 0.6, perHoleTintAmt * ropeTintStr);
+        }
+    } else {
+        // Standard hole: metallic chrome
+        metallic = 0.85;
+        roughness = 0.28;
+        float3 baseCol = float3(0.75, 0.76, 0.78);
+        float3 darkCol = float3(0.45, 0.46, 0.50);
+        col = mix(darkCol, baseCol, smoothstep(0.1, 0.8, n.z));
+        col *= metalMask;
+
+        float perHoleTintAmt = in.tintColor.w;
+        if (perHoleTintAmt > 0.001) {
+            float3 ropeCol = in.tintColor.xyz;
+            col = mix(col, ropeCol, perHoleTintAmt * 0.5);
+        }
+    }
+
+    if (isPadMode < 0.5) {
+        float3 tint = frame.holeTint.xyz;
+        float tintAmt = frame.holeTint.w;
+        col = mix(col, col * tint, tintAmt);
+    }
 
     if (in.highlight > 0.5) {
         float3 hlCol = float3(0.55, 0.85, 1.0);
@@ -627,7 +663,8 @@ fragment float4 holeFragment(HoleOut in [[stage_in]],
         lit += col * 0.08;
 
         float rimPow = pow(1.0 - nv, 5.0);
-        lit += F0 * rimPow * 0.4 * lightI * metalMask;
+        float rimMask = (isPadMode > 0.5) ? 1.0 : metalMask;
+        lit += F0 * rimPow * 0.4 * lightI * rimMask;
 
         float shadow = 1.0;
         if (shadowMap.get_width() > 0) {
@@ -651,6 +688,7 @@ struct RopeIn {
     float3 color [[attribute(2)]];
     float2 uv [[attribute(3)]];
     float4 params [[attribute(4)]];
+    float ropeSeed [[attribute(5)]];
 };
 
 struct RopeOut {
@@ -660,6 +698,7 @@ struct RopeOut {
     float3 worldPos;
     float2 uv;
     float4 params;
+    float ropeSeed;
 };
 
 static float crackNoise1(float x) {
@@ -668,11 +707,13 @@ static float crackNoise1(float x) {
 
 static float crackMask(float2 uv, float amount, float width) {
     float freq = mix(7.0, 34.0, saturate(amount));
+    float segX = floor(uv.x * freq * 0.55);
+    float angularOffset = crackNoise1(segX * 5.7 + 3.1);
     float ridgePhase = sin(uv.x * freq * 6.2831853 + sin(uv.x * 13.7) * 1.9);
     float ridgeShift = ridgePhase * (0.03 + amount * 0.07);
-    float center = abs(fract(uv.y + ridgeShift) - 0.5) * 2.0;
+    float center = abs(fract(uv.y - angularOffset + ridgeShift) - 0.5) * 2.0;
     float inner = smoothstep(width, max(0.001, width * 0.22), center);
-    float shard = crackNoise1(floor(uv.x * freq * 0.55) + floor(uv.y * 6.0) * 17.0 + 1.0);
+    float shard = crackNoise1(segX + floor(uv.y * 6.0) * 17.0 + 1.0);
     float gate = step(1.0 - amount * 0.9, shard);
     float endFade = smoothstep(0.03, 0.12, uv.x) * smoothstep(0.03, 0.12, 1.0 - uv.x);
     return inner * gate * endFade;
@@ -723,6 +764,7 @@ vertex RopeOut ropeVertex(RopeIn in [[stage_in]],
     o.color = in.color;
     o.uv = in.uv;
     o.params = in.params;
+    o.ropeSeed = in.ropeSeed;
     return o;
 }
 
@@ -870,6 +912,8 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     float contactAOStr = frame.ropeMatParams2.w;
     float liftGlowStr = frame.ropeMatParams3.x;
     float bumpScale = max(frame.ropeMatParams3.y, 0.5);
+    float bumpContrast = max(frame.ropeMatParams8.y, 0.05);
+    float bumpAniso = frame.ropeMatParams8.z;
     bool seamEnabled = frame.ropeMatParams5.x > 0.5;
     float seamWidth = clamp(frame.ropeMatParams5.y, 0.005, 0.3);
     float seamDepth = saturate(frame.ropeMatParams5.z);
@@ -899,28 +943,31 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     tVec = normalize(tVec);
     float3 bVec = normalize(cross(n, tVec));
 
+    float n0c = saturate(0.5 + (n0 - 0.5) * bumpContrast);
+    float n1c = saturate(0.5 + (n1 - 0.5) * bumpContrast);
+
     if (isChain) {
-        float chainBump = (n0 - 0.5) * 0.04;
+        float chainBump = (n0c - 0.5) * 0.04;
         n = normalize(n + tVec * chainBump);
     } else if (isWorm) {
         float wormBumpAmp = 0.06;
         float wSegFreq = frame.wormParams3.w;
         float segBump = sin(in.uv.x * wSegFreq * 3.14159265 * 2.0);
-        n = normalize(n + tVec * segBump * wormBumpAmp + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * 0.03);
+        n = normalize(n + tVec * segBump * wormBumpAmp + (tVec * (n0c - 0.5) + bVec * (n1c - 0.5)) * 0.03);
     } else {
         float microAmp = (microBump + pinch * 0.12) * stretchDamp;
-        n = normalize(n + (tVec * (n0 - 0.5) + bVec * (n1 - 0.5)) * microAmp);
+        n = normalize(n + (tVec * (n0c - 0.5) * bumpAniso + bVec * (n1c - 0.5)) * microAmp);
     }
 
     float3 base = in.color;
-    float microAO = (n0 + n1 - 1.0) * microBump * stretchDamp * 3.0;
+    float microAO = (n0c + n1c - 1.0) * microBump * stretchDamp * 3.0 * saturate(bumpContrast * 0.7);
     base *= 1.0 + microAO;
     base = mix(base, base * 1.3, pinch * 0.15);
 
     float roughNoise = noiseTex.sample(noiseSampler, baseUV * 1.7 + 0.37).r;
     float rough = roughNoise + pinch * 0.06 + repel * 0.04;
 
-    float seamSeed = fract(sin(dot(in.color, float3(12.9898, 78.233, 37.719))) * 43758.5453);
+    float seamSeed = in.ropeSeed;
     float seamCenter = seamRandomize ? seamSeed : seamPosition;
     float seamV = abs(in.uv.y - seamCenter);
     seamV = min(seamV, 1.0 - seamV);
@@ -1024,7 +1071,8 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
     } else {
         c = rubberPBR(base, n, l, v, rough, taut, in.uv.y, cartoonMode, cartoonLevels,
                       frame.ropeMatParams, frame.ropeMatParams2,
-                      frame.ropeMatParams3.z, frame.ropeMatParams3.w) * lightI;
+                      frame.ropeMatParams3.z, frame.ropeMatParams3.w,
+                      frame.ropeMatParams8) * lightI;
         c *= contactAO;
         if (seamEnabled) {
             c += float3(0.11, 0.11, 0.11) * (seamEdge + seamBranches * 0.25) * seamDepth * seamHighlight;
@@ -1119,7 +1167,7 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
                 fallbackSample *= lightI;
             }
 
-            float mirrorBlend = saturate(envReflect);
+            float envStrength = envReflect * (0.4 + 0.6 * envFresnel) * subsurfaceAtten;
 
             bool debugEnv = frame.ropeMatParams4.y > 0.5;
             if (debugEnv) {
@@ -1127,7 +1175,7 @@ fragment float4 ropeFragment(RopeOut in [[stage_in]],
             } else {
                 float3 envSample = hit ? envTex.sample(envSampler, hitUV).rgb : fallbackSample;
                 float3 tinted = envSample * mix(float3(1.0), in.color, 0.3);
-                c = mix(c, tinted, mirrorBlend);
+                c = mix(c, tinted, envStrength);
             }
         }
     }
@@ -1552,8 +1600,7 @@ fragment float4 postFragment(VSOut in [[stage_in]],
     float2 uv = in.uv;
     float3 c = hdr.sample(s, uv).xyz;
     float3 b = bloom.sample(s, uv).xyz;
-    b = float3(0);
-    float3 mapped = 1.0 - exp(-c * post.exposure);
+    float3 mapped = 1.0 - exp(-(c + b * post.bloomStrength) * post.exposure);
     mapped = pow(saturate(mapped), float3(1.0 / 2.2));
     if (post.cartoonMode > 0.5) {
         mapped = floor(mapped * 32.0 + 0.5) / 32.0;

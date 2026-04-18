@@ -1,0 +1,39 @@
+<svg width="32" height="32" viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <g stroke="#F5F5F5" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+    
+    <!-- Hair -->
+    <path d="M8 12C8.5 7.5 12 5 16 5C20.5 5 24 7.8 24 12"/>
+    <path d="M9 10C10.5 7 13 6 16 6"/>
+    <path d="M23 10C22 7.5 19.5 6 17 6"/>
+    <path d="M12 7L11 9"/>
+    <path d="M20 7L21 9"/>
+
+    <!-- Face outline -->
+    <path d="M10 13V18C10 22 12.5 25 16 25C19.5 25 22 22 22 18V13"/>
+
+    <!-- Ears -->
+    <path d="M10 15C8.8 15.5 8.8 17.5 10 18"/>
+    <path d="M22 15C23.2 15.5 23.2 17.5 22 18"/>
+
+    <!-- Eyebrows -->
+    <path d="M12.2 13L14.2 12.5"/>
+    <path d="M17.8 12.5L19.8 13"/>
+
+    <!-- Eyes -->
+    <circle cx="13.5" cy="15.5" r="1"/>
+    <circle cx="18.5" cy="15.5" r="1"/>
+
+    <!-- Nose -->
+    <path d="M16 16.2V18"/>
+    <path d="M15.5 18.5L16.5 18.5"/>
+
+    <!-- Mouth -->
+    <path d="M14 21C15.2 21.5 16.8 21.5 18 21"/>
+
+    <!-- Neck / collar -->
+    <path d="M13.5 25V28"/>
+    <path d="M18.5 25V28"/>
+    <path d="M13.5 28H18.5"/>
+
+  </g>
+</svg>

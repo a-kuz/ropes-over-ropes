@@ -18,7 +18,7 @@ impl ApplicationHandler for App {
 
         #[cfg(target_arch = "wasm32")]
         {
-            let attrs = Window::default_attributes().with_title("UzlsFour");
+            let attrs = Window::default_attributes().with_title("Strain");
             let window = Arc::new(event_loop.create_window(attrs).unwrap());
 
             use winit::platform::web::WindowExtWebSys;
@@ -50,7 +50,7 @@ impl ApplicationHandler for App {
         #[cfg(not(target_arch = "wasm32"))]
         {
             let attrs = Window::default_attributes()
-                .with_title("UzlsFour")
+                .with_title("Strain")
                 .with_inner_size(winit::dpi::LogicalSize::new(400, 600));
             let window = Arc::new(event_loop.create_window(attrs).unwrap());
             let renderer = pollster::block_on(GpuRenderer::new(window.clone()));

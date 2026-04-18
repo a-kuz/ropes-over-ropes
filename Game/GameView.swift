@@ -232,86 +232,138 @@ class GameController: ObservableObject {
             ropeTension: Defaults.ropeTension,
             bendCompliance: Defaults.bendCompliance,
             stretchThinning: 0.039,
-            cartoonShaderEnabled: false,
-            ropeMatte: 0.69,
-            ropeGloss: 1.17,
-            ropeSubsurface: 0.303,
-            ropeEdgeLight: 0.009,
-            ropeSaturation: 0.979,
-            ropeMicroBump: 1.5,
-            ropeBumpScale: 7.37,
-            ropeEnvReflect: 0.15,
-            ropeOpacity: 1.0
-        ),
-        Preset(
-            name: "Jelly",
-            gravity: -0.1953949,
-            damping: 0.9901605,
-            ropeTension: 1.0,
-            bendCompliance: 0.0074757283,
-            stretchThinning: 0.1,
-            particleCount: 69,
-            constraintIterations: 9,
+            particleCount: 126,
+            constraintIterations: 8,
             settleSteps: 1,
-            bendVelocityCoupling: 0,
-            dragHeight: 0.85,
-            liftHeight: 0.9,
-            frictionSoundEnabled: false,
-            profileSegments: 6,
+            bendVelocityCoupling: 0.4226135,
+            dragHeight: 0.35,
+            liftHeight: 0.3,
+            frictionSoundEnabled: true,
+            profileSegments: 32,
             holeRadiusScale: 1.0,
             holeSegments: 19,
-            ropeRadiusScale: 1.0,
-            exposure: 0.6805594,
-            lightIntensity: 1.0721008,
-            lightDirX: 0.68410814,
-            lightDirY: -0.79935646,
-            lightDirZ: 0.6411401,
-            shadowType: ShadowType.pcf,
+            ropeRadiusScale: 1.28,
+            exposure: 0.735,
+            lightIntensity: 1.0617,
+            lightDirX: 0.02434,
+            lightDirY: 0.01228,
+            lightDirZ: 0.48867,
+            shadowType: ShadowType.pcss,
             ambient: 0,
-            shadowBias: 0.0009,
-            shadowDarkness: 0.14629121,
-            lightSize: 0.020752506,
+            shadowBias: 0.0015748,
+            shadowDarkness: 0,
+            lightSize: 0.08,
             shadowsEnabled: true,
-            bloomStrength: 0.35820743,
+            bloomStrength: 0,
             cartoonShaderEnabled: false,
             cartoonExposure: 1.33,
             cartoonBloom: 0,
             cartoonEdgeStrength: 1,
             cartoonLevels: 2,
             tableStyle: TableStyle.wood,
-            tableColor1R: 0,
-            tableColor1G: 0,
-            tableColor1B: 0,
-            tableColor2R: 0.044013005,
-            tableColor2G: 0.0649406,
-            tableColor2B: 0.07229897,
-            woodSeed: 0.44339293,
-            woodBrightness: 0.8587378,
-            woodPatternScale: 2.393613,
-            capRadiusScale: 0.38643488,
+            tableColor1R: 0.08,
+            tableColor1G: 0.09,
+            tableColor1B: 0.13,
+            tableColor2R: 0.12,
+            tableColor2G: 0.13,
+            tableColor2B: 0.2,
+            woodSeed: 0.28,
+            woodBrightness: 0.75,
+            woodPatternScale: 0.9,
+            capRadiusScale: 0.95,
             capSegments: 12,
-            capRings: 2,
-            capDarken: 0.116093226,
-            ropeMatte: 0.05,
-            ropeGloss: 2.5,
-            ropeDiffuseWrap: 0.14709696,
-            ropeSubsurface: 0.0,
-            ropeEdgeLight: 0.17961414,
-            ropeSaturation: 1.0922331,
-            ropeMicroBump: 0.8786408,
-            ropeBumpScale: 3.1103795,
+            capRings: 6,
+            capDarken: 0,
+            ropeMatte: 0.4274,
+            ropeGloss: 1.78,
+            ropeDiffuseWrap: 0.045,
+            ropeSubsurface: 0.303,
+            ropeEdgeLight: 0.085,
+            ropeSaturation: 1.5489,
+            ropeMicroBump: 1.7425,
+            ropeBumpScale: 6.2699,
             ropeContactAO: 0,
             ropeLiftGlow: 0,
-            ropeStretchGloss: 0.014713832,
-            ropeStretchSpec: 0.6748382,
-            ropeEnvReflect: 0.8177177,
-            ropeEnvSpread: 0.059403844,
-            ropeOpacity: 0.7696207,
+            ropeStretchGloss: 0.879,
+            ropeStretchSpec: 0.9995,
+            ropeEnvReflect: 0.8,
+            ropeEnvSpread: 0.5,
+            ropeOpacity: 1.0,
             wormMode: false,
             chainMode: false,
             squareCrossSection: false,
-            renderScale: 0.6312977,
-            zoomScale: 1.2382903
+            renderScale: 1.0742,
+            zoomScale: 1.2158
+        ),
+        Preset(
+            name: "Jelly Beams",
+            gravity: Defaults.gravity,
+            damping: Defaults.damping,
+            ropeTension: Defaults.ropeTension,
+            bendCompliance: Defaults.bendCompliance,
+            stretchThinning: 0.039,
+            particleCount: 126,
+            constraintIterations: 8,
+            settleSteps: 1,
+            bendVelocityCoupling: 0.4226135,
+            dragHeight: 0.35,
+            liftHeight: 0.3,
+            frictionSoundEnabled: true,
+            profileSegments: 32,
+            holeRadiusScale: 1.0,
+            holeSegments: 19,
+            ropeRadiusScale: 1.28,
+            exposure: 0.735,
+            lightIntensity: 1.0617,
+            lightDirX: 0.02434,
+            lightDirY: 0.01228,
+            lightDirZ: 0.48867,
+            shadowType: ShadowType.pcss,
+            ambient: 0,
+            shadowBias: 0.0015748,
+            shadowDarkness: 0,
+            lightSize: 0.08,
+            shadowsEnabled: true,
+            bloomStrength: 0,
+            cartoonShaderEnabled: false,
+            cartoonExposure: 1.33,
+            cartoonBloom: 0,
+            cartoonEdgeStrength: 1,
+            cartoonLevels: 2,
+            tableStyle: TableStyle.wood,
+            tableColor1R: 0.08,
+            tableColor1G: 0.09,
+            tableColor1B: 0.13,
+            tableColor2R: 0.12,
+            tableColor2G: 0.13,
+            tableColor2B: 0.2,
+            woodSeed: 0.28,
+            woodBrightness: 0.75,
+            woodPatternScale: 0.9,
+            capRadiusScale: 0.95,
+            capSegments: 12,
+            capRings: 6,
+            capDarken: 0,
+            ropeMatte: 0.4274,
+            ropeGloss: 1.78,
+            ropeDiffuseWrap: 0.045,
+            ropeSubsurface: 0.303,
+            ropeEdgeLight: 0.085,
+            ropeSaturation: 1.5489,
+            ropeMicroBump: 1.7425,
+            ropeBumpScale: 6.2699,
+            ropeContactAO: 0,
+            ropeLiftGlow: 0,
+            ropeStretchGloss: 0.879,
+            ropeStretchSpec: 0.9995,
+            ropeEnvReflect: 0.8,
+            ropeEnvSpread: 0.5,
+            ropeOpacity: 1.0,
+            wormMode: false,
+            chainMode: false,
+            squareCrossSection: false,
+            renderScale: 1.0742,
+            zoomScale: 1.2158
         ),
         Preset(
             name: "Steel Cable",
@@ -407,24 +459,23 @@ class GameController: ObservableObject {
 
     struct Defaults {
         // Rope
-        static let particleCount: Float = 77
-        static let gravity: Float = -7.374
-        static let damping: Float = 0.908
+        static let particleCount: Float = 126
+        static let gravity: Float = -1.1299438
+        static let damping: Float = 0.9963658
         // Solver
-        static let constraintIterations: Float = 12
+        static let constraintIterations: Float = 8
         static let settleSteps: Float = 1
-        static let bendCompliance: Float = 0.0006
-        static let bendVelocityCoupling: Float = 0
+        static let bendCompliance: Float = 0.0027359223
+        static let bendVelocityCoupling: Float = 0.4226135
         // Drag
         static let dragHeight: Float = 0.35
         static let liftHeight: Float = 0.3
-        static let ropeTension: Float = 0.918
+        static let ropeTension: Float = 1.0
         static let frictionCoefficient: Float = 0.8
         static let frictionDampingRatio: Float = 0.3
         static let maxFrictionCap: Float = 0.25
-        static let boardFrictionRatio: Float = 0.5
+        static let boardFrictionRatio: Float = 0.0
         static let collisionResponse: Float = 0.35
-        static let zSeparation: Float = 1.0
         static let twistStiffness: Float = 0.15
         static let twistDamping: Float = 0.4
         static let gravityTorque: Float = 0.8
@@ -593,9 +644,6 @@ class GameController: ObservableObject {
     @Published var collisionResponse: Float = Defaults.collisionResponse {
         didSet { renderer?.physicsCollisionResponse = collisionResponse; persist("p.crs", collisionResponse) }
     }
-    @Published var zSeparation: Float = Defaults.zSeparation {
-        didSet { renderer?.physicsZSeparation = zSeparation; persist("p.zsep", zSeparation) }
-    }
     @Published var frictionDampingRatio: Float = Defaults.frictionDampingRatio {
         didSet { renderer?.physicsFrictionDampingRatio = frictionDampingRatio; persist("p.fdr", frictionDampingRatio) }
     }
@@ -639,38 +687,38 @@ class GameController: ObservableObject {
         didSet { renderer?.physicsPaused = physicsPaused }
     }
 
-    @Published var profileSegments: Float = 6 {
+    @Published var profileSegments: Float = 32 {
         didSet { renderer?.profileSegments = Int(profileSegments); persist("v.prf", profileSegments) }
     }
-    @Published var holeRadiusScale: Float = 0.734 {
+    @Published var holeRadiusScale: Float = 1.0 {
         didSet { renderer?.holeRadiusScale = holeRadiusScale; persist("v.hrs", holeRadiusScale) }
     }
-    @Published var holeTintR: Float = 1.0 { didSet { updateHoleTint(); persist("v.htr", holeTintR) } }
-    @Published var holeTintG: Float = 0.89 { didSet { updateHoleTint(); persist("v.htg", holeTintG) } }
-    @Published var holeTintB: Float = 1.0 { didSet { updateHoleTint(); persist("v.htb", holeTintB) } }
-    @Published var holeTintAmount: Float = 1.0 { didSet { updateHoleTint(); persist("v.hta", holeTintAmount) } }
+    @Published var holeTintR: Float = 0 { didSet { updateHoleTint(); persist("v.htr", holeTintR) } }
+    @Published var holeTintG: Float = 0 { didSet { updateHoleTint(); persist("v.htg", holeTintG) } }
+    @Published var holeTintB: Float = 0 { didSet { updateHoleTint(); persist("v.htb", holeTintB) } }
+    @Published var holeTintAmount: Float = 0 { didSet { updateHoleTint(); persist("v.hta", holeTintAmount) } }
     @Published var holeSegments: Float = 19 {
         didSet { renderer?.holeSegments = Int(holeSegments); persist("v.hsg", holeSegments) }
     }
-    @Published var ropeRadiusScale: Float = 0.761 {
+    @Published var ropeRadiusScale: Float = 1.28 {
         didSet { renderer?.ropeRadiusScale = ropeRadiusScale; persist("v.rrs", ropeRadiusScale) }
     }
     @Published var stretchThinning: Float = 0.039 {
         didSet { renderer?.stretchThinning = stretchThinning; persist("v.stn", stretchThinning) }
     }
-    @Published var exposure: Float = 1.409 {
+    @Published var exposure: Float = 0.735 {
         didSet { renderer?.shaderParams.exposure = exposure; persist("v.exp", exposure) }
     }
-    @Published var lightIntensity: Float = 0.766 {
+    @Published var lightIntensity: Float = 1.062 {
         didSet { renderer?.shaderParams.lightIntensity = lightIntensity; persist("v.lit", lightIntensity) }
     }
-    @Published var lightDirX: Float = -0.125 {
+    @Published var lightDirX: Float = 0.024 {
         didSet { updateLightDir(); persist("v.ldx", lightDirX) }
     }
-    @Published var lightDirY: Float = -0.156 {
+    @Published var lightDirY: Float = 0.012 {
         didSet { updateLightDir(); persist("v.ldy", lightDirY) }
     }
-    @Published var lightDirZ: Float = 0.532 {
+    @Published var lightDirZ: Float = 0.48867 {
         didSet { updateLightDir(); persist("v.ldz", lightDirZ) }
     }
 
@@ -688,19 +736,19 @@ class GameController: ObservableObject {
         }
     }
 
-    @Published var shadowType: ShadowType = .pcf {
+    @Published var shadowType: ShadowType = .pcss {
         didSet { renderer?.shaderParams.shadowType = shadowType.rawValue; persist("v.stp", Float(shadowType.rawValue)) }
     }
     @Published var ambient: Float = 0 {
         didSet { renderer?.shaderParams.ambient = ambient; persist("v.amb", ambient) }
     }
-    @Published var shadowBias: Float = 0.0001 {
+    @Published var shadowBias: Float = 0.0015748 {
         didSet { renderer?.shaderParams.shadowBias = shadowBias; persist("v.sb", shadowBias) }
     }
     @Published var shadowDarkness: Float = 0 {
         didSet { renderer?.shaderParams.shadowDarkness = shadowDarkness; persist("v.sd", shadowDarkness) }
     }
-    @Published var lightSize: Float = 0.002 {
+    @Published var lightSize: Float = 0.08 {
         didSet { renderer?.shaderParams.lightSize = lightSize; persist("v.lsz", lightSize) }
     }
     @Published var shadowsEnabled: Bool = true {
@@ -765,25 +813,25 @@ class GameController: ObservableObject {
         }
     }
 
-    @Published var tableStyle: TableStyle = .gradient {
+    @Published var tableStyle: TableStyle = .wood {
         didSet { renderer?.shaderParams.tableStyle = tableStyle.rawValue; persist("v.tst", Float(tableStyle.rawValue)) }
     }
-    @Published var tableColor1R: Float = 0 { didSet { updateTableColor(); persist("v.tc1r", tableColor1R) } }
-    @Published var tableColor1G: Float = 0 { didSet { updateTableColor(); persist("v.tc1g", tableColor1G) } }
-    @Published var tableColor1B: Float = 0 { didSet { updateTableColor(); persist("v.tc1b", tableColor1B) } }
-    @Published var tableColor2R: Float = 0.044 { didSet { updateTableColor(); persist("v.tc2r", tableColor2R) } }
-    @Published var tableColor2G: Float = 0.065 { didSet { updateTableColor(); persist("v.tc2g", tableColor2G) } }
-    @Published var tableColor2B: Float = 0.072 { didSet { updateTableColor(); persist("v.tc2b", tableColor2B) } }
-    @Published var woodSeed: Float = 0.052 {
+    @Published var tableColor1R: Float = 0.08 { didSet { updateTableColor(); persist("v.tc1r", tableColor1R) } }
+    @Published var tableColor1G: Float = 0.09 { didSet { updateTableColor(); persist("v.tc1g", tableColor1G) } }
+    @Published var tableColor1B: Float = 0.13 { didSet { updateTableColor(); persist("v.tc1b", tableColor1B) } }
+    @Published var tableColor2R: Float = 0.12 { didSet { updateTableColor(); persist("v.tc2r", tableColor2R) } }
+    @Published var tableColor2G: Float = 0.13 { didSet { updateTableColor(); persist("v.tc2g", tableColor2G) } }
+    @Published var tableColor2B: Float = 0.2 { didSet { updateTableColor(); persist("v.tc2b", tableColor2B) } }
+    @Published var woodSeed: Float = 0.28 {
         didSet { renderer?.woodSeed = woodSeed; persist("v.wsd", woodSeed) }
     }
-    @Published var woodBrightness: Float = 0.551 {
+    @Published var woodBrightness: Float = 0.75 {
         didSet { renderer?.woodBrightness = woodBrightness; persist("v.wbr", woodBrightness) }
     }
-    @Published var woodPatternScale: Float = 3.95 {
+    @Published var woodPatternScale: Float = 0.9 {
         didSet { renderer?.woodPatternScale = woodPatternScale; persist("v.wps", woodPatternScale) }
     }
-    @Published var capRadiusScale: Float = 0.91 {
+    @Published var capRadiusScale: Float = 0.95 {
         didSet { renderer?.shaderParams.capRadiusScale = capRadiusScale; persist("v.crs", capRadiusScale) }
     }
     @Published var capSegments: Float = 12 {
@@ -796,88 +844,97 @@ class GameController: ObservableObject {
         didSet { renderer?.shaderParams.capDarken = capDarken; persist("v.cdk", capDarken) }
     }
 
-    @Published var ropeMatte: Float = 1 {
+    @Published var ropeMatte: Float = 0.4274 {
         didSet { renderer?.shaderParams.ropeMatte = ropeMatte; persist("v.rmat", ropeMatte) }
     }
-    @Published var ropeGloss: Float = 0 {
+    @Published var ropeGloss: Float = 1.78 {
         didSet { renderer?.shaderParams.ropeGloss = ropeGloss; persist("v.rgls", ropeGloss) }
     }
-    @Published var ropeDiffuseWrap: Float = 0 {
+    @Published var ropeDiffuseWrap: Float = 0.045 {
         didSet { renderer?.shaderParams.ropeDiffuseWrap = ropeDiffuseWrap; persist("v.rdwp", ropeDiffuseWrap) }
     }
     @Published var ropeSubsurface: Float = 0.303 {
         didSet { renderer?.shaderParams.ropeSubsurface = ropeSubsurface; persist("v.rsss", ropeSubsurface) }
     }
-    @Published var ropeEdgeLight: Float = 0 {
+    @Published var ropeEdgeLight: Float = 0.085 {
         didSet { renderer?.shaderParams.ropeEdgeLight = ropeEdgeLight; persist("v.redg", ropeEdgeLight) }
     }
-    @Published var ropeSaturation: Float = 0.501 {
+    @Published var ropeSaturation: Float = 1.5489 {
         didSet { renderer?.shaderParams.ropeSaturation = ropeSaturation; persist("v.rsat", ropeSaturation) }
     }
-    @Published var ropeMicroBump: Float = 1.265 {
+    @Published var ropeCoreDarken: Float = 0.0 {
+        didSet { renderer?.shaderParams.ropeCoreDarken = ropeCoreDarken; persist("v.rcdk", ropeCoreDarken) }
+    }
+    @Published var ropeMicroBump: Float = 1.7425 {
         didSet { renderer?.shaderParams.ropeMicroBump = ropeMicroBump; persist("v.rmbp", ropeMicroBump) }
     }
-    @Published var ropeBumpScale: Float = 0.5 {
+    @Published var ropeBumpScale: Float = 6.2699 {
         didSet { renderer?.shaderParams.ropeBumpScale = ropeBumpScale; persist("v.rbsc", ropeBumpScale) }
     }
-    @Published var ropeContactAO: Float = 0 {
+    @Published var ropeBumpContrast: Float = 0.6127 {
+        didSet { renderer?.shaderParams.ropeBumpContrast = ropeBumpContrast; persist("v.rbct", ropeBumpContrast) }
+    }
+    @Published var ropeBumpAniso: Float = 2.1359 {
+        didSet { renderer?.shaderParams.ropeBumpAniso = ropeBumpAniso; persist("v.rban", ropeBumpAniso) }
+    }
+    @Published var ropeContactAO: Float = 0.0 {
         didSet { renderer?.shaderParams.ropeContactAO = ropeContactAO; persist("v.rcao", ropeContactAO) }
     }
     @Published var ropeLiftGlow: Float = 0 {
         didSet { renderer?.shaderParams.ropeLiftGlow = ropeLiftGlow; persist("v.rlgw", ropeLiftGlow) }
     }
-    @Published var ropeStretchGloss: Float = 0.313 {
+    @Published var ropeStretchGloss: Float = 0.879 {
         didSet { renderer?.shaderParams.ropeStretchGloss = ropeStretchGloss; persist("v.rsg", ropeStretchGloss) }
     }
-    @Published var ropeStretchSpec: Float = 0.256 {
+    @Published var ropeStretchSpec: Float = 0.9995 {
         didSet { renderer?.shaderParams.ropeStretchSpec = ropeStretchSpec; persist("v.rss", ropeStretchSpec) }
     }
-    @Published var ropeEnvReflect: Float = 0 {
+    @Published var ropeEnvReflect: Float = 0.8 {
         didSet { renderer?.shaderParams.ropeEnvReflect = ropeEnvReflect; persist("v.renv", ropeEnvReflect) }
     }
-    @Published var ropeEnvSpread: Float = 0.042 {
+    @Published var ropeEnvSpread: Float = 0.5 {
         didSet { renderer?.shaderParams.ropeEnvSpread = ropeEnvSpread; persist("v.rens", ropeEnvSpread) }
     }
     @Published var ropeOpacity: Float = 1.0 {
         didSet { renderer?.shaderParams.ropeOpacity = ropeOpacity; persist("v.ropa", ropeOpacity) }
     }
-    @Published var ropeSeamEnabled: Bool = false {
+    @Published var ropeSeamEnabled: Bool = true {
         didSet { renderer?.shaderParams.ropeSeamEnabled = ropeSeamEnabled; persist("v.rsen", ropeSeamEnabled ? 1 : 0) }
     }
-    @Published var ropeSeamWidth: Float = 0.06 {
+    @Published var ropeSeamWidth: Float = 0.05252 {
         didSet { renderer?.shaderParams.ropeSeamWidth = ropeSeamWidth; persist("v.rsw", ropeSeamWidth) }
     }
-    @Published var ropeSeamDepth: Float = 0.45 {
+    @Published var ropeSeamDepth: Float = 1.0 {
         didSet { renderer?.shaderParams.ropeSeamDepth = ropeSeamDepth; persist("v.rsd", ropeSeamDepth) }
     }
-    @Published var ropeSeamDarkness: Float = 1.4 {
+    @Published var ropeSeamDarkness: Float = 3.0 {
         didSet { renderer?.shaderParams.ropeSeamDarkness = ropeSeamDarkness; persist("v.rsdk", ropeSeamDarkness) }
     }
-    @Published var ropeSeamHighlight: Float = 0.35 {
+    @Published var ropeSeamHighlight: Float = 1.0 {
         didSet { renderer?.shaderParams.ropeSeamHighlight = ropeSeamHighlight; persist("v.rshl", ropeSeamHighlight) }
     }
-    @Published var ropeSeamCrackAmount: Float = 0.45 {
+    @Published var ropeSeamCrackAmount: Float = 0.04110 {
         didSet { renderer?.shaderParams.ropeSeamCrackAmount = ropeSeamCrackAmount; persist("v.rsca", ropeSeamCrackAmount) }
     }
-    @Published var ropeSeamCrackScale: Float = 18.0 {
+    @Published var ropeSeamCrackScale: Float = 31.89 {
         didSet { renderer?.shaderParams.ropeSeamCrackScale = ropeSeamCrackScale; persist("v.rscs", ropeSeamCrackScale) }
     }
     @Published var ropeSeamRandomize: Bool = true {
         didSet { renderer?.shaderParams.ropeSeamRandomize = ropeSeamRandomize; persist("v.rsrn", ropeSeamRandomize ? 1 : 0) }
     }
-    @Published var ropeSeamPosition: Float = 0.5 {
+    @Published var ropeSeamPosition: Float = 0.23565 {
         didSet { renderer?.shaderParams.ropeSeamPosition = ropeSeamPosition; persist("v.rspo", ropeSeamPosition) }
     }
     @Published var ropeCracksEnabled: Bool = false {
         didSet { renderer?.shaderParams.ropeCracksEnabled = ropeCracksEnabled; persist("v.rcren", ropeCracksEnabled ? 1 : 0) }
     }
-    @Published var ropeCrackAmount: Float = 0.45 {
+    @Published var ropeCrackAmount: Float = 0.1 {
         didSet { renderer?.shaderParams.ropeCrackAmount = ropeCrackAmount; persist("v.rcra", ropeCrackAmount) }
     }
-    @Published var ropeCrackWidth: Float = 0.16 {
+    @Published var ropeCrackWidth: Float = 0.45 {
         didSet { renderer?.shaderParams.ropeCrackWidth = ropeCrackWidth; persist("v.rcrw", ropeCrackWidth) }
     }
-    @Published var ropeCrackDepth: Float = 0.5 {
+    @Published var ropeCrackDepth: Float = 1.0 {
         didSet { renderer?.shaderParams.ropeCrackDepth = ropeCrackDepth; persist("v.rcrd", ropeCrackDepth) }
     }
     @Published var ropeEnvDebug: Bool = false {
@@ -958,7 +1015,45 @@ class GameController: ObservableObject {
     @Published var squareCrossSection: Bool = false {
         didSet { renderer?.squareCrossSection = squareCrossSection; persist("v.sqcs", squareCrossSection ? 1 : 0) }
     }
-    @Published var renderScale: Float = 1.0 {
+    @Published var padMode: Bool = false {
+        didSet { renderer?.padMode = padMode; persist("v.pad", padMode ? 1 : 0) }
+    }
+    @Published var padHeight: Float = 0.18 {
+        didSet { renderer?.shaderParams.padHeight = padHeight; renderer?.simulator?.padHeight = padHeight; renderer?.rebuildHoleMeshIfNeeded(); persist("p.ht", padHeight) }
+    }
+    @Published var padColorR: Float = 0.55 {
+        didSet { renderer?.shaderParams.padColorR = padColorR; persist("p.cr", padColorR) }
+    }
+    @Published var padColorG: Float = 0.56 {
+        didSet { renderer?.shaderParams.padColorG = padColorG; persist("p.cg", padColorG) }
+    }
+    @Published var padColorB: Float = 0.58 {
+        didSet { renderer?.shaderParams.padColorB = padColorB; persist("p.cb", padColorB) }
+    }
+    @Published var padMetallic: Float = 0.15 {
+        didSet { renderer?.shaderParams.padMetallic = padMetallic; persist("p.mt", padMetallic) }
+    }
+    @Published var padRoughness: Float = 0.65 {
+        didSet { renderer?.shaderParams.padRoughness = padRoughness; persist("p.rg", padRoughness) }
+    }
+    @Published var padRopeTint: Float = 0.35 {
+        didSet { renderer?.shaderParams.padRopeTint = padRopeTint; persist("p.rt", padRopeTint) }
+    }
+    @Published var padNeckHeight: Float = 0.08 {
+        didSet {
+            renderer?.shaderParams.padNeckHeight = padNeckHeight
+            renderer?.simulator?.padNeckHeight = padNeckHeight
+            persist("p.nh", padNeckHeight)
+        }
+    }
+    @Published var padNeckStiffness: Float = 0.5 {
+        didSet {
+            renderer?.shaderParams.padNeckStiffness = padNeckStiffness
+            renderer?.simulator?.padNeckStiffness = padNeckStiffness
+            persist("p.ns", padNeckStiffness)
+        }
+    }
+    @Published var renderScale: Float = 1.0742 {
         didSet { renderer?.renderScale = renderScale; persist("v.rsc", renderScale) }
     }
 
@@ -971,7 +1066,7 @@ class GameController: ObservableObject {
         renderer?.shaderParams.tableColor2 = SIMD3<Float>(tableColor2R, tableColor2G, tableColor2B)
     }
 
-    @Published var zoomScale: Float = 0.955 {
+    @Published var zoomScale: Float = 1.2158 {
         didSet { renderer?.cameraZoomScale = zoomScale; persist("p.zoom", zoomScale) }
     }
 
@@ -1045,7 +1140,6 @@ class GameController: ObservableObject {
         if let v = f("p.rtn") { ropeTension = v }
         if let v = f("p.frc") { frictionCoefficient = v }
         if let v = f("p.crs") { collisionResponse = v }
-        if let v = f("p.zsep") { zSeparation = v }
         if let v = f("p.fdr") { frictionDampingRatio = v }
         if let v = f("p.mfc") { maxFrictionCap = v }
         if let v = f("p.bfr") { boardFrictionRatio = v }
@@ -1116,8 +1210,11 @@ class GameController: ObservableObject {
         if let v = f("v.rsss") { ropeSubsurface = v }
         if let v = f("v.redg") { ropeEdgeLight = v }
         if let v = f("v.rsat") { ropeSaturation = v }
+        if let v = f("v.rcdk") { ropeCoreDarken = v }
         if let v = f("v.rmbp") { ropeMicroBump = v }
         if let v = f("v.rbsc") { ropeBumpScale = v }
+        if let v = f("v.rbct") { ropeBumpContrast = v }
+        if let v = f("v.rban") { ropeBumpAniso = v }
         if let v = f("v.rcao") { ropeContactAO = v }
         if let v = f("v.rlgw") { ropeLiftGlow = v }
         if let v = f("v.rsg") { ropeStretchGloss = v }
@@ -1139,6 +1236,16 @@ class GameController: ObservableObject {
         if let v = f("v.rcrw") { ropeCrackWidth = v }
         if let v = f("v.rcrd") { ropeCrackDepth = v }
         if let v = f("v.sqcs") { squareCrossSection = v > 0.5 }
+        if let v = f("v.pad") { padMode = v > 0.5 }
+        if let v = f("p.ht") { padHeight = v }
+        if let v = f("p.cr") { padColorR = v }
+        if let v = f("p.cg") { padColorG = v }
+        if let v = f("p.cb") { padColorB = v }
+        if let v = f("p.mt") { padMetallic = v }
+        if let v = f("p.rg") { padRoughness = v }
+        if let v = f("p.rt") { padRopeTint = v }
+        if let v = f("p.nh") { padNeckHeight = v }
+        if let v = f("p.ns") { padNeckStiffness = v }
         if let v = f("v.rsc"), v > 0 { renderScale = v }
         if let v = f("v.chn") { chainMode = v > 0.5 }
         if let v = f("c.ll") { chainLinkLength = v }
@@ -1176,7 +1283,7 @@ class GameController: ObservableObject {
         "v.tst", "v.tc1r", "v.tc1g", "v.tc1b", "v.tc2r", "v.tc2g", "v.tc2b",
         "v.wsd", "v.wbr", "v.wps", "v.crs", "v.csg", "v.crg", "v.cdk",
         "v.rmat", "v.rgls", "v.rdwp", "v.rsss", "v.redg", "v.rsat",
-        "v.rmbp", "v.rbsc", "v.rcao", "v.rlgw", "v.rsg", "v.rss", "v.rsen", "v.rsw", "v.rsd", "v.rsdk", "v.rshl", "v.rsca", "v.rscs", "v.rsrn", "v.rspo", "v.rcren", "v.rcra", "v.rcrw", "v.rcrd", "v.sqcs", "v.rsc", "v.wrm",
+        "v.rmbp", "v.rbsc", "v.rcao", "v.rlgw", "v.rsg", "v.rss", "v.rsen", "v.rsw", "v.rsd", "v.rsdk", "v.rshl", "v.rsca", "v.rscs", "v.rsrn", "v.rspo", "v.rcren", "v.rcra", "v.rcrw", "v.rcrd", "v.sqcs", "v.pad", "p.ht", "p.cr", "p.cg", "p.cb", "p.mt", "p.rg", "p.rt", "v.rsc", "v.wrm",
         "w.sf", "w.sb", "w.th", "w.tl", "w.gd", "w.bb", "w.bd", "w.sn",
         "w.ss", "w.rg", "w.sp", "w.rm", "w.es", "w.ps", "w.pa", "w.cs", "w.ca", "w.sa",
         "v.rpal"
@@ -1198,7 +1305,6 @@ class GameController: ObservableObject {
         maxFrictionCap = Defaults.maxFrictionCap
         boardFrictionRatio = Defaults.boardFrictionRatio
         collisionResponse = Defaults.collisionResponse
-        zSeparation = Defaults.zSeparation
         twistStiffness = Defaults.twistStiffness
         twistDamping = Defaults.twistDamping
         gravityTorque = Defaults.gravityTorque
@@ -1207,21 +1313,26 @@ class GameController: ObservableObject {
         fadeOutSpeed = Defaults.fadeOutSpeed
         lowerAnimDuration = Defaults.lowerAnimDuration
         idleTimeout = Defaults.idleTimeout
-        zoomScale = 1.0
+        zoomScale = 1.2158
         frictionSoundEnabled = true
-        profileSegments = 10
-        holeRadiusScale = 0.734
-        holeTintR = 1; holeTintG = 0.89; holeTintB = 1; holeTintAmount = 1
+        profileSegments = 32
+        holeRadiusScale = 1.0
+        holeTintR = 0; holeTintG = 0; holeTintB = 0; holeTintAmount = 0
         holeSegments = 19
-        ropeRadiusScale = 0.767
-        stretchThinning = 0.027
+        ropeRadiusScale = 1.28
+        stretchThinning = 0.039
         exposure = 0.735
-        lightIntensity = 1.24
-        lightDirX = -0.131
-        lightDirY = -0.156
-        lightDirZ = 0.125
+        lightIntensity = 1.0617
+        lightDirX = 0.02434
+        lightDirY = 0.01228
+        lightDirZ = 0.48867
         updateLightDir()
         shadowType = .pcss
+        ambient = 0
+        shadowBias = 0.0015748
+        shadowDarkness = 0
+        lightSize = 0.08
+        shadowsEnabled = true
         bloomStrength = 0
         cartoonShaderEnabled = false
         cartoonExposure = 1.33
@@ -1239,42 +1350,48 @@ class GameController: ObservableObject {
         tableColor2G = 0.13
         tableColor2B = 0.2
         updateTableColor()
-        woodSeed = 0.613
-        woodBrightness = 1.18
-        woodPatternScale = 3.95
-        capRadiusScale = 0.91
+        woodSeed = 0.28
+        woodBrightness = 0.75
+        woodPatternScale = 0.9
+        capRadiusScale = 0.95
         capSegments = 12
         capRings = 6
         capDarken = 0
-        ropeMatte = 0.69
-        ropeGloss = 1.17
+        ropeMatte = 0.4274
+        ropeGloss = 1.78
         ropeDiffuseWrap = 0.045
         ropeSubsurface = 0.303
-        ropeEdgeLight = 0.009
-        ropeSaturation = 0.979
-        ropeMicroBump = 1.5
-        ropeBumpScale = 7.37
-        ropeContactAO = 0.649
+        ropeEdgeLight = 0.085
+        ropeSaturation = 1.5489
+        ropeCoreDarken = 0.0
+        ropeMicroBump = 1.7425
+        ropeBumpScale = 6.2699
+        ropeBumpContrast = 0.6127
+        ropeBumpAniso = 2.1359
+        ropeContactAO = 0
         ropeLiftGlow = 0
         ropeStretchGloss = 0.879
-        ropeStretchSpec = 0.371
-        ropeEnvReflect = 0.15
-        ropeEnvSpread = 0.15
-        ropeSeamEnabled = false
-        ropeSeamWidth = 0.06
-        ropeSeamDepth = 0.45
-        ropeSeamDarkness = 1.4
-        ropeSeamHighlight = 0.35
-        ropeSeamCrackAmount = 0.45
-        ropeSeamCrackScale = 18.0
+        ropeStretchSpec = 0.9995
+        ropeEnvReflect = 0.8
+        ropeEnvSpread = 0.5
+        ropeSeamEnabled = true
+        ropeSeamWidth = 0.05252
+        ropeSeamDepth = 1.0
+        ropeSeamDarkness = 3.0
+        ropeSeamHighlight = 1.0
+        ropeSeamCrackAmount = 0.04110
+        ropeSeamCrackScale = 31.89
         ropeSeamRandomize = true
-        ropeSeamPosition = 0.5
+        ropeSeamPosition = 0.23565
         ropeCracksEnabled = false
-        ropeCrackAmount = 0.45
-        ropeCrackWidth = 0.16
-        ropeCrackDepth = 0.5
-        squareCrossSection = true
-        renderScale = 1.0
+        ropeCrackAmount = 0.1
+        ropeCrackWidth = 0.45
+        ropeCrackDepth = 1.0
+        squareCrossSection = false
+        padMode = false
+        padHeight = 0.18; padColorR = 0.55; padColorG = 0.56; padColorB = 0.58
+        padMetallic = 0.15; padRoughness = 0.65; padRopeTint = 0.35
+        renderScale = 1.0742
         wormMode = false
         wormSegFreq = 28.0; wormSegBulge = 0.12; wormThickness = 1.35; wormTaperLen = 0.12
         wormGrooveDepth = 0.35; wormBellyBright = 1.15; wormBackDark = 0.7; wormSkinNoise = 0.08
@@ -1402,7 +1519,6 @@ class GameController: ObservableObject {
             "maxFrictionCap": maxFrictionCap,
             "boardFrictionRatio": boardFrictionRatio,
             "collisionResponse": collisionResponse,
-            "zSeparation": zSeparation,
             "twistStiffness": twistStiffness,
             "twistDamping": twistDamping,
             "gravityTorque": gravityTorque,
@@ -1460,8 +1576,11 @@ class GameController: ObservableObject {
             "ropeSubsurface": ropeSubsurface,
             "ropeEdgeLight": ropeEdgeLight,
             "ropeSaturation": ropeSaturation,
+            "ropeCoreDarken": ropeCoreDarken,
             "ropeMicroBump": ropeMicroBump,
             "ropeBumpScale": ropeBumpScale,
+            "ropeBumpContrast": ropeBumpContrast,
+            "ropeBumpAniso": ropeBumpAniso,
             "ropeContactAO": ropeContactAO,
             "ropeLiftGlow": ropeLiftGlow,
             "ropeStretchGloss": ropeStretchGloss,
@@ -1483,6 +1602,14 @@ class GameController: ObservableObject {
             "ropeCrackWidth": ropeCrackWidth,
             "ropeCrackDepth": ropeCrackDepth,
             "squareCrossSection": squareCrossSection,
+            "padMode": padMode,
+            "padHeight": padHeight,
+            "padColorR": padColorR,
+            "padColorG": padColorG,
+            "padColorB": padColorB,
+            "padMetallic": padMetallic,
+            "padRoughness": padRoughness,
+            "padRopeTint": padRopeTint,
             "chainMode": chainMode,
             "chainLinkLength": chainLinkLength,
             "chainLinkThickness": chainLinkThickness,
@@ -1561,7 +1688,6 @@ class GameController: ObservableObject {
         if let v = f("maxFrictionCap") { maxFrictionCap = v }
         if let v = f("boardFrictionRatio") { boardFrictionRatio = v }
         if let v = f("collisionResponse") { collisionResponse = v }
-        if let v = f("zSeparation") { zSeparation = v }
         if let v = f("twistStiffness") { twistStiffness = v }
         if let v = f("twistDamping") { twistDamping = v }
         if let v = f("gravityTorque") { gravityTorque = v }
@@ -1622,8 +1748,11 @@ class GameController: ObservableObject {
         if let v = f("ropeSubsurface") { ropeSubsurface = v }
         if let v = f("ropeEdgeLight") { ropeEdgeLight = v }
         if let v = f("ropeSaturation") { ropeSaturation = v }
+        if let v = f("ropeCoreDarken") { ropeCoreDarken = v }
         if let v = f("ropeMicroBump") { ropeMicroBump = v }
         if let v = f("ropeBumpScale") { ropeBumpScale = v }
+        if let v = f("ropeBumpContrast") { ropeBumpContrast = v }
+        if let v = f("ropeBumpAniso") { ropeBumpAniso = v }
         if let v = f("ropeContactAO") { ropeContactAO = v }
         if let v = f("ropeLiftGlow") { ropeLiftGlow = v }
         if let v = f("ropeStretchGloss") { ropeStretchGloss = v }
@@ -1645,6 +1774,14 @@ class GameController: ObservableObject {
         if let v = f("ropeCrackWidth") { ropeCrackWidth = v }
         if let v = f("ropeCrackDepth") { ropeCrackDepth = v }
         if let v = b("squareCrossSection") { squareCrossSection = v }
+        if let v = b("padMode") { padMode = v }
+        if let v = f("padHeight") { padHeight = v }
+        if let v = f("padColorR") { padColorR = v }
+        if let v = f("padColorG") { padColorG = v }
+        if let v = f("padColorB") { padColorB = v }
+        if let v = f("padMetallic") { padMetallic = v }
+        if let v = f("padRoughness") { padRoughness = v }
+        if let v = f("padRopeTint") { padRopeTint = v }
         if let v = b("chainMode") { chainMode = v }
         if let v = f("chainLinkLength") { chainLinkLength = v }
         if let v = f("chainLinkThickness") { chainLinkThickness = v }
@@ -1724,7 +1861,6 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.physicsMaxFrictionCap = controller.maxFrictionCap
     renderer.physicsBoardFrictionRatio = controller.boardFrictionRatio
     renderer.physicsCollisionResponse = controller.collisionResponse
-    renderer.physicsZSeparation = controller.zSeparation
     renderer.physicsTwistStiffness = controller.twistStiffness
     renderer.physicsTwistDamping = controller.twistDamping
     renderer.physicsGravityTorque = controller.gravityTorque
@@ -1781,8 +1917,11 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.shaderParams.ropeSubsurface = controller.ropeSubsurface
     renderer.shaderParams.ropeEdgeLight = controller.ropeEdgeLight
     renderer.shaderParams.ropeSaturation = controller.ropeSaturation
+    renderer.shaderParams.ropeCoreDarken = controller.ropeCoreDarken
     renderer.shaderParams.ropeMicroBump = controller.ropeMicroBump
     renderer.shaderParams.ropeBumpScale = controller.ropeBumpScale
+    renderer.shaderParams.ropeBumpContrast = controller.ropeBumpContrast
+    renderer.shaderParams.ropeBumpAniso = controller.ropeBumpAniso
     renderer.shaderParams.ropeContactAO = controller.ropeContactAO
     renderer.shaderParams.ropeLiftGlow = controller.ropeLiftGlow
     renderer.shaderParams.ropeStretchGloss = controller.ropeStretchGloss
@@ -1806,6 +1945,14 @@ private func configureGameView(_ view: GameMTKView, controller: GameController, 
     renderer.shaderParams.ropeEnvDebug = controller.ropeEnvDebug
     renderer.shaderParams.shadowDebugMode = controller.shadowDebugMode
     renderer.squareCrossSection = controller.squareCrossSection
+    renderer.padMode = controller.padMode
+    renderer.shaderParams.padHeight = controller.padHeight
+    renderer.shaderParams.padColorR = controller.padColorR
+    renderer.shaderParams.padColorG = controller.padColorG
+    renderer.shaderParams.padColorB = controller.padColorB
+    renderer.shaderParams.padMetallic = controller.padMetallic
+    renderer.shaderParams.padRoughness = controller.padRoughness
+    renderer.shaderParams.padRopeTint = controller.padRopeTint
     renderer.shaderParams.chainMode = controller.chainMode
     renderer.shaderParams.chainLinkLength = controller.chainLinkLength
     renderer.shaderParams.chainLinkThickness = controller.chainLinkThickness

@@ -1,4 +1,4 @@
-name: UzlsFour
+name: Strain
 options:
   developmentLanguage: en
   generateEmptyDirectories: true
@@ -17,7 +17,7 @@ settings:
       SWIFT_OPTIMIZATION_LEVEL: "-O"
       SWIFT_COMPILATION_MODE: wholemodule
 targets:
-  UzlsFour26:
+  Strain:
     type: application
     platform: iOS
     deploymentTarget:
@@ -34,7 +34,7 @@ targets:
         MARKETING_VERSION: 1.0.0
         CURRENT_PROJECT_VERSION: 1
         SWIFT_VERSION: 6.0
-        PRODUCT_MODULE_NAME: UzlsFour
+        PRODUCT_MODULE_NAME: Strain
         GENERATE_INFOPLIST_FILE: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -48,7 +48,7 @@ targets:
         TARGETED_DEVICE_FAMILY: "1,2"
         UIFileSharingEnabled: YES
         LSSupportsOpeningDocumentsInPlace: YES
-  UzlsFourTests:
+  StrainTests:
     type: bundle.unit-test
     platform: iOS
     deploymentTarget:
@@ -63,16 +63,16 @@ targets:
         TEST_HOST: ""
         BUNDLE_LOADER: ""
 schemes:
-  UzlsFour26:
+  Strain:
     build:
       targets:
-        UzlsFour26: all
+        Strain: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
-        - UzlsFourTests
+        - StrainTests
     profile:
       config: Release
     analyze:

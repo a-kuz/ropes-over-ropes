@@ -5,6 +5,12 @@ extension VerletSimulator {
         guard holePositions.indices.contains(holeIndex) else { return .zero }
         let p = holePositions[holeIndex]
         let elev = holeElevations.indices.contains(holeIndex) ? holeElevations[holeIndex] : 0
+        if padMode {
+            // Rope endpoint sits on top of the pad surface
+            // padHeight must match rendered geometry: buildPad height=0.18 scaled by instance radius
+            let padHeight = holeRadius * holeRadiusScale * self.padHeight
+            return SIMD3<Float>(p.x, p.y, elev + padHeight)
+        }
         return SIMD3<Float>(p.x, p.y, elev - holeDepth)
     }
 
